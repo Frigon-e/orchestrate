@@ -81,7 +81,7 @@ crowds out what matters. Route by context as well as by model (`route-work`,
   `find` for a concept only when you have no name to search (write it as one behavior, `Code that <action> <entity>, when <trigger>, producing <result>`; see "Writing a concept query" in `references/context.md`). Put two or more independent
   lookups in one `batch` (`-q "kind:query key=value"`). Tests are hidden and
   counted; add `--tests include|only` when you need them. Inspect source with
-  native Read/read after locating it; read files over about 8 KB by
+  native Read/read after locating it; read files over about 30 KB by
   offset/limit, only the part needed. Give subagents the excerpt or the
   exact `path:line-range`, not "read task.md". No blanket speed or
   absence guarantee: check `status`, `count_kind`, scope, exclusions, errors,

@@ -27,7 +27,7 @@
 # Working Rules
 
 - Before using dynamic workflows, ultracode, or any harness feature that spawns a large swarm of subagents, always explain the trade-offs and ask for explicit approval.
-- When doing bug fixes, always start with reproducing the bug in an E2E setting as closely aligned with how an end user would experience it as possible. This makes sure you find the real problem so your fix will actually solve it.
+- When doing bug fixes, always start with reproducing the bug as an end user would experience it (drive the UI, or run one scoped script or test), so you find the real problem and your fix solves it. Keep the repro scoped to the bug: never run a long, full E2E suite just to reproduce one bug.
 - Always flag lint failures, test failures, test flakiness, and visible UI defects you encounter, even when unrelated to the current task. Fix them inline when the fix is small; ask first when it is not.
 - When making technical decisions, do not give much weight to development cost. Instead, prefer quality, simplicity, robustness, scalability, and long term maintainability.
 - Never manually modify CHANGELOG.md files or any files that are marked as auto-generated.

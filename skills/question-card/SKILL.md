@@ -60,11 +60,7 @@ cards have answer forms. Lead-settled and incomplete cards remain visible in
 the output, not silently dropped. Answering one card must leave others open;
 keep answered history under `questions/answered/`.
 
-See [the card file format](../orchestrate/references/question-file.md) for
-parseable Python and TypeScript examples. Python task cancellation changes
-runtime work lifetime. TypeScript unions disappear at runtime and cannot
-validate JSON. Research these language facts first; ask the owner only about
-the delivery or compatibility guarantee that follows from them.
+See [the card file format](../orchestrate/references/question-file.md) for parseable examples.
 
 ## Language
 

@@ -110,22 +110,10 @@ Write each result where the repo keeps it; follow the repo's own rules
 For a spec:
 1. Give each package disjoint files, its tests, a model from the judgment
    it still needs, and runnable acceptance.
-2. Give each package `#### Builds`: plain-prose bullets, one deliverable per
-   bullet. Add optional indented `search:` lines (one behaviour per query) and
-   `reuse:` lines (comma-separated known code pointers). Prefer `path#Symbol`,
-   methods `path#Type.Method`; use `path:line` or `path:line-line` for blocks
-   inside functions, SQL, config, generated code or docs. Find real targets
+2. Give each package `#### Builds` (plain-prose bullets, one deliverable
+   each, with optional `search:` and `reuse:` lines) in the format of
+   `~/.agents/skills/orchestrate/references/spec-format.md`. Find real targets
    with `orch ctx`; never invent paths or symbols.
-   Search guidance: `Code that <action> on <entity>, when <trigger>, producing
-   <result>`. Drop any slot that does not apply. Good full query: `Code that
-   saves a payment method for a customer, when a checkout completes, producing
-   a stored method row`. Good short query: `Code that lists payment gateways`.
-   Bad noun list: `payments, customers, checkout, gateways`. Several search
-   lines are allowed for distinct behaviours. Omit them for tiny bullets with
-   no search target or near-duplicates that would repeat candidates and skew
-   counts. Bullets without search still appear in the checklist. Missing Builds
-   on a ship package warns and skips its checklist; scouts are exempt. More
-   than 8 bullets warns to split the package.
 3. `## Open questions` must say `None.`; if not, go back to stage 4.
 4. Inspect with `orch spec queries <spec> --package <id>`. If needed,
    `--generate` proposes missing queries as pasteable text, never edits;

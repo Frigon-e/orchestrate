@@ -70,9 +70,9 @@ Ask the user only when an open decision is truly theirs (product behavior, compa
 | Decisions settled, but nothing mechanical can verify the result (UI, prose, config with no tests), or the work needs inference across several files or a long edit-test-fix run | **`implementer`** (Sonnet). |
 | Settled but high-risk | **`implementer`** (Sonnet), then lens reviews (step 5). |
 
-**Model rule:** `implementer` runs `sonnet` by default and `haiku` for mechanical or single-concern work a test decides. Use Opus only for ambiguous design work or when task.md names it. A subagent started without `model` inherits the parent's model, so an Opus lead must pass `model: "sonnet"` or `"haiku"` explicitly and never passes `opus` down by default. (Overnight audit: leads passed `model: "opus"` to implementers, which ran 200+ turns.)
+**Model rule:** `implementer` runs `sonnet` by default and `haiku` for mechanical or single-concern work a test decides. Use Opus only for ambiguous design work or when task.md names it. A subagent started without `model` inherits the parent's model, so an Opus lead must pass `model: "sonnet"` or `"haiku"` explicitly and never passes `opus` down by default.
 
-Every spawn pays for a large cached prompt prefix, so prefer one implementer over several tiny ones, and don't move short, checkable work up a tier "to be safe". Keep Haiku delegates short: a Haiku prompt over 100K tokens costs 5x, and its context grows with every file it reads. Evidence and caveats: `references/model-selection.md`.
+Every spawn pays for a large cached prompt prefix, so prefer one implementer over several tiny ones, and don't move short, checkable work up a tier "to be safe". Keep Haiku delegates short: its price rises on long prompts and its context grows with every file it reads. Prices and evidence: `references/model-selection.md`.
 
 ## 4. Writing a plan worth delegating
 
@@ -106,7 +106,7 @@ You hold the verifier, so you make the escalation call, never the delegate. A fa
 
 ## 5. Verify
 
-- Implementers run tests and add a regression test. Check their report shows real test output, not just "done", then **rerun the tests yourself**. Your run is the verifier that decides whether to escalate. Filter the output (`| tail`, the runner's quiet flag) so only the summary and failures enter your context.
+- Implementers run tests and add a regression test. Check their report shows real test output, not just "done", then **rerun the tests yourself**. Your run is the verifier that decides whether to escalate. Use the runner's quiet flag or a summary-only check command so only the summary and failures enter your context.
 - UI changes: start `ui-verifier` only after the automated check is green, once over the whole change with a written checklist from the plan's Behavior line. Tell it to stop at about 60 turns. A second pass re-checks only the defects that were fixed, not a full re-walk.
 - Batch your own work: independent edits and tool calls go in one turn as parallel calls, and run the repo check once per batch of edits (narrow tests while iterating, the full staged check once per wave).
 - **Read the final diff yourself.** It's cheap and catches drift from the plan, scope creep, and edits to tests that make them pass rather than check the behavior.

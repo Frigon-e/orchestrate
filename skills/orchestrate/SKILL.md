@@ -84,193 +84,34 @@ lead cap is reached: queue the task and spawn it when a lead closes.
 When a spec with work packages exists (`references/spec-format.md`), run
 `orch gate <spec>` first, then `orch plan <spec>` instead of one `orch new`
 per package. The gate checks pointers and acceptance commands, then runs
-read-only model passes (one per group of up to 4 related packages for scope,
-questions and reuse, plus two adversaries; a pass is capped at 45 minutes, ends
-early when its session shows no activity for 6, and a timed-out or stalled group
-pass is retried once; token use per pass is logged in `gate.json` `pass_tokens`)
-and keeps only claims whose `path:line` evidence exists. `orch gate <spec>
---dry-run` lists the passes and their sizes without calling a model. `orch plan` refuses a spec
-whose current text has not passed the gate; never use `--skip-gate` without
-the user's agreement. Read `gate/<hash>/report.md` (short), judge the
-findings yourself, add a Claude adversarial pass on the Design rules when
-the spec is risky, and show the user only what survives. Decisive open
-questions arrive as cards: `orch ask --cards <gate dir>/questions`. A model
-verdict is input, not truth: Flash can miss a flaw and the gate can fail a
-fine spec, so the call is yours and the user's. The model passes run in the panes of a
-`gate-<hash>` tab (at most six, closed when the gate ends; if it cannot be opened no pass runs, the report says so and the state is `incomplete`); outside herdr `orch gate` refuses to run (only `--dry-run` works); each pass is a
-real pi or Claude agent in a pane named after it, which you can watch and attach to; a pass that
-failed keeps its session and output under `gate/<hash>/` for 7 days and
-for the newest 5 gate runs; a run without `gate.json` is still running and is
-never pruned until its directory is 7 days old. After a run, with no model call, `orch gate`
-enriches its question cards (also on demand: `orch gate enrich <spec>`): only
-exact duplicates after whitespace normalization share a card; related questions
-keep their IDs, routes and answer states. Original duplicate identities and text
-remain on the shared card. Spec lines and code from `jbcontext` are candidate
-hints, not proof that an answer exists or is absent. Each card's front matter
-and index give its route (`owner`, `lead-may-decide`, `unclear`) and action.
-Keep product choices with the owner; settle delegated technical choices with
-the lead (`settle-by-lead`), without forwarding them to the user again; never
-infer an answer from a hint. Enrichment preserves `questions/answered/` and does
-not reopen matching archived cards. For Go and TypeScript symbols a question names, `gopls` and the TypeScript 7 native server (`tsc --lsp`, found in the project's own `typescript@7` package under `web/node_modules/.pnpm`; override with `ORCH_TSLS`) add exact facts (definition, callers outside tests, test references, implementations). Read `gate/<hash>/questions/INDEX.md` first: counts,
-then a table per package with owner-tagged questions on top. Route delegated
-cards to the lead before preparing user decisions. The tag and hints are advice;
-`orch ask --cards` still asks every root card and does not filter by route. `orch plan` then makes the
+read-only model passes and keeps only claims whose `path:line` evidence
+exists; `orch gate <spec> --dry-run` lists the passes without calling a model.
+`orch plan` refuses a spec whose current text has not passed the gate; never
+use `--skip-gate` without the user's agreement. Read `gate/<hash>/report.md`
+(short), judge the findings yourself, add a Claude adversarial pass on the
+Design rules when the spec is risky, and show the user only what survives. A
+model verdict is input, not truth. Decisive open questions arrive as cards:
+`orch ask --cards <gate dir>/questions`. Keep product choices with the owner
+and settle delegated technical ones with the lead. `orch plan` then makes the
 tasks and prints the waves: check and spawn the first wave, then each later
 wave when its dependencies are done.
 
-Gate records and v2 output use only `state`: `error`, `stale`, `fail`,
-`incomplete`, `pass`, plus the non-approval `experiment` mode. Precedence is
-error > stale > fail > incomplete > pass. Completion, reasons, responsible
-actors and next actions remain visible even when a higher-priority state wins.
-Only a current, subject-bound `pass` whose recorded inputs still reduce to
-pass can authorize `orch plan`. New gate and bench records do not write the
-old `status` field. A read-only shim preserves old gate/bench labels as
-`historical_status`, never as inferred v2 states or new approvals.
-Default `orch gate` stdout is the v2 TOON selection. `--human` selects readable
-JSON and `--json` selects machine JSON of the same facts, without legacy
-`status`. `--schema-version 2` is explicit but optional; gate schema 1 is
-retired and rejected with a migration hint. This does not change `orch ctx`
-output or its legacy JSON contract.
+Gate passes, question routing, the ctx shell and checkout check, options and
+the reuse checklist: `references/gate.md`. Model roles and connector health:
+`references/model-roles.md`; outages: `references/outage.md`. Benchmarks:
+`references/bench.md` (no imports or paid experiments without approval). The
+`#### Builds` and `search:` format: `references/spec-format.md`.
 
-Model roles live in the user config next to dispatch rules: `[roles.gate]`,
-`[roles.spec_queries]`, `[roles.decider]`. Each role has
-an ordered `use = [{harness, model, effort, degraded}, ...]` list; first usable
-wins. `enabled = false` turns a role off. Without roles, installed harnesses
-supply defaults: pi Flash where pi is present, Claude Haiku otherwise; optional
-judges are off when unavailable. See `references/model-roles.md` for an example.
-The Decider uses `{harness="api", provider="openrouter", model="perplexity/..."}`
-and calls the HTTP API without pi's model allowlist or binary requirement.
-`orch doctor` lists choices, binaries and credential readiness per provider.
-Health lanes are `claude`, `pi:<provider>`, and `pi:openrouter:anthropic`.
-A `pi` limit covers all pi connectors; a provider limit covers its children.
-`pi-anthropic` remains an alias for direct `pi:anthropic`. OpenRouter's free
-key check attributes an empty key only to a proved model scope; otherwise it
-says `unknown scope` and uses `pi:openrouter`. OpenAI and Anthropic checks
-only inspect credential presence, never make model calls.
-`--runner pi:<model>,claude:haiku:low` overrides gate choices for one run;
-`--degraded` permits approved weaker choices. `ORCH_PI` and `ORCH_CLAUDE`
-override the pi and Claude binary paths.
-Provider-down errors skip that connector lane for the run and retry the pass once on
-the next choice, without writing health; the report prints the exact manual
-`orch health set <lane> limited --for 3h` hint. Stalls keep their existing retry
-rules. With no usable runner, deterministic checks and items are still
-written and the gate state is `incomplete` when its subject and system records are valid. `gate.json` `pass_runners`, the report and
-compare output identify each pass's runner.
-If triage is off, `orch spawn <id> --auto` gives one short message, invents no
-tier, and starts no lead. `--auto --tier settled|standard|planning` skips the
-Decider and selects that dispatch rule. `--apply` still controls execution.
-A hand-picked `orch spawn <id> --harness H --model M [--effort E]` also skips
-triage. Quick shadow mode records `skipped: decider off` and proceeds; quick
-enforce mode refuses with the same manual-profile/`--tier` guidance.
-
-Gate agents use the plain `orch ctx` CLI, not a server or generated adapter.
-`--ctx-tool on|off` defaults to on: a read-only notice is first in the shared
-prompt prefix, `ORCH_CTX_ROOT` pins lookups to the code checkout, and a PATH
-shim resolves `orch` to this binary. `--ctx-shell ctx-only` is the default for
-Pi: native `read` plus a shell limited to one `orch ctx` call. Pi starts with
-read alone; the loaded guard enables bash and acknowledges activation. If the
-extension cannot be written or loaded, the pass is an execution failure, never
-an open-shell fallback. `--ctx-shell open` restores Pi's native read/search tools
-and unrestricted bash. Claude ignores this setting and adds Bash with the
-`Bash(orch ctx:*)` permission. Prefer one `orch ctx batch` over several greps;
-read what it returns before searching again. With ctx off, the original read
-and search tools remain and the ctx notice/env are absent.
-Repository context files are never loaded: pi gets `--no-context-files`; Claude
-uses `--settings '{"claudeMdExcludes":["**"]}'` instead of `--bare`, so disabling
-CLAUDE.md discovery does not disable subscription authentication. The checklist
-stays in the task text, not in a context file. `ctx_tool` and the effective
-`ctx_shell` (`open` with ctx off) are in gate/experiment records, reports, and
-compare output. Old records without `ctx_shell` still display `open`, and old
-records still show their `context_files` and `cache` values.
-
-Every runner, including ctx-off runs, gets a post-pass unchanged-checkout
-check against the pre-pass baseline: Git status, diff and untracked-file
-content hashes. A change discards model results, cancels pending/in-flight
-passes, sets state to `stale` (or `error` if the subject cannot be checked), and puts a loud warning in stdout/report.
-The record names changed files and passes in flight, not a proven culprit.
-Files are never reverted. Ignored files and writes outside the checkout are
-not covered; edits restored before the check can also escape detection.
-Pi's default ctx-only shell blocks unrelated commands, pipes and redirects.
-With `--ctx-shell open`, its shell is unrestricted and can write ignored/outside
-files or use the network. Native read can still read outside the repo in either
-mode. The guard, prompt, pinned read-only ctx mode and post-pass check are not
-an operating-system sandbox.
-
-Gate options. The gate puts the plain package text and the reuse checklist in each group prompt; there is no dossier (removed after two blind comparisons, reports: `~/Development/.worktrees/.agents/.orchestrate/dossier-value/report.md` and `dossier-value-2/report.md`; `--dossier` is rejected with a one-line error). Each pass is given a turn budget (10 plus 5 per
-package, 40 for adversaries): at the budget a pane agent is told once to answer,
-at 1.4 times it, or when its context passes 150000 tokens, it is interrupted and
-asked for the answer; `gate.json` `pass_tokens` records turns, budget hits, cost
-and context. Sessions of passes that succeeded are dropped; experiments keep
-them. `--cache`, `--keep-sessions`, `--context-files` and `--headless` were
-removed and fail with a one-line error. To compare
-settings without touching the real record: `orch gate <spec> --only <group-key>
---experiment <name>` runs just those
-group passes into `gate/<hash>/experiments/<name>/` (sessions kept), and `orch
-gate compare <spec> <expA> <expB>` prints requests, tokens, cost, seconds,
-findings, questions and their overlap, with an exploration profile per pass.
-
-Benchmarks. `orch bench record|import` snapshots finished runs into a private,
-machine-local store (`ORCH_BENCH_DIR` or the XDG data directory), preserving exact
-specs, subjects, item sets, immutable keys and scoring inputs after gate pruning.
-`--bench-suite` or user-only `bench_suite` enables experiment auto-recording; repo
-configuration cannot select the store's suite. `bench compare|report` recomputes
-location scores without models and identifies subject, key and group coverage.
-Use `bench verify` before trusting an import, and keep unknown historical facts
-unknown. See `references/bench.md` for commands, privacy, migration, export and
-the historical import recipe. Do not run imports or paid experiments without approval.
-
-Spec deliverables. Each package has `#### Builds`: plain-prose bullets, one
-human-readable deliverable per bullet. Optional indented `search:` lines name
-one behaviour per query; several distinct behaviours may have separate lines.
-Use `Code that <action> on <entity>, when <trigger>, producing <result>`, dropping
-slots that do not apply. Good: `Code that saves a payment method for a customer,
-when a checkout completes, producing a stored method row`. Good short query:
-`Code that lists payment gateways`. Bad: `payments, customers, checkout,
-gateways`. Do not invent paths or symbols. Omit search for tiny deliverables
-or near-duplicates that would repeat candidates. Optional `reuse:` lines list
-known pointers separated by commas. Prefer `path#Symbol`, methods
-`path#Type.Method`; use `path:line[-line]` for blocks, SQL, config, generated
-code or docs. `orch spec queries <spec> [--package id | --item id#n] [--json]`
-parses them without a model. Add `--generate` to propose missing queries (or
-Builds for a legacy package), never to edit the spec; `--dry-run` prints its
-prompt. Generation without a selector needs explicit `--all`.
-
-Reuse checklist. Items are only Builds bullets (ids `<package>#<n>`, saved in
-`items.json` with `queries` and `reuse` arrays); nothing is guessed from body
-or acceptance. A ship package without Builds gets a warning and skips its
-checklist; scouts are exempt. More than 8 bullets warns to split the package.
-The checklist (ids, bullet text, author pointers, search lines as plain text) is
-put in the group prompt and saved in `items.json`, with no lookups and no
-candidates; `gate.json` `checklist: plain` marks it. Search lines and `reuse:`
-pointers are the spec author's hints for the reviewer, shown as written.
-`orch gate compare <spec> <a> <b> --reference <file.json>` adds per-item columns
-and precision/recall against an answer key (format: `[{"package","item" (id or
-text),"verdict" (duplicate|extend|new|unclear),"candidate","note"}]`). Per-item
-display matches by id or 60% word overlap; reference scoring uses locations, not
-item text. Runs made before the dossier was removed keep their shadow-judge
-rows and checklist candidates; compare and bench still read them.
-
-**Code facts for any repo: `orch ctx`** (`references/context.md`). `orch ctx
-find` (semantic candidates), `sym` (exact or candidate-labelled definitions,
-with docs, previews and available references), `text` (scoped regex/literal
-matches), `batch` (independent lookups in one call, a place shown once, inline
-`-q "kind:query key=value"`) and `brief` (ranked files, interfaces and
-look-alikes) answer from jbcontext, language servers and rg without run state.
-Use one `orch ctx batch` for independent lookups, then native Read/read with
-offset and limit to inspect source. Do not assume ctx is always faster or that
-no hits prove absence. Check `status` (`ok|empty|partial|failed`), `count_kind`
-(`exact|lower_bound|unknown`), scope, exclusions, errors and cuts. Semantic
-candidates never establish absence; a missing server is not zero callers.
-A failed single lookup or all-failed batch exits 1; a partial batch exits 0
-with `status: partial`. Tests are hidden and counted (`--tests include|only`).
-`--full` raises finite display caps, not backend limits; `--all` broadens text
-file globs but still honors gitignore/hidden rules and the tests filter.
-Narrow path/glob scope or use native reads when caps apply. See
-`references/context.md` for limits and recovery. Repo-local servers require
-`ctx_trust = ["/absolute/repo"]` in user config, except the installed-skill repo;
-`ctx_deny` wins and read-only mode never runs them. `orch ctx status` shows the
-index, watch and tools; `orch ctx refresh` updates the index. `orch plan` writes
-facts into briefs (`--no-ctx` skips them); `orch doctor` reports readiness.
+**Code facts for any repo: `orch ctx`** (`references/context.md`): `find`
+(semantic candidates), `sym`, `text`, `batch` (independent lookups in one call)
+and `brief`. Use one `orch ctx batch` for independent lookups, then native
+Read with offset and limit to inspect source. Check `status`
+(`ok|empty|partial|failed`), `count_kind`, scope and cuts: semantic candidates
+never establish absence, and a missing server is not zero callers. Repo-local
+servers need `ctx_trust = ["/absolute/repo"]` in user config; `ctx_deny` wins.
+`orch ctx status` shows the index and `orch ctx refresh` updates it; `orch
+plan` writes facts into briefs (`--no-ctx` skips them); `orch doctor` reports
+readiness.
 
 What makes a brief work (template: `references/task-template.md`):
 - **Intent** in the user's words. The lead falls back on it when the spec
@@ -346,8 +187,8 @@ other way.
   update the plan before the lead continues. A second `escalate` on the same
   task means the task was put on too weak a model: respawn it on a stronger
   one from its branch and note why.
-- **Triage.** At `spawn`, orch asks a decision model (Perplexity Decider
-  through OpenRouter, pinned version, about $0.00001 a call) five typed
+- **Triage.** At `spawn`, orch asks a decision model (the Decider role in
+  `references/model-roles.md`) five typed
   questions about the task text: clarity, difficulty, verifiable,
   cross-cutting, cause known. Fixed thresholds turn the answers into a tier
   in `task.md` (`tier:`): `settled` (clear, easy, a check that can fail: a

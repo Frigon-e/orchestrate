@@ -18,5 +18,5 @@ A general "review this" pass mostly produces nitpicks. Narrow reviewers that eac
 
 Two or three lenses are typical, and more than five usually means the change should have been split. Pass each one the lens, the requirement or plan, the diff command, and the scope report if there is one.
 
-Reviewers report only findings they scored at least 75, each with a failure scenario and evidence. Verify each finding against the code yourself before acting. You're already in the diff, so this is cheap, and it catches the false positives that slip past self-scoring. Send real defects back to the `implementer` with the finding as the plan, or fix them directly if small.
+Reviewers report only findings that meet their lens threshold (separate evidence, impact and likelihood ratings, defined in the `lens-reviewer` agent), each with a failure scenario and evidence. Verify each finding against the code yourself before acting. You're already in the diff, so this is cheap, and it catches the false positives that slip past self-rating. Send real defects back to the `implementer` with the finding as the plan, or fix them directly if small.
 
