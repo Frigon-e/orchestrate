@@ -198,10 +198,9 @@ used by 2, none in tests:
   97  resolver: zodResolver(createGatewaySchema),  in CreateGatewayForm
 ```
 
-- Body by kind: a function or method is its signature plus about 8 lines; a
-  type, interface or struct is the full field or method list (a Go struct also
-  gets a `methods:` line); a const or var is the whole declaration up to about
-  15 lines. A cut says how many lines and `--full`.
+- Body by kind: see "How much of a definition `sym` shows" below. A type,
+  interface or struct lists every field or method (a Go struct also gets a
+  `methods:` line). A cut says how many lines and `--full`.
 - `used by 12 in 3 files, +5 in tests:` lists callers outside tests (up to
   `--refs`, default 10; `(+N more; --refs N or --full)` says what is left), each
   with its line and enclosing function. `-C n` adds n lines above each caller.
@@ -267,7 +266,7 @@ A type is shown whole up to 120 lines, a function its signature and first 40
 lines. A const or var reads in context: when it sits within 30 lines below the
 start of its enclosing function it shows that function's first 30 lines;
 otherwise 30 lines around it; the whole declaration is always inside, up to 60
-lines. A `find` hit is shown with 6 lines of the checkout above and below it.
+lines.
 
 Put every independent lookup in one batch instead of one turn each.
 
@@ -391,7 +390,7 @@ candidates.
 Ignored files: no `orch ctx` path passes `-u`, `--no-ignore` or `--hidden` to
 rg, so `.gitignore` is honoured; the file lists come from `git ls-files --cached
 --others --exclude-standard` (tracked files plus untracked ones git does not
-ignore). jbcontext indexes a git revision (`index --revision`, default HEAD), so an ignored untracked file is not in the index; its `watch` overlay of uncommitted changes is not documented to skip ignored files, and I did not run it on a fixture. Every `find` hit is therefore checked with `git check-ignore` and an ignored path is dropped.
+ignore). jbcontext indexes a git revision (`index --revision`, default HEAD), so an ignored untracked file is not in the index. Every `find` hit is checked with `git check-ignore`, and an ignored path is dropped (this covers the `watch` overlay of uncommitted changes).
 
 ## When not to use it
 
@@ -416,9 +415,8 @@ ignore). jbcontext indexes a git revision (`index --revision`, default HEAD), so
   at most and never above the slot cap) and puts the answers together in the
   order the searches were planned, so the text does not depend on which search
   finished first. A concept search the service refused (429) is asked again after
-  the cooldown, up to 2 rounds. On a 4-package spec a wider pool was refused more
-  (4 wide: none, 6: 3, 8: 25, 16: 64 of 132 searches), and a refused search is a
-  lost lookup, so the width follows the service, not the slots.
+  the cooldown, up to 2 rounds. A refused search is a lost lookup, so the width
+  follows the service, not the slots.
 
 ## Staleness
 
@@ -435,10 +433,8 @@ successful search facts. This is not a guarantee of exhaustive server coverage.
 The JetBrains service rate limits (HTTP 429), so jbcontext searches are
 throttled: identical searches in one process share one call, at most 5 run at
 once machine-wide (flock slots under `~/.cache/orchestrate/jb-slots/`; set
-`ORCH_JB_SLOTS` to 1-32 to raise it for light workloads, invalid values give 5;
-measured: a 4-package brief workload, 132 lookups, got 429s at width 6/8/16 = 3/25/64
-and none at 4 and 5, while a plain search burst (limit 3, one client) stayed clean
-up to 32, so the limit depends on the request kind), the first call after
+`ORCH_JB_SLOTS` to 1-32 to raise it for light workloads, invalid values give 5; the
+service limit depends on the request kind), the first call after
 10 minutes without one runs alone so a stale token is exchanged once, and a
 429 is retried 3 times with backoff. After that the lookup fails with
 `jbcontext rate limited (429)` and the query it skipped, jbcontext is skipped for
@@ -486,7 +482,7 @@ and put `Notice` at the very top of the shared read-only prompt. `Env` pins
 PATH. Its `orch` symlink targets the current binary's path (`os.Executable()`),
 not its inode: an atomic rebuild at that path still works without regenerating
 the shim. Shim creation is idempotent; a conflicting entry is an error.
-Only headless passes get that PATH. A gate pane pass never edits PATH: it
+A gate pane pass does not use that PATH: it
 finds `orch` on the pane shell's own PATH (link `scripts/orch` into a PATH
 directory such as `~/.local/bin`; the launcher follows symlinks), and a pane
 run with the ctx tool fails at once when `orch` is not on PATH. The pane types
@@ -510,17 +506,8 @@ A missing acknowledgement or extension-write error fails the pass, without an
 open-shell fallback. `--ctx-shell open` keeps Pi's native `read,grep,find,ls`
 and appends unrestricted `bash`. Claude ignores `--ctx-shell`; ctx off keeps the
 original native tools. `CtxCLI.Tools` contains only the extra shell entry.
-Agents use native Read/read with offset and limit for files; never the ctx read
-command, batch read kind, sed, cat, head or tail.
-
-Installed Claude 2.1.303 refused the chaining, redirection, write and
-substitution probes, but **also allowed `cat file`** as a safe read command.
-This pattern is not an exclusive shell-command allowlist. No deny rules are
-added to hide that behavior. In the outside-repo dummy-file probe, Claude
-refused shell cat but permitted native Read with offset=1 and limit=1 on that
-same file. Thus a Claude pass can read outside the checkout through native
-Read, even where its safe-shell check refuses cat. This does not prove that
-every outside path or every shell read is allowed or refused. `ORCH_CTX_ROOT`
+`Bash(orch ctx:*)` is not an exclusive shell-command allowlist, and a Claude
+pass can read outside the checkout through native Read. `ORCH_CTX_ROOT`
 constrains orch, not native Read; it is not a file-confidentiality boundary.
 
 Pi's default ctx-only shell accepts only one `orch ctx find|sym|text|batch|refs`
@@ -533,12 +520,10 @@ reports and compare show `ctx_shell`; missing historical fields display `open`.
 
 `skills/orchestrate/tool/pi_ctx_reminder.ts` is a user-level pi extension (the
 orchestrator installs it under `~/.pi/agent/extensions/`). Gate passes do not
-rely on that copy: a pi pass with `--ctx-tool on --ctx-shell open` (headless and
-pane) starts with `--no-extensions -e <cli-dir>/orch-ctx-reminder.ts`, the copy
+rely on that copy: a pi pass with `--ctx-tool on --ctx-shell open` starts with `--no-extensions -e <cli-dir>/orch-ctx-reminder.ts`, the copy
 embedded in the binary and written next to the ctx shim, so a guarded gate run
 tests the code in the checkout. Ctx-only and ctx off do not load it. The
-`ORCH_TOOL_GUARD`, `ORCH_TOOL_GUARD_SKIP` and `ORCH_TOOL_GUARD_STATE_DIR` settings in orch's environment reach the headless pi by
-inheritance and the pane's pi through the pane shell exports. `ORCH_TSLS`, when
+`ORCH_TOOL_GUARD`, `ORCH_TOOL_GUARD_SKIP` and `ORCH_TOOL_GUARD_STATE_DIR` settings in orch's environment reach the pane's pi through the pane shell exports. `ORCH_TSLS`, when
 set in orch's environment, reaches the pane's `orch ctx` the same way in any
 ctx-tool pass. The guard carries five
 small deny rules over shell commands, each a table entry with a name, a matcher
@@ -578,22 +563,6 @@ search rules, and the reminder stays either way. A pi build without the
 `tool_result` hook blocks the first search of the session once instead. It
 stays silent inside the ctx-only gate shell. Its decision tables run in node:
 `go test -run 'CtxReminder' .` in `tool`.
-
-Harness verification uses only local mock endpoints, never a paid model:
-
-```sh
-cd tool
-ORCH_TEST_CTX_HARNESSES=1 go test -count=1 -v -run '^TestCtxInstalledHarnesses$' .
-```
-
-This opt-in test builds orch and starts the installed Pi and Claude headlessly
-with isolated homes and dummy credentials. The mock forces shell calls, checks
-that plain `orch ctx find x` works through the shim, and probes Claude's command
-permissions for chaining, redirection, unrelated commands and substitution.
-It also checks native tool availability and outside-repo shell/native reads,
-including a native Read with offset=1 and limit=1. It records the actual tool
-results, not just model claims. Ordinary tests do
-not launch either harness.
 
 ## Language-server trust
 

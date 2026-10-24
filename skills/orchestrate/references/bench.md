@@ -332,7 +332,7 @@ require an actual store-schema upgrade can still refuse a schema 1 store; migrat
 does not silently authorize that upgrade. Missing subjects remain informational
 legacy unknowns in verification and reports. Migration is idempotent, executes
 reconstruction in an isolated copy, and stops if it needs to replace an existing
-object. It never executes the import recipe below or automatically rewrites keys.
+object. It never imports runs or automatically rewrites keys.
 Archives include only the suite and
 its original run/key-referenced subjects and objects, never `_inbox` or another
 suite. Proposal files travel with the suite, but the archive reference traversal
@@ -340,88 +340,6 @@ does not follow proposed bindings. Keep a full private store backup to preserve
 objects registered only by a migration proposal. Import
 rejects traversal, links, duplicate members, conflicting files and archives over
 512 MB or 100000 entries. Import into a fresh store is the simplest restore path.
-
-## This machine's historical import recipe (not executed)
-
-Run only after the user authorizes the real import. Test recipes use
-`ORCH_BENCH_DIR=/tmp/bench-try-<n>`; tests always use `t.TempDir()`. Do not write
-scratch merges or extracted specs into `_inbox`.
-
-```sh
-orch=$HOME/.agents/skills/orchestrate/scripts/orch
-repo=/Users/efrigon/Development/pterodactyl_fork
-gate=/Users/efrigon/Development/.worktrees/pterodactyl_fork/.orchestrate/gate
-inbox=$HOME/.local/share/orchestrate/bench/_inbox/2026-10-19-session-519aa9e0
-
-# 1. Register exact committed versions from all branches, then the variant.
-"$orch" bench spec add --from-git "$repo" docs/crm/specs/v1.md --all-versions
-"$orch" bench spec add --from-git "$repo" docs/virt/specs/customer-area.md --all-versions
-"$orch" bench spec add "$inbox/spec-new/v1-groups.md" \
-  --variant-of d06eceeb2f08e658 --label builds-7 --notes "$inbox/spec-new/NOTES.md"
-
-# 2. Run 3 remains nocommit. Its explicit timestamps give 1095 wall seconds.
-"$orch" bench import "$gate/d06eceeb2f08e658" --suite crm-v1-reuse \
-  --label run3 --arm original-11-passes --repo "$repo" \
-  --console "$inbox/handoff/run-output/run3.out" \
-  --console-start "$inbox/handoff/run-output/run3.start"
-"$orch" bench import "$gate/d06eceeb2f08e658/experiments/arm1-code-short" \
-  --suite crm-v1-reuse --label arm1 --arm arm1-code-short --repo "$repo" \
-  --commit b6a3b2a --commit-basis note \
-  --commit-evidence 'jbcontext index is at b6a3b2a, working tree is at b6a3b2a with uncommitted changes' \
-  --console "$inbox/handoff/run-output/arm1.out" --with-sessions
-"$orch" bench import "$inbox/handoff/run-output/run2" --suite crm-v1-gate \
-  --label run2 --repo "$repo" --console "$inbox/handoff/run-output/gate-new.out"
-
-# 3. Merge keys outside the private provenance directory; preserve originals there.
-work=$(mktemp -d /tmp/bench-import.XXXXXX)
-jq -s 'add' "$inbox"/old-reference/*.json > "$work/key-1.json"
-"$orch" bench key add crm-v1-reuse "$work/key-1.json" --from-reference \
-  --from-run run3 --note 'Legacy reference; author, model and blindness not recorded'
-jq -s 'add' "$inbox/opus-key-2/gateway/key.json" \
-  "$inbox/opus-key-2/ui-shell/key.json" > "$work/key-2.json"
-jq -s 'add' "$inbox/opus-key-2/gateway/items.json" \
-  "$inbox/opus-key-2/ui-shell/items.json" > "$work/key-2-items.json"
-```
-
-Key 2 can inherit arm 1's explicitly asserted commit and bind its saved porcelain
-status to a separate subject. The fact suffix distinguishes this evidence from
-arm 1's unknown dirty state. Neither run 3's unknown commit nor arm 1's subject
-changes. The status file and author must come from verified historical evidence:
-
-```sh
-# KEY2_STATUS and KEY2_AUTHOR must be supplied from verified evidence.
-"$orch" bench key add crm-v1-reuse "$work/key-2.json" --from-run arm1 \
-  --git-status "$KEY2_STATUS" \
-  --author "$KEY2_AUTHOR" --blind true --base-key key-1 \
-  --items "$work/key-2-items.json" --note 'Independent blind key; commit recorded in prompts' \
-  --prompt "$inbox/opus-key-2/gateway/prompt.md" \
-  --prompt "$inbox/opus-key-2/ui-shell/prompt.md"
-
-# 4. Report-only CRM versions have no invented execution counts or dates.
-for hash in dc276b4957645764 30fb96ab982c72bd 1c754a055a8c4731 bca534432e26ca2d; do
-  "$orch" bench import "$gate/$hash" --suite crm-v1-gate --label "spec-$hash" \
-    --repo "$repo" --kind report-only
-done
-"$orch" bench import "$gate/8a22d09b1935629b" --suite crm-v1-gate \
-  --label first-gate --repo "$repo"
-for hash in 9a667580a3d30d25 4eacb3f1b59635e7 261bd6bfbc61c7a3 \
-  96a8bdb497b2daac c8016382fc29d7c8 bfde53516e15f813 2005cc8dd38c0dff \
-  ca34f200d1a24322 9b97e83206688946; do
-  "$orch" bench import "$gate/$hash" --suite virt-customer-area-gate \
-    --label "spec-$hash" --repo "$repo"
-done
-
-# Add [provenance] inbox to each suite.toml, retaining the original inbox unchanged.
-# inbox = "_inbox/2026-10-19-session-519aa9e0"
-"$orch" bench verify
-"$orch" bench report crm-v1-reuse --runs run3,arm1 --key 2 --baseline run3 --save
-```
-
-Verify the saved key-2 git-status file's availability before authorizing that
-step. Do not claim the author of key 1, infer run commits from dates, estimate
-cost from tokens, invent historical dirty state, parse report counts, or recover
-gatecopy text by guessing. The two gatecopy specs deliberately remain unknown.
-Renderer outputs stay in the provenance archive, not a synthetic bench suite.
 
 Out of scope: executing arms (`bench run`), a cross-system usage ledger, source
 code snapshots, price-table cost estimates, line remapping and export redaction.

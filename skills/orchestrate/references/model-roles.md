@@ -20,7 +20,7 @@ use = [{ harness = "claude", model = "haiku", effort = "low" }]
 
 [roles.decider]
 enabled = true
-use = [{ harness = "api", provider = "openrouter", model = "perplexity/pplx-decider-v1.2-20261016" }]
+use = [{ harness = "api", provider = "openrouter", model = "<decisions-model-id>" }]
 ```
 
 The Decider is an HTTP API role, not a pi profile. It checks that connector's
@@ -86,7 +86,7 @@ apply. Only `api` profiles are accepted; this is not a conversational agent.
 ```toml
 [roles.question_classifier]
 enabled = true
-use = [{ harness = "api", provider = "openrouter", model = "perplexity/pplx-decider-v1.2-20261016" }]
+use = [{ harness = "api", provider = "openrouter", model = "<decisions-model-id>" }]
 promote = false # Keep OFF until a measured trial approves promotion.
 
 [roles.question_classifier.classifier_limits]
@@ -191,6 +191,7 @@ key keeps its default; an explicit zero disables repairs or fallbacks:
 
 ```toml
 [gate_budget]
+# Example values; the defaults derive from the pass count (below).
 requests = 2000
 input_tokens = 300000000
 output_tokens = 64000000
@@ -272,15 +273,13 @@ Both adapters normalize to `reviewAnswer`, `reviewQuestion` and
 `reviewResolution`. Subject and attempt identity come from the trusted request.
 Earlier judgments remain recorded; a later answer never wins by arrival order.
 Material conflicts stay incomplete and an accepted blocker requires an explicit
-evidence-linked resolution, including a finding-to-resolution link. The pure
-reducer is unchanged. `adjudication.json` beside the gate run records packets,
+evidence-linked resolution, including a finding-to-resolution link. `adjudication.json` beside the gate run records packets,
 raw replies, execution/usage, normalized results and the shared budget.
 Native decisions aggregate usage and served model are retained separately when
 reported; aggregate tokens are not guessed into an input/output split. The
 explicit `recordAdjudicationShadow` experiment hook owns a separate budget and
-records later outcomes without applying any reply to production. It is not
-called by ordinary runs, and adds no default shadow traffic. Cache availability
-changes neither authority nor reduction of identical recorded answers.
+records later outcomes without applying any reply to production. Ordinary
+runs do not call it.
 
 ## Connector lanes
 
@@ -327,8 +326,6 @@ Anthropic-only `allowed_models` or `allowed_providers` restriction scopes an
 empty key to `pi:openrouter:anthropic`. If the endpoint provides no such
 proof, doctor says `unknown scope` and attributes empty credit to
 `pi:openrouter`. Labels and configured model names are not scope evidence.
-The actual inspected endpoint omitted model/provider restriction fields,
-returned `budgets: []` and `effective_budget: null`, and could not prove a scope.
 
 Null `limit_remaining` means no reported cap, not zero. A failed HTTP probe
 is reported as a diagnostic, not evidence of exhausted credit. OpenAI and
@@ -337,12 +334,6 @@ Anthropic only check credential presence through pi's read-only
 printed. No readiness or fallback path writes `health.json` automatically.
 
 ## Failure and triage behavior
-
-Provider failures (credit, usage, rate limit, auth, missing binary, server
-errors) exclude the affected connector lane for that role's run. A pass gets
-one retry on the next usable connector. The exact manual hint is printed:
-`orch health set <lane> limited --for 3h`. Timeouts/stalls are not provider-down
-and keep the existing pass-limit retry behavior.
 
 With no usable gate runner, deterministic checks, items and the gate
 record are still written; a normal gate run has state `incomplete` when its
@@ -362,73 +353,13 @@ message. Triage shadow also records unavailable skips rather than fake ratings.
 
 ## Claude execution boundary
 
-Headless Claude uses `claude -p`, Read/Grep/Glob, non-interactive `dontAsk`
-permissions and disabled slash commands. The existing strict empty server
-configuration excludes ambient servers; the gate runs no ctx server and
-loads no generated adapter. Tool-less tasks still have no tools. Inside
-Herdr the gate starts Claude from a pane launcher (`sh <launcher>`, which
-execs `claude`) with a dedicated session/transcript, then waits for the
-agent's turn to begin.
+Claude passes run `claude -p` with Read/Grep/Glob, non-interactive `dontAsk`
+permissions and disabled slash commands. The strict empty server configuration
+excludes ambient servers, and the gate runs no ctx server. Tool-less tasks stay
+tool-less even with ctx enabled. The ctx tool, shell modes, repository-context
+exclusion and the unchanged-checkout check are in `gate.md` (Context tools for
+passes); the shim, environment and guard rules are in `context.md`.
 
-`--ctx-tool on|off` defaults to on. `CtxCLIFor` supplies a PATH shim (headless
-passes only; a pane uses its own PATH),
-`ORCH_CTX_ROOT`, harness-specific tools and a notice placed first in the
-shared prefix. Agents call `orch ctx find|sym|text|batch` through the shell.
-The notice bytes are shared across passes of a class; the checklist remains in the
-per-pass task. Pi defaults to `--ctx-shell ctx-only`: native read plus bash
-limited to one `orch ctx` command. It starts with read alone; the guard activates
-bash only after loading. Missing activation or extension-write failure fails the
-pass, never falling back to an open shell. Use `--ctx-shell open` to opt into
-native read/search tools and unrestricted bash; that mode also loads the tool
-guard (`orch-ctx-reminder.ts`) with `-e`, in headless and pane passes. Claude ignores `--ctx-shell`
-and exposes Bash with the ctx command permission pattern supplied by `CtxCLIFor`.
-Task A's installed-harness probe also allowed `cat file` as a safe read, so the
-pattern is not an exclusive
-shell-command allowlist. Its stricter requested cat refusal remains an
-integration limitation for the parent to resolve. Off keeps the original read/search
-tools without adding the notice or ctx environment. Tool-less passes stay
-tool-less even with ctx enabled.
-
-Repository context files are never loaded. Pi gets `--no-context-files`. Claude
-gets `--settings '{"claudeMdExcludes":["**"]}'`. This controls CLAUDE.md
-discovery without `--bare`, whose documented auth restriction would break
-subscription users. It is the nearest Claude equivalent, not a promise that
-every harness loads AGENTS.md identically. Gate/experiment records, reports and
-compare identify `ctx_tool` and `ctx_shell` (effective `open` with ctx off;
-absent historical fields read as `open`); old records keep and print their
-`context_files` and `cache` values. For example,
-`orch gate spec.md --ctx-tool on --ctx-shell ctx-only` spells out the defaults;
-no config key changes them.
-
-Before any model pass, the gate fingerprints Git status (NUL-separated,
-including every non-ignored untracked file), the diff against HEAD, HEAD
-identity, and content hashes of dirty/untracked paths. After every runner
-attempt, including schema repairs and retries, it compares
-against the same baseline. A changed checkout discards model findings,
-questions, cancels remaining passes, sets state to `stale`,
-and warns in stdout/report. An unidentifiable subject or corrupt required
-system data takes precedence as `error`. `tree_changed` lists paths;
-`tree_changed_passes` lists passes in flight, not a proven writer. Failure to
-compute the check also fails closed. No files are automatically reverted.
-A checkout already dirty before the baseline is allowed if unchanged.
-
-The check does not cover ignored files, paths outside the checkout, or edits
-reverted before a check. Keep gate state artifacts outside the code checkout
-or ignored, since the scan deliberately does not exempt non-ignored orch
-artifacts. Pi's default shell has the ctx-only command guard; explicit
-`--ctx-shell open` can write ignored/outside files or use the network. Native
-read can still read outside the repo in either mode. The read-only prompt,
-guard, pinned ctx commands and post-pass check are not an operating-system
-sandbox.
-
-Fake tests cover argv, environment exports, prompt/cache bytes, context
-switches, transcripts and mutations under both harnesses. The opt-in installed
-Claude test uses isolated loopback mocks and dummy credentials:
-
-```sh
-ORCH_TEST_RUNNER_CLAUDE=1 go test -v -run 'TestInstalledClaudeRefusesMutatingTools'
-```
-
-It verifies tools-off Bash/Edit/Write refusal. CLI-only command permission verification belongs
-to the ctx CLI implementation's installed-harness tests. No paid traffic is
-needed for these experiments.
+`--ctx-tool on --ctx-shell ctx-only` is the default and no config key changes
+it. Keep gate state artifacts outside the code checkout or ignored: the
+unchanged-checkout scan does not exempt non-ignored orch artifacts.
