@@ -859,7 +859,7 @@ type sharedToolguardFile struct {
 
 func sharedGuardFile(t *testing.T) sharedToolguardFile {
 	t.Helper()
-	path := filepath.Join("..", "..", "..", "hooks", "claude", "toolguard_cases.json")
+	path := filepath.Join("..", "hooks", "claude", "toolguard_cases.json")
 	var file sharedToolguardFile
 	if err := json.Unmarshal(mustRead(t, path), &file); err != nil {
 		t.Fatalf("%s: %v", path, err)

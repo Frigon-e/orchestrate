@@ -99,7 +99,10 @@ func TestTestChangedChangedDeclPullsReferencingTest(t *testing.T) {
 func TestTestChangedCommittedStagedAndUntracked(t *testing.T) {
 	dir := tcRepo(t, tcFixture())
 	tcWrite(t, dir, "alpha.go", tcBase+"func Alpha() int { return 5 }\n")
-	root := filepath.Join(dir, "..", "..", "..")
+	root := dir
+	for range strings.Split(toolRel, "/") {
+		root = filepath.Dir(root)
+	}
 	for _, args := range [][]string{
 		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "alpha"},
 	} {

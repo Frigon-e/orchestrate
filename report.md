@@ -125,7 +125,7 @@ The capped custom Pi metadata omitted pricing tables, so native SDK/benchmark co
 Before paid execution, repository build, vet and focused fixture/manifest tests passed:
 
 ```sh
-cd skills/orchestrate/tool
+cd tool
 go build ./...
 go vet ./...
 go test -p 2 -count=1 -run 'Fixture|Manifest' .

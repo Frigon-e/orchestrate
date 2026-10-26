@@ -91,7 +91,7 @@ temporary config, health and run stores; no live keys, bench store or model call
 These tests prove local orchestration behavior, not vendor-side retry behavior,
 SDK protocol compatibility, provider uptime or exact opaque provider usage.
 
-Run from `skills/orchestrate/tool`:
+Run from `tool`:
 
 ```sh
 go build ./... && go test -p 2 -run 'Outage|Provider|Health|Fallback|Runner|Triage|Classif|Adjudicat' .

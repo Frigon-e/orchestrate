@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-find-chains.sh\"" },
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-sed-inplace.sh\"" },
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-cat-head-tail.sh\"" },
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-grep-rg.sh\"" }
+        ]
+      },
+      {
+        "matcher": "Grep|Glob",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-builtin-search.sh\"" }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-big-read.sh\"", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

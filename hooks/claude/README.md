@@ -1,34 +1,18 @@
 # Claude Code hooks
 
-Scripts here run only once registered in `~/.claude/settings.json` (not tracked in this repo). Point the command straight at this folder, no symlink:
+Scripts here run only once registered in `~/.claude/settings.json`. `settings-fragment.json` lists exactly which hooks to register, and `install_settings.py` merges it in. The commands point straight at this folder, no symlink, so the skill must be installed at `~/.agents/skills/orchestrate`.
 
-```json
-"hooks": {
-  "PreToolUse": [
-    {
-      "matcher": "Bash",
-      "hooks": [
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-find-chains.sh\"" },
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-sed-inplace.sh\"" },
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-cat-head-tail.sh\"" },
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-grep-rg.sh\"" }
-      ]
-    },
-    {
-      "matcher": "Grep|Glob",
-      "hooks": [
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-builtin-search.sh\"" }
-      ]
-    },
-    {
-      "matcher": "Read",
-      "hooks": [
-        { "type": "command", "command": "\"$HOME/.agents/hooks/claude/deny-big-read.sh\"", "timeout": 5 }
-      ]
-    }
-  ]
-}
+```sh
+python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py           # show what would change, write nothing
+python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py --apply   # merge into ~/.claude/settings.json
+python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py --check   # exit 1 while a hook is missing
+python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py --apply --remove   # take them out again
 ```
+
+- The installer owns only hooks whose command points into this folder. Every other key and hook (other tools' installers, your own) is left as found, and an existing hook is never duplicated, so running it twice changes nothing.
+- `--apply` keeps a timestamped `settings.json.bak-*` next to the file and writes through a symlinked `settings.json`. A file that is not valid JSON is never touched.
+- `--stdin` reads settings JSON on stdin and prints the merged result, for a dotfiles manager that wants to own the write (for example a chezmoi `modify_settings.json` script). Add `--remove` there to unmerge.
+- Tests: `python3 hooks/claude/install_settings_test.py`.
 
 - Make each script executable (`chmod +x`).
 - The hook reads its event as JSON on stdin. Exit 0 to allow, exit 2 to block (stderr goes back to Claude).
@@ -36,7 +20,7 @@ Scripts here run only once registered in `~/.claude/settings.json` (not tracked 
 
 ## Tool guard
 
-These are the Claude side of the pi guard in `skills/orchestrate/tool/pi_ctx_reminder.ts`, which stays the source of truth. `toolguard.py` is a line for line port of its five shell rules and its two built-in rules; each shell script below is a thin wrapper that names the rule group it enforces, so a script is one file to read and one block list to change.
+These are the Claude side of the pi guard in `tool/pi_ctx_reminder.ts`, which stays the source of truth. `toolguard.py` is a line for line port of its five shell rules and its two built-in rules; each shell script below is a thin wrapper that names the rule group it enforces, so a script is one file to read and one block list to change.
 
 | Script | Rule | Blocks | Does not touch |
 |---|---|---|---|
@@ -86,4 +70,4 @@ A blocked command stays blocked on every retry. Two switches are the human escap
 python3 hooks/claude/toolguard_test.py
 ```
 
-The pi extension runs the same file in `TestCtxReminderSharedToolguardCases` and `TestCtxReminderSharedBuiltinSearchCases` (`skills/orchestrate/tool/ctx_reminder_test.go`) and compares blocked vs allowed and the rule name, so a disagreement between the two implementations fails a test.
+The pi extension runs the same file in `TestCtxReminderSharedToolguardCases` and `TestCtxReminderSharedBuiltinSearchCases` (`tool/ctx_reminder_test.go`) and compares blocked vs allowed and the rule name, so a disagreement between the two implementations fails a test.

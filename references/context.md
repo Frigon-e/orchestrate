@@ -518,7 +518,7 @@ unchanged check remain separate layers, not an operating-system sandbox;
 ignored files and outside paths are not covered by that check. Gate records,
 reports and compare show `ctx_shell`; missing historical fields display `open`.
 
-`skills/orchestrate/tool/pi_ctx_reminder.ts` is a user-level pi extension (the
+`tool/pi_ctx_reminder.ts` is a user-level pi extension (the
 orchestrator installs it under `~/.pi/agent/extensions/`). Gate passes do not
 rely on that copy: a pi pass with `--ctx-tool on --ctx-shell open` starts with `--no-extensions -e <cli-dir>/orch-ctx-reminder.ts`, the copy
 embedded in the binary and written next to the ctx shim, so a guarded gate run

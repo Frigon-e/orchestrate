@@ -13,7 +13,7 @@ import (
 )
 
 // toolRel is where the orch Go package lives inside a checkout.
-const toolRel = "skills/orchestrate/tool"
+const toolRel = "tool"
 
 // wideSelection is the test count above which test-changed warns.
 const wideSelection = 150

@@ -2,7 +2,7 @@
 """Shared guard for the Claude Code deny hooks in this folder.
 
 This is a line for line port of the five rules in
-skills/orchestrate/tool/pi_ctx_reminder.ts, which stays the source of truth:
+tool/pi_ctx_reminder.ts, which stays the source of truth:
 deny-find-chains, deny-find, deny-sed-inplace, deny-cat-head-tail and
 deny-grep-rg. `deny-find-chains.sh` owns the first two, because a plain find is
 a file search and a find chain is its sharper form; the other three scripts own
