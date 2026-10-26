@@ -62,7 +62,9 @@ func (h *harness) leadWork(id string, files map[string]string) string {
 	}
 	_, sha, _ := strings.Cut(fm["base"], "@")
 	wt := worktreePath(h.dir(id), id)
-	h.git("worktree", "add", "-q", "-b", "orch/"+id, wt, sha)
+	if _, err := os.Lstat(wt); err != nil { // spawn already made it inside Herdr
+		h.git("worktree", "add", "-q", "-b", "orch/"+id, wt, sha)
+	}
 	for name, body := range files {
 		os.MkdirAll(filepath.Dir(filepath.Join(wt, name)), 0o755)
 		writeFiles(h.t, wt, map[string]string{name: body})
@@ -381,10 +383,12 @@ func TestIntegrationDependentSpawn(t *testing.T) {
 	if fm["base"] != intBranch+"@"+tip {
 		t.Errorf("base = %q, want %s@%s", fm["base"], intBranch, tip)
 	}
-	brief := string(mustRead(t, filepath.Join(h.dir("beta"), "task.md")))
-	wantContains(t, brief, "worktree add -b <branch> "+worktreePath(h.dir("beta"), "beta")+" "+tip)
+	// spawn cuts the lead's worktree branch from the pinned tip, not the moved tip
+	if got := h.branchTip(shipBranch("beta"))[:12]; got != tip {
+		t.Errorf("worktree branch cut from %s, want the pinned %s", got, tip)
+	}
 
-	// the lead cuts its worktree from the pinned tip and verifies on top of alpha
+	// the lead verifies on top of alpha
 	h.leadWork("beta", map[string]string{"beta/f": "b\n"})
 	h.must("verify", "beta")
 	if !h.branchHas(intBranch, "alpha/f") || !h.branchHas(intBranch, "beta/f") || !h.branchHas(intBranch, "other") {

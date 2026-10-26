@@ -145,8 +145,7 @@ func TestQuickJobGetsOneAttempt(t *testing.T) {
 	quickRepo(t, h, "test -f slug.py")
 	h.must("quick", "q1", "--owns", "slug.py", quickRequest)
 	h.task("full", "--harness", "pi", "--model", "flash", "--effort", "low")
-	wt := filepath.Join(filepath.Dir(h.dir("q1")), "worktrees", "q1")
-	h.gitIn(h.repo, "worktree", "add", "-q", "-b", "orch/q1", wt, "main")
+	wt := filepath.Join(filepath.Dir(h.dir("q1")), "worktrees", "q1") // made by spawn inside Herdr
 
 	// The lead reports done; the watcher verifies it without being asked.
 	h.must("report", "--dir", h.dir("q1"), "done", "branch orch/q1")
@@ -200,8 +199,7 @@ func TestIgnoredFilesAreNeverChecked(t *testing.T) {
 	h.gitIn(h.repo, "commit", "-q", "-m", "ignore")
 	h.dec.set(200, decReply(settledAnswers))
 	h.must("quick", "q1", "--owns", "slug.py", quickRequest)
-	wt := filepath.Join(filepath.Dir(h.dir("q1")), "worktrees", "q1")
-	h.gitIn(h.repo, "worktree", "add", "-q", "-b", "orch/q1", wt, "main")
+	wt := filepath.Join(filepath.Dir(h.dir("q1")), "worktrees", "q1") // made by spawn inside Herdr
 	os.WriteFile(filepath.Join(wt, "slug.py"), []byte("x = 1\n"), 0o644)
 	os.MkdirAll(filepath.Join(wt, "__pycache__"), 0o755)
 	os.WriteFile(filepath.Join(wt, "__pycache__", "slug.pyc"), []byte("x"), 0o644)
@@ -237,8 +235,6 @@ func TestAuditTimeline(t *testing.T) {
 	h.must("health", "set", "pi", "ok")
 	h.now = h.now.Add(time.Minute)
 	h.must("quick", "q1", "--owns", "slug.py", quickRequest)
-	wt := filepath.Join(filepath.Dir(h.dir("q1")), "worktrees", "q1")
-	h.gitIn(h.repo, "worktree", "add", "-q", "-b", "orch/q1", wt, "main")
 	h.now = h.now.Add(time.Minute)
 	h.must("report", "--dir", h.dir("q1"), "done", "branch orch/q1")
 	h.must("watch", "--once") // verify fails (no slug.py) and the quick job freezes
