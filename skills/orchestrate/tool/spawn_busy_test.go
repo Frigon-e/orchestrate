@@ -56,7 +56,7 @@ func TestSpawnGivesUpWhenPaneStaysBusy(t *testing.T) {
 	agentStartBusyFor = 100 * time.Millisecond
 	h.task("t1")
 	out := h.must("spawn", "t1")
-	wantContains(t, out, "opened pane w1:p1 for lead-t1, but the agent is not ready",
+	wantContains(t, out, "opened pane wt1:p1 for lead-t1, but the agent is not ready",
 		"agent_pane_busy", "orch close t1 --force")
 	if len(h.fakeState().Agents) != 0 {
 		t.Fatal("agent must not be started")

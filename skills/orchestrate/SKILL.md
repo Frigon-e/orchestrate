@@ -297,8 +297,21 @@ a lead's pane.
   a full agent plus its subagents. Raise it only on a machine that has the
   room.
 - Close each lead's pane once its work is merged or dropped (`orch close`).
-  A ship lead removes its own worktree before it reports done after a
-  merge; ask it to.
+  Inside Herdr (`HERDR_ENV=1`), orch owns each ship lead's worktree: `orch
+  spawn` makes it with `herdr worktree create` (branch `orch/<id>`, cut from
+  the task's base sha, at the path below) in a workspace of its own, and
+  the lead starts inside it and never runs `git worktree add`. Scouts have
+  no worktree and share the orchestrator's 2x2 grid. orch links the
+  checkout's `.env` into the new worktree (a symlink, only `.env`) unless
+  the checkout is on `main` or `master`, has no `.env`, doesn't gitignore
+  it, or the worktree already has one; a skip is logged as a note and
+  printed. A repo file never runs a setup command. `orch close` then
+  removes the worktree and `git branch -d`s the branch only when the tree
+  is clean and the branch is merged into the base branch; otherwise it
+  keeps both, says why and what to run, and never forces (`--force` skips
+  the done check, not these guards). `orch respawn` reuses the worktree
+  and branch. Outside Herdr the brief still tells the lead to run `git
+  worktree add` itself, and `orch close` removes nothing.
 - Per-repo settings, notes and locks live in
   `<repo>/.agents/orchestrate.toml`; the board prints the notes and held
   locks, and says when a repo has no file. Each brief tells the lead which
@@ -316,7 +329,7 @@ a lead's pane.
   `<herdr worktrees dir>/<repo>/.orchestrate/<id>/`. It holds task.md,
   lead.json (with the owning orchestrator pane), status.log, inbox/ and
   report.md; each orchestrator's watcher keeps `watch-<pane>.json` beside
-  the task folders. Ship worktrees sit beside
+  the task folders. Ship worktrees (made by orch inside Herdr) sit beside
   it at `<herdr worktrees dir>/<repo>/<id>`. Disk is the truth; the board
   is a view of it.
 - The board's CTX column is each lead's context size, marked `!` past

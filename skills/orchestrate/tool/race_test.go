@@ -146,7 +146,7 @@ func TestSpawnPromptFailureLeavesRecoverableLead(t *testing.T) {
 		t.Fatalf("spawn with a failing prompt = %d %s", code, out)
 	}
 	wantContains(t, out, "launch prompt failed", "orch peek t1", "orch close t1 --force")
-	wantContains(t, string(mustRead(t, filepath.Join(h.dir("t1"), "status.log"))), "agent prompt failed in pane w1:p1")
+	wantContains(t, string(mustRead(t, filepath.Join(h.dir("t1"), "status.log"))), "agent prompt failed in pane wt1:p1")
 	l := h.lead("t1")
 	if _, ok := h.fakeState().Panes[l.PaneID]; !ok || l.ClosedAt != 0 {
 		t.Fatalf("failed prompt left no recoverable open lead: %+v", l)
@@ -171,7 +171,7 @@ func TestRespawnRefusedLeavesLeadAndFilesAlone(t *testing.T) {
 		if l := h.lead("t1"); l.ClosedAt != 0 {
 			t.Fatalf("%v closed the lead before the replacement was checked", args)
 		}
-		if _, ok := h.fakeState().Panes["w1:p1"]; !ok {
+		if _, ok := h.fakeState().Panes["wt1:p1"]; !ok {
 			t.Fatalf("%v closed the old pane", args)
 		}
 		if _, err := os.Stat(handoff); err != nil {

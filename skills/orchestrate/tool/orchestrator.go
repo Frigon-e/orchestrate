@@ -187,6 +187,11 @@ func reportBack(dir, id, kind, repo, base, sha string, cfg config, skill string)
 		"`git -C %s worktree add -b <branch> %s %s` (branch per the repo's convention, else `orch/%s`). "+
 		"Name the branch and head sha in your done line; never merge into `%s` or push unless a message tells you to",
 		repo, worktreePath(dir, id), sha, id, base)
+	if kind != "scout" && herdrManaged() {
+		deliverable = fmt.Sprintf("commits on branch `%s`, in your own worktree `%s`: orch already made it from %s and you start inside it, so do not run `git worktree add` and never work in the main checkout. "+
+			"Name the branch and head sha in your done line; never merge into `%s` or push unless a message tells you to",
+			shipBranch(id), worktreePath(dir, id), sha, base)
+	}
 	if kind == "scout" {
 		deliverable = fmt.Sprintf("a self-contained report at `%s` (findings with file:line evidence, then a recommendation); no branch, no edits to the repo", filepath.Join(dir, "report.md"))
 	}
@@ -393,18 +398,39 @@ func (a *app) spawn(id, brief string) error {
 	// agent start and prompt below run outside it.
 	var paneID string
 	var l *lead
+	managedShip := fm["kind"] != "scout" && herdrManaged()
+	base := ""
+	if managedShip {
+		if fm["integration"] != "" { // requireMerged may have re-pinned the base
+			tfm, _, err := readTask(filepath.Join(dir, "task.md"))
+			if err != nil {
+				return err
+			}
+			fm["base"] = tfm["base"]
+		}
+		_, base, _ = strings.Cut(fm["base"], "@")
+		if !baseSHARe.MatchString(base) {
+			return fail("task.md base %q has no commit sha", fm["base"])
+		}
+	}
 	err = withFlock(filepath.Join(s.root, ".spawn.guard"), func() error {
 		leads, err := a.spawnSlot(s, dir, id)
 		if err != nil {
 			return err
 		}
-		pane, tabID, err := placePane(myLeads(leads, me), s.repo, env)
+		var pane, tabID, workspaceID string
+		if managedShip {
+			prev, _ := loadLead(dir)
+			pane, tabID, workspaceID, err = a.placeShip(s, dir, id, base, prev, env)
+		} else {
+			pane, tabID, err = placePane(myLeads(leads, me), s.repo, env)
+		}
 		if err != nil {
 			return err
 		}
 		paneID = pane
 		_, _ = herdrCmd(herdrTimeout, "pane", "rename", paneID, name)
-		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch}
+		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch, WorkspaceID: workspaceID}
 		if l.Harness == "pi" {
 			l.Session = newSessionID()
 		}
@@ -420,6 +446,9 @@ func (a *app) spawn(id, brief string) error {
 		return nil
 	}
 	launch := fmt.Sprintf("You are orchestrate lead %q. Read %s and follow it exactly, starting with its Report-back section.", id, filepath.Join(dir, "task.md"))
+	if managedShip { // a brief written outside Herdr still tells the lead to make the worktree
+		launch += fmt.Sprintf(" Your worktree already exists at %s on a branch orch made: start inside it and do not run `git worktree add`.", worktreePath(dir, id))
+	}
 	if brief != "" {
 		launch += " " + brief
 	}
@@ -1275,7 +1304,18 @@ func cmdClose(a *app, args []string) error {
 		return err
 	}
 	fmt.Fprintln(a.out, "closed "+l.Name)
-	return nil
+	if l.WorkspaceID == "" {
+		return nil
+	}
+	s, err := a.site()
+	if err != nil {
+		return err
+	}
+	fm, _, err := readTask(filepath.Join(dir, "task.md"))
+	if err != nil {
+		return err
+	}
+	return a.removeShipWorktree(s, dir, l, fm)
 }
 
 // closeLead closes the lead's pane, frees its locks and logs note.

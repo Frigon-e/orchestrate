@@ -42,6 +42,10 @@ type fakeState struct {
 	Session string                `json:"session"`
 	Down    bool                  `json:"down"`
 	Calls   [][]string            `json:"calls"`
+	// Workspaces maps a worktree workspace id to its worktree path.
+	Workspaces map[string]string `json:"workspaces"`
+	Wsn        int               `json:"wsn"`
+	WsRepos    map[string]string `json:"ws_repos"`
 }
 
 func loadFake(path string) *fakeState {
@@ -114,7 +118,7 @@ func fakeHerdr(path string, args []string) int {
 		return print(map[string]any{"result": map[string]any{"tab": map[string]any{"tab_id": tab}, "root_pane": map[string]any{"pane_id": pane}}})
 	case "pane split":
 		st.Next++
-		pane := fmt.Sprintf("w1:p%d", st.Next)
+		pane := fmt.Sprintf("%s:p%d", strings.SplitN(args[2], ":", 2)[0], st.Next)
 		st.Panes[pane] = st.Panes[args[2]]
 		return print(map[string]any{"result": map[string]any{"pane": map[string]any{"pane_id": pane}}})
 	case "agent start":
@@ -133,7 +137,40 @@ func fakeHerdr(path string, args []string) int {
 	case "pane close":
 		delete(st.Panes, args[2])
 		delete(st.Agents, args[2])
+		ws := strings.SplitN(args[2], ":", 2)[0] // the last pane of a worktree workspace closes the workspace
+		if _, ok := st.Workspaces[ws]; ok && fakePanes(st, ws) == 0 {
+			delete(st.Workspaces, ws)
+		}
 		return print(map[string]any{})
+	case "worktree create", "worktree open":
+		return fakeWorktree(st, args, print)
+	case "worktree remove":
+		ws := flagValue(args, "--workspace")
+		path, ok := st.Workspaces[ws]
+		if !ok {
+			fmt.Fprintln(os.Stderr, `{"error":{"code":"workspace_not_found","message":"no such workspace"}}`)
+			return 1
+		}
+		if out, _ := exec.Command("git", "-C", path, "status", "--porcelain").Output(); len(out) > 0 && !slices.Contains(args, "--force") {
+			fmt.Fprintln(os.Stderr, `{"error":{"code":"dirty_worktree_requires_force","message":"worktree is dirty"}}`)
+			return 1
+		}
+		rm := []string{"worktree", "remove", path}
+		if slices.Contains(args, "--force") {
+			rm = append(rm, "--force")
+		}
+		if out, err := exec.Command("git", append([]string{"-C", st.WsRepos[ws]}, rm...)...).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "git worktree remove: %s\n", out)
+			return 1
+		}
+		for p := range st.Panes {
+			if strings.HasPrefix(p, ws+":") {
+				delete(st.Panes, p)
+				delete(st.Agents, p)
+			}
+		}
+		delete(st.Workspaces, ws)
+		return print(map[string]any{"result": map[string]any{"type": "worktree_removed", "workspace_id": ws}})
 	case "pane current":
 		return print(map[string]any{"result": map[string]any{"pane": map[string]any{"agent_session": map[string]any{"value": st.Session}}}})
 	case "pane rename", "agent wait", "agent focus":
@@ -141,6 +178,62 @@ func fakeHerdr(path string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "fake herdr: unhandled %v\n", args)
 	return 2
+}
+
+func fakePanes(st *fakeState, ws string) int {
+	n := 0
+	for p := range st.Panes {
+		if strings.HasPrefix(p, ws+":") {
+			n++
+		}
+	}
+	return n
+}
+
+// fakeWorktree makes real git worktrees, as Herdr does, and one workspace per path.
+func fakeWorktree(st *fakeState, args []string, print func(any) int) int {
+	path, cwd := flagValue(args, "--path"), flagValue(args, "--cwd")
+	if st.Workspaces == nil {
+		st.Workspaces = map[string]string{}
+	}
+	ws := ""
+	for id, p := range st.Workspaces {
+		if p == path {
+			ws = id
+		}
+	}
+	if args[1] == "create" {
+		if exists(os.Getenv("ORCH_FAKE_HERDR") + ".createfail") {
+			fmt.Fprintln(os.Stderr, `{"error":{"code":"internal","message":"cannot create a worktree"}}`)
+			return 1
+		}
+		if out, err := exec.Command("git", "-C", cwd, "worktree", "add", "-b", flagValue(args, "--branch"), path, flagValue(args, "--base")).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "git worktree add: %s\n", out)
+			return 1
+		}
+	} else if _, err := os.Stat(path); err != nil {
+		fmt.Fprintln(os.Stderr, `{"error":{"code":"worktree_not_found","message":"worktree path not found"}}`)
+		return 1
+	}
+	if ws == "" {
+		st.Wsn++
+		ws = fmt.Sprintf("wt%d", st.Wsn)
+		st.Workspaces[ws] = path
+		if st.WsRepos == nil {
+			st.WsRepos = map[string]string{}
+		}
+		st.WsRepos[ws] = cwd
+		st.Panes[ws+":p0"] = ws + ":t1"
+	}
+	root := ws + ":p0"
+	for p := range st.Panes {
+		if strings.HasPrefix(p, ws+":") && p < root {
+			root = p
+		}
+	}
+	return print(map[string]any{"result": map[string]any{
+		"workspace": map[string]any{"workspace_id": ws, "pane_count": fakePanes(st, ws)},
+		"root_pane": map[string]any{"pane_id": root, "tab_id": st.Panes[root]}}})
 }
 
 type harness struct {
@@ -377,27 +470,26 @@ func TestLifecycle(t *testing.T) {
 
 	brief, _ := os.ReadFile(filepath.Join(h.dir("t1"), "task.md"))
 	wantContains(t, string(brief), "id: t1", "base: main@", "/skill/scripts/orch report --dir "+h.dir("t1"), "references/lead.md",
-		"worktree add -b <branch> "+filepath.Join(h.tmp, "state", "repo", "worktrees", "t1")+" ")
+		"commits on branch `orch/t1`, in your own worktree `"+filepath.Join(h.tmp, "state", "repo", "worktrees", "t1")+"`", "do not run `git worktree add`")
 	os.Remove(filepath.Join(h.dir("t1"), "task.md"))
 	h.task("t1")
 	wantContains(t, h.must("check", "t1"), "t1: ok")
 
 	out = h.must("spawn", "t1")
-	wantContains(t, out, "spawned lead-t1 (claude sonnet) in pane w1:p1", "no watcher running")
+	wantContains(t, out, "spawned lead-t1 (claude sonnet) in pane wt1:p1", "no watcher running")
 	l := h.lead("t1")
-	if l.PaneID != "w1:p1" || l.TabID != "w1:t1" {
-		t.Fatalf("lead placed at %s/%s", l.TabID, l.PaneID)
+	if l.PaneID != "wt1:p1" || l.TabID != "wt1:t1" || l.WorkspaceID != "wt1" {
+		t.Fatalf("lead placed at %s/%s in %s", l.TabID, l.PaneID, l.WorkspaceID)
 	}
 	st := h.fakeState()
-	create := callsOf(st, "tab", "create")
-	if len(create) != 1 || flagValue(create[0], "--label") != "leads" || !slices.Contains(create[0], "ORCH_ROLE=lead") || !slices.Contains(create[0], "--no-focus") {
-		t.Fatalf("tab create = %v", create)
+	if len(callsOf(st, "tab", "create")) != 0 {
+		t.Fatal("a ship lead lives in its own workspace, not a tab of the orchestrator's")
 	}
 	start := callsOf(st, "agent", "start", "lead-t1")
 	if len(start) != 1 || !slices.Equal(start[0][len(start[0])-5:], []string{"--", "--model", "sonnet", "--effort", "high"}) {
 		t.Fatalf("agent start = %v", start)
 	}
-	if p := callsOf(st, "agent", "prompt", "w1:p1"); len(p) != 1 || !strings.Contains(p[0][3], filepath.Join(h.dir("t1"), "task.md")) {
+	if p := callsOf(st, "agent", "prompt", "wt1:p1"); len(p) != 1 || !strings.Contains(p[0][3], filepath.Join(h.dir("t1"), "task.md")) {
 		t.Fatalf("launch prompt = %v", p)
 	}
 
@@ -413,7 +505,7 @@ func TestLifecycle(t *testing.T) {
 	wantContains(t, h.must("status"), "t1", "done: branch feat/x", "leads open: 1/3")
 
 	wantContains(t, h.must("close", "t1"), "closed lead-t1")
-	if _, ok := h.fakeState().Panes["w1:p1"]; ok {
+	if _, ok := h.fakeState().Panes["wt1:p1"]; ok {
 		t.Fatal("pane still open after close")
 	}
 	if out := h.must("watch", "--once"); !strings.Contains(out, "no open leads") {
@@ -426,7 +518,7 @@ func TestSpawnGridAndCap(t *testing.T) {
 	os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte("max_leads = 5\nclaude_args = [\"--permission-mode\", \"auto\"]\n"), 0o644)
 	ids := []string{"a", "b", "c", "d", "e", "f"}
 	for _, id := range ids {
-		h.task(id)
+		h.task(id, "--kind", "scout") // ship leads get a workspace of their own, scouts share the grid
 	}
 	for _, id := range ids[:5] {
 		h.now = h.now.Add(time.Second)
@@ -938,7 +1030,6 @@ func TestWatchStalled(t *testing.T) {
 	h.task("t1")
 	h.must("spawn", "t1")
 	wt := filepath.Join(filepath.Dir(h.dir("t1")), "worktrees", "t1")
-	h.gitIn(h.repo, "worktree", "add", "-q", "-b", "orch/t1", wt, "main")
 	if out := h.must("watch", "--once"); out != "" {
 		t.Fatalf("a fresh working lead alerted: %q", out)
 	}
@@ -1470,7 +1561,7 @@ func TestSendInboxAndDecisions(t *testing.T) {
 
 	out := h.must("send", "t1", "--resolve", "db", "Use", "Postgres")
 	wantContains(t, out, "sent message 001 to lead-t1")
-	bells := callsOf(h.fakeState(), "agent", "prompt", "w1:p1")
+	bells := callsOf(h.fakeState(), "agent", "prompt", "wt1:p1")
 	if len(bells) != 2 || !strings.HasPrefix(bells[1][3], "orch: new message for you. Run: /skill/scripts/orch inbox --dir ") {
 		t.Fatalf("doorbell = %v", bells)
 	}
@@ -1485,7 +1576,7 @@ func TestSendInboxAndDecisions(t *testing.T) {
 		t.Fatalf("message not acknowledged: %q", out)
 	}
 
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "blocked" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "blocked" })
 	h.stdin.WriteString("line one\nline two\n")
 	wantContains(t, h.must("send", "t1", "-"), "stored message 002", "no doorbell")
 	msg, _ := os.ReadFile(filepath.Join(d, "inbox", "002.msg"))
@@ -1504,13 +1595,13 @@ func TestWatchHerdrEvents(t *testing.T) {
 	if out := h.must("watch", "--once"); out != "" {
 		t.Fatalf("working lead produced %q", out)
 	}
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "blocked" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "blocked" })
 	wantContains(t, h.must("watch", "--once"), "orch: t1 ui-blocked")
 	if out := h.must("watch", "--once"); out != "" {
 		t.Fatalf("ui-blocked repeated: %q", out)
 	}
 
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "idle" })
 	h.must("watch", "--once")
 	h.now = h.now.Add(31 * time.Minute)
 	wantContains(t, h.must("watch", "--once"), "orch: t1 quiet: idle 31m without a report")
@@ -1521,8 +1612,8 @@ func TestWatchHerdrEvents(t *testing.T) {
 
 	h.editFake(func(st *fakeState) { st.Down = true })
 	wantContains(t, h.must("watch", "--once"), "herdr unreachable")
-	h.editFake(func(st *fakeState) { st.Down = false; delete(st.Agents, "w1:p1") })
-	wantContains(t, h.must("watch", "--once"), "orch: t1 gone: agent exited (pane w1:p1)")
+	h.editFake(func(st *fakeState) { st.Down = false; delete(st.Agents, "wt1:p1") })
+	wantContains(t, h.must("watch", "--once"), "orch: t1 gone: agent exited (pane wt1:p1)")
 	if out := h.must("watch", "--once"); out != "" {
 		t.Fatalf("gone repeated: %q", out)
 	}
@@ -1534,7 +1625,7 @@ func TestWatchQuietSkipsWaitingLeads(t *testing.T) {
 	h.task("t1")
 	h.must("spawn", "t1")
 	h.must("report", "--dir", h.dir("t1"), "paused", "waiting for the dependency")
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "idle" })
 	h.must("watch", "--once")
 	h.now = h.now.Add(2 * time.Hour)
 	if out := h.must("watch", "--once"); out != "" {
@@ -1745,7 +1836,7 @@ func TestContextLimitWarnsLeadAndBoard(t *testing.T) {
 	os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte("lead_context_limit = 100000\n"), 0o644)
 	h.task("t1")
 	h.must("spawn", "t1")
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Session = "s1" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Session = "s1" })
 	h.transcript("claude", "s1", claudeTurn(1, 90_000, 0, false))
 	d := h.dir("t1")
 
@@ -1779,9 +1870,9 @@ func TestCompact(t *testing.T) {
 	if code, out := h.run("compact", "t1"); code != 1 || !strings.Contains(out, "is working") {
 		t.Fatalf("compact mid-turn = %d %q", code, out)
 	}
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "idle" })
 	wantContains(t, h.must("compact", "t1", "keep", "the", "footer", "work"), "compacted lead-t1")
-	prompts := callsOf(h.fakeState(), "agent", "prompt", "w1:p1")
+	prompts := callsOf(h.fakeState(), "agent", "prompt", "wt1:p1")
 	if len(prompts) != 3 {
 		t.Fatalf("prompts = %v", prompts)
 	}
@@ -1793,9 +1884,9 @@ func TestCompact(t *testing.T) {
 		t.Fatal("context decision still open after compact")
 	}
 
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "idle" })
 	h.must("compact", "t1")
-	if c := callsOf(h.fakeState(), "agent", "prompt", "w1:p1"); c[3][3] != "/compact "+compactFocus {
+	if c := callsOf(h.fakeState(), "agent", "prompt", "wt1:p1"); c[3][3] != "/compact "+compactFocus {
 		t.Fatalf("default focus = %q", c[3][3])
 	}
 }
@@ -1812,11 +1903,11 @@ func TestRespawn(t *testing.T) {
 	os.WriteFile(filepath.Join(d, "handoff.md"), []byte("branch orch/t1; next: the settings page\n"), 0o644)
 
 	wantContains(t, h.must("respawn", "t1"), "spawned lead-t1")
-	if _, ok := h.fakeState().Panes["w1:p1"]; ok {
+	if _, ok := h.fakeState().Panes["wt1:p1"]; ok {
 		t.Fatal("old pane still open")
 	}
 	l := h.lead("t1")
-	if l.PaneID == "w1:p1" || l.ClosedAt != 0 {
+	if l.PaneID == "wt1:p1" || l.ClosedAt != 0 {
 		t.Fatalf("new lead = %+v", l)
 	}
 	kept := filepath.Join(d, fmt.Sprintf("handoff-%d.md", h.now.Unix()))
@@ -3009,9 +3100,9 @@ func TestWatchRingsDoorbellOnceForStaleUnreadMail(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	bells := func() int { return len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1")) }
+	bells := func() int { return len(callsOf(h.fakeState(), "agent", "prompt", "wt1:p1")) }
 	base := bells()
-	setStatus := func(s string) { h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = s }) }
+	setStatus := func(s string) { h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = s }) }
 
 	for _, s := range []string{"working", "blocked"} {
 		setStatus(s)
@@ -3059,9 +3150,9 @@ func TestWatchUnreadMinutesZeroDisablesReminder(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(h.dir("t1"), "inbox", "001.msg"), old, old); err != nil {
 		t.Fatal(err)
 	}
-	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
-	before := len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1"))
-	if out := h.must("watch", "--once"); strings.Contains(out, "reminder") || len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1")) != before {
+	h.editFake(func(st *fakeState) { st.Agents["wt1:p1"].Status = "idle" })
+	before := len(callsOf(h.fakeState(), "agent", "prompt", "wt1:p1"))
+	if out := h.must("watch", "--once"); strings.Contains(out, "reminder") || len(callsOf(h.fakeState(), "agent", "prompt", "wt1:p1")) != before {
 		t.Fatalf("reminder with unread_minutes = 0: %q", out)
 	}
 }

@@ -29,8 +29,9 @@ Your task.md is the contract. Its Report-back section gives the exact
 - Verify once: one `ui-verifier` pass with a written checklist after the
   automated check is green (about 60 turns max); a second pass covers only
   the fixed defects.
-- **Ship tasks:** work only in your own worktree and branch, created as the
-  Report-back section says. Never commit in the main checkout. Never push,
+- **Ship tasks:** work only in your own worktree and branch, as the
+  Report-back section says (inside Herdr it already exists and you start in
+  it). Never commit in the main checkout. Never push,
   merge or open a PR until a message tells you to. If your `base` is an
   `orch/int-*` branch, that is already the tip with your prerequisites
   merged; never touch that branch, `orch verify` requires a clean, committed
@@ -154,6 +155,7 @@ not missed.
 ## Finishing
 
 After `done`, wait. The orchestrator may send review fixes or tell you to
-merge or push, using the repo's own merge flow. After a merge, remove your
-worktree (`git worktree remove <path>`), report `done` again with the
-merge sha, and stop. The orchestrator closes your pane.
+merge or push, using the repo's own merge flow. After a merge, report `done`
+again with the merge sha and stop. The orchestrator closes your pane and,
+inside Herdr, removes your worktree. Outside Herdr, remove it yourself first
+(`git worktree remove <path>`).

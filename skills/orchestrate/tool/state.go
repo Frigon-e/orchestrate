@@ -167,6 +167,9 @@ type lead struct {
 	// Epoch is the token of the session spawn started; a respawn replaces it,
 	// and `orch report` refuses a session holding an older one.
 	Epoch string `json:"epoch,omitempty"`
+	// WorkspaceID is the Herdr workspace orch made for a ship lead's worktree.
+	// Empty on scouts and on leads whose worktree the lead made itself.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 }
 
 // orchID names the orchestrator running this command by its Herdr pane, so
