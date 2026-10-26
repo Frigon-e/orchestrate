@@ -33,6 +33,7 @@
 - Never manually modify CHANGELOG.md files or any files that are marked as auto-generated.
 - Never use the em dash. Use a plain dash "-" instead.
 - When writing commit messages, never add the agent as a co-author.
+- Never wait on output with `sleep`, `timeout`, or sleep-and-grep loops. Run long commands with `run_in_background` and act on the completion notification, or use the built-in Monitor tool to watch output. Same for subagents: wait for their notification instead of polling.
 - When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection. If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way.
 
 # Maintaining this file
