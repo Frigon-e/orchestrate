@@ -147,12 +147,13 @@ func TestCtxStatusServerAvailability(t *testing.T) {
 				if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 					t.Fatal(err)
 				}
-				if kind == "symlink" {
+				switch kind {
+				case "symlink":
 					if err := os.Symlink(bin, bin+"-link"); err != nil {
 						t.Fatal(err)
 					}
 					bin += "-link"
-				} else if kind == "PATH" {
+				case "PATH":
 					t.Setenv("PATH", h.tmp+string(os.PathListSeparator)+os.Getenv("PATH"))
 					bin = filepath.Base(bin)
 				}
@@ -194,11 +195,12 @@ func TestCtxLangConfiguredServerNotUsable(t *testing.T) {
 			t.Run(language+"/"+kind, func(t *testing.T) {
 				h := fixtureRepo(t, "mixed")
 				bin := filepath.Join(h.tmp, "unusable-server")
-				if kind == "directory" {
+				switch kind {
+				case "directory":
 					if err := os.Mkdir(bin, 0755); err != nil {
 						t.Fatal(err)
 					}
-				} else if kind == "non-executable" {
+				case "non-executable":
 					if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0644); err != nil {
 						t.Fatal(err)
 					}

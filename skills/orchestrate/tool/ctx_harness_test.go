@@ -207,7 +207,7 @@ func ctxRunHarnessTool(t *testing.T, harness, bin, repo, tool string, input map[
 	}
 	var env []string
 	for _, v := range os.Environ() {
-		key := strings.SplitN(v, "=", 2)[0]
+		key, _, _ := strings.Cut(v, "=")
 		if strings.HasPrefix(key, "ORCH_") || strings.HasPrefix(key, "ANTHROPIC_") || strings.HasPrefix(key, "CLAUDE_") || strings.HasPrefix(key, "PI_") || key == "HOME" || key == "PATH" {
 			continue
 		}

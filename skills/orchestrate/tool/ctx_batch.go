@@ -238,7 +238,9 @@ func (e *ctxEnv) lookupConcept(q, pathFilter string) string {
 	for _, h := range hits {
 		fmt.Fprintf(&b, "%s:%d-%d\n", h.Path, h.Start, h.End)
 		for _, l := range h.Snippet[:min(3, len(h.Snippet))] {
-			b.WriteString("  " + short(l, 120) + "\n")
+			b.WriteString("  ")
+			b.WriteString(short(l, 120))
+			b.WriteString("\n")
 		}
 	}
 	if b.Len() == 0 {
@@ -287,7 +289,10 @@ func (e *ctxEnv) conceptFromRg(q, pathFilter string, cause error) string {
 	hits := append([]rgHit(nil), res.Hits...)
 	sort.SliceStable(hits, func(i, j int) bool { return score(hits[i]) > score(hits[j]) })
 	var b strings.Builder
-	b.WriteString(head + "rg fallback on words: " + strings.Join(words, ", ") + "\n")
+	b.WriteString(head)
+	b.WriteString("rg fallback on words: ")
+	b.WriteString(strings.Join(words, ", "))
+	b.WriteString("\n")
 	if len(hits) == 0 {
 		b.WriteString("no matches")
 	}

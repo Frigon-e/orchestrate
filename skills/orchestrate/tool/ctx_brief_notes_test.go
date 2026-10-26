@@ -8,7 +8,7 @@ import (
 
 func TestBriefSearchNotesGroupFailuresByReason(t *testing.T) {
 	var lks []evidenceLookup
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		lks = append(lks, lookupRecord(fmt.Sprintf("q%d", i), ".", "concept", 0, 4, fmt.Errorf("%s", score429), ""))
 	}
 	lks = append(lks, lookupRecord("ok", ".", "text", 3, 0, nil, ""), lookupRecord("part", ".", "concept", 2, 4, nil, ""))

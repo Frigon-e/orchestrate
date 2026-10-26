@@ -587,9 +587,10 @@ func TestOutageGateProviderMatrix(t *testing.T) {
 		// those routes. Keep the full mode table for one failed provider and
 		// the distinct invalid-reply diagnostics when every provider is down.
 		modes := []string{"refused"}
-		if mask == 1 {
+		switch mask {
+		case 1:
 			modes = outageModes
-		} else if mask == 2 || mask == 7 {
+		case 2, 7:
 			modes = append(modes, "malformed", "empty")
 		}
 		for _, mode := range modes {

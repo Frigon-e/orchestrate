@@ -55,7 +55,7 @@ func jbEnv(bin, code string, cfg config) *ctxEnv {
 	return e
 }
 
-func callLog(t *testing.T, calls string) string {
+func callLog(calls string) string {
 	b, _ := os.ReadFile(calls)
 	return strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(string(b)), "\n", "|")), " ")
 }
@@ -68,14 +68,14 @@ func TestJbcontextIndexFreshIsNotRefreshedAndSearchesArePinned(t *testing.T) {
 		t.Fatalf("state = %+v", st)
 	}
 	e.Ready() // once per run
-	log := callLog(t, calls)
+	log := callLog(calls)
 	if strings.Contains(log, "index") || strings.Count(log, "status") != 1 {
 		t.Errorf("calls: %s", log)
 	}
 	if _, err := e.Concept("q", "", 3); err != nil {
 		t.Fatal(err)
 	}
-	wantContains(t, callLog(t, calls), "--revision "+head)
+	wantContains(t, callLog(calls), "--revision "+head)
 	wantContains(t, e.Sources(), "jbcontext index "+sha7(head)+" (HEAD "+sha7(head)+")")
 }
 
@@ -87,7 +87,7 @@ func TestJbcontextStaleIndexIsRefreshedOnce(t *testing.T) {
 	if st.rev != head || st.note != "" {
 		t.Errorf("state after refresh = %+v", st)
 	}
-	log := callLog(t, calls)
+	log := callLog(calls)
 	if strings.Count(log, "index --only-incremental") != 1 || !strings.Contains(log, "--project-path "+code) || strings.Count(log, "status") != 2 {
 		t.Errorf("calls: %s", log)
 	}
@@ -105,7 +105,7 @@ func TestJbcontextRefreshFailureIsANoteAndSearchesGoOn(t *testing.T) {
 	if _, err := e.Concept("q", "", 3); err != nil {
 		t.Fatal(err)
 	}
-	if log := callLog(t, calls); strings.Contains(log, "--revision") {
+	if log := callLog(calls); strings.Contains(log, "--revision") {
 		t.Errorf("a search was pinned to a revision that is not indexed: %s", log)
 	}
 	if notes := strings.Join(e.Notes(), "|"); !strings.Contains(notes, want) {
@@ -144,7 +144,7 @@ func TestCtxIndexPolicyDenyListAndPrivateWork(t *testing.T) {
 		if st := e.Ready(); st.rev != head {
 			t.Errorf("state = %+v", st)
 		}
-		log := callLog(t, calls)
+		log := callLog(calls)
 		if !strings.Contains(log, "index --project-path "+code) || strings.Contains(log, "--only-incremental") {
 			t.Errorf("calls: %s", log)
 		}
@@ -156,15 +156,15 @@ func TestCtxIndexPolicyDenyListAndPrivateWork(t *testing.T) {
 		if st := e.Ready(); st.rev != "" {
 			t.Errorf("state = %+v", st)
 		}
-		if strings.Contains(callLog(t, calls), "index") {
-			t.Errorf("calls: %s", callLog(t, calls))
+		if strings.Contains(callLog(calls), "index") {
+			t.Errorf("calls: %s", callLog(calls))
 		}
 		wantContains(t, strings.Join(e.Notes(), "|"), "ctx_index is incremental")
 		// ... unless refresh --full asks for it.
 		if st := e.Refresh(true); st.rev == "" {
 			t.Errorf("refresh --full: %+v", st)
 		}
-		wantContains(t, callLog(t, calls), "index --project-path "+code)
+		wantContains(t, callLog(calls), "index --project-path "+code)
 	})
 	for name, mk := range map[string]func(code string) *ctxEnv{
 		"off": func(code string) *ctxEnv { return newCtxEnv(code, ctxOpts{Cfg: cfgWith("off")}) },
@@ -197,7 +197,7 @@ func TestCtxDenyPreventsIndexingAndSearchInLinkedWorktrees(t *testing.T) {
 	c := newCtxHarness(t)
 	work := filepath.Join(t.TempDir(), "worktree")
 	c.git("worktree", "add", "--detach", work, "HEAD")
-	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_deny = [%q]\n", c.repo)), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_deny = [%q]\n", c.repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, root := range []string{c.repo, work} {
@@ -309,7 +309,7 @@ esac
 		if len(hits) != 1 || hits[0].Path != "b.go" || !strings.Contains(strings.Join(hits[0].Body, "\n"), "func New()") {
 			t.Fatalf("hits = %+v", hits)
 		}
-		log := callLog(t, calls)
+		log := callLog(calls)
 		if strings.Count(log, "search --limit") != 2 || !strings.Contains(log, "--revision") {
 			t.Errorf("a dirty tree needs a pinned and an unpinned search: %s", log)
 		}
@@ -324,7 +324,7 @@ esac
 		if len(hits) != 1 || hits[0].Path != "b.go" || !strings.Contains(strings.Join(hits[0].Body, "\n"), "func Old()") {
 			t.Fatalf("hits = %+v", hits)
 		}
-		if log := callLog(t, calls); strings.Count(log, "search --limit") != 1 || !strings.Contains(log, "--revision") {
+		if log := callLog(calls); strings.Count(log, "search --limit") != 1 || !strings.Contains(log, "--revision") {
 			t.Errorf("calls: %s", log)
 		}
 	})

@@ -140,7 +140,7 @@ func tsNativeServer(code string) string {
 	for _, pnpm := range pnpmStores(code) {
 		dirs, _ := filepath.Glob(filepath.Join(pnpm, "typescript@7*"))
 		for _, d := range dirs {
-			name := strings.SplitN(strings.TrimPrefix(filepath.Base(d), "typescript@"), "_", 2)[0]
+			name, _, _ := strings.Cut(strings.TrimPrefix(filepath.Base(d), "typescript@"), "_")
 			var ver []int
 			for _, p := range strings.Split(name, ".") {
 				n, _ := strconv.Atoi(strings.SplitN(p, "-", 2)[0])

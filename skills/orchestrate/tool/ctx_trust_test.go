@@ -62,11 +62,11 @@ func TestCtxTrustRepoLocalServersRequireExplicitTrust(t *testing.T) {
 			// Listing is required, and read-only mode still never runs local servers.
 			switch mode {
 			case "readonly", "trusted":
-				if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_trust = [%q]\n", c.repo)), 0o644); err != nil {
+				if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_trust = [%q]\n", c.repo), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			case "denied":
-				if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_deny = [%q]\n", c.repo)), 0o644); err != nil {
+				if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_deny = [%q]\n", c.repo), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -131,7 +131,7 @@ func TestCtxServerOverridesPATHAndSymlinks(t *testing.T) {
 	t.Setenv("PATH", outside+string(os.PathListSeparator)+path)
 	l := &langDef{ID: "probe", LSPEnv: "ORCH_PROBE_LS", LSP: []lspCmd{{Bin: "ctx-probe"}}}
 	// Denial applies to overrides and PATH symlinks too.
-	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_deny = [%q]\n", c.repo)), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_deny = [%q]\n", c.repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, readonly := range []bool{false, true} {
@@ -216,7 +216,7 @@ func TestCtxTrustInstalledRepositoryOnly(t *testing.T) {
 	if ctxRepoTrusted(other) {
 		t.Fatal("unlisted clone trusted")
 	}
-	os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_deny = [%q]\n", c.repo)), 0644)
+	os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_deny = [%q]\n", c.repo), 0644)
 	if ctxRepoTrusted(c.repo) {
 		t.Fatal("installed repo bypassed deny")
 	}
@@ -229,7 +229,7 @@ func TestCtxTrustCoversGitReposAndTheirWorktrees(t *testing.T) {
 	if ctxRepoTrusted(c.repo) || ctxRepoTrusted(work) {
 		t.Fatal("unlisted git repositories must not be trusted")
 	}
-	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_trust = [%q]\n", c.repo)), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_trust = [%q]\n", c.repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if !ctxRepoTrusted(c.repo) || !ctxRepoTrusted(work) {
@@ -243,7 +243,7 @@ func TestCtxTrustCoversGitReposAndTheirWorktrees(t *testing.T) {
 	if err := os.Symlink(plain, alias); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_trust = [%q]\n", alias)), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_trust = [%q]\n", alias), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if !ctxRepoTrusted(plain) {
@@ -269,7 +269,7 @@ func TestCtxTrustCoversGitReposAndTheirWorktrees(t *testing.T) {
 
 func TestCtxTrustNativeTSServerFoundThroughAnotherWorktree(t *testing.T) {
 	c := newCtxHarness(t)
-	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte(fmt.Sprintf("ctx_trust = [%q]\n", c.repo)), 0o644); err != nil {
+	if err := os.WriteFile(os.Getenv("ORCH_CONFIG"), fmt.Appendf(nil, "ctx_trust = [%q]\n", c.repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(t.TempDir(), "ran")

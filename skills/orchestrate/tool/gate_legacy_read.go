@@ -70,8 +70,8 @@ func retainHistoricalGateResult(run *benchRun, rec *gateRecord) {
 func readStoredGateReport(report string) (string, historicalGateResult) {
 	var historical historicalGateResult
 	for _, line := range strings.Split(report, "\n") {
-		if strings.HasPrefix(line, "Review state: **") {
-			state, _, ok := strings.Cut(strings.TrimPrefix(line, "Review state: **"), "**")
+		if after, ok := strings.CutPrefix(line, "Review state: **"); ok {
+			state, _, ok := strings.Cut(after, "**")
 			if ok {
 				return state, historicalGateResult{}
 			}

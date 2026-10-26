@@ -131,12 +131,15 @@ func fakeGatePaneVerbs(path string, args []string) (int, bool) {
 			turns, _ := strconv.Atoi(n)
 			var sb strings.Builder
 			sb.WriteString(`{"type":"session"}` + "\n")
-			for i := 0; i < turns; i++ {
+			for range turns {
 				call, _ := json.Marshal(map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{
 					{"type": "toolCall", "name": "read", "arguments": map[string]any{"path": "internal/store.go"}}, {"type": "toolCall", "name": "grep"}},
 					"usage": map[string]any{"input": 10, "output": 1, "cacheRead": 100}}})
 				res, _ := json.Marshal(map[string]any{"type": "message", "message": map[string]any{"role": "toolResult", "toolName": "read", "content": []map[string]any{{"type": "text", "text": "package internal"}}}})
-				sb.WriteString(string(call) + "\n" + string(res) + "\n")
+				sb.WriteString(string(call))
+				sb.WriteString("\n")
+				sb.WriteString(string(res))
+				sb.WriteString("\n")
 			}
 			os.MkdirAll(args[3], 0o755)
 			os.WriteFile(filepath.Join(args[3], "session.jsonl"), []byte(sb.String()), 0o644)
@@ -383,7 +386,7 @@ func (h *harness) gateRepo(n int) string {
 	os.MkdirAll(filepath.Join(h.repo, "internal"), 0o755)
 	writeFiles(h.t, h.repo, map[string]string{"internal/store.go": "package internal\n\nfunc Put() {}\n"})
 	spec := planHeader
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := "api"
 		if i > 0 {
 			id = fmt.Sprintf("p%d", i)
@@ -757,7 +760,7 @@ func TestGateHeadlessWithoutHerdrKeepsOnlyFailedSessions(t *testing.T) {
 	// A stale run beyond retention loses its saved files on the next gate.
 	stale := filepath.Join(filepath.Dir(gdir), "stale")
 	os.MkdirAll(filepath.Join(stale, "sessions", "x"), 0o755)
-	os.WriteFile(filepath.Join(stale, "gate.json"), []byte(fmt.Sprintf(`{"at":%d}`, h.now.Add(-8*24*time.Hour).Unix())), 0o644)
+	os.WriteFile(filepath.Join(stale, "gate.json"), fmt.Appendf(nil, `{"at":%d}`, h.now.Add(-8*24*time.Hour).Unix()), 0o644)
 
 	code, out := h.run("gate", "spec.md")
 	if code != 1 {
@@ -794,7 +797,7 @@ func TestPruneGateKeepsNewestRunsAndRecentOnes(t *testing.T) {
 			os.MkdirAll(filepath.Join(d, sub), 0o755)
 		}
 		os.WriteFile(filepath.Join(d, "passes", "a.out"), []byte("x"), 0o644)
-		os.WriteFile(filepath.Join(d, "gate.json"), []byte(fmt.Sprintf(`{"at":%d}`, now.Add(-age).Unix())), 0o644)
+		os.WriteFile(filepath.Join(d, "gate.json"), fmt.Appendf(nil, `{"at":%d}`, now.Add(-age).Unix()), 0o644)
 		os.WriteFile(filepath.Join(d, "report.md"), []byte("r"), 0o644)
 		return d
 	}
@@ -852,7 +855,7 @@ func TestPruneGateKeepsRunningGates(t *testing.T) {
 		os.MkdirAll(filepath.Join(d, "sessions", "s"), 0o755)
 		os.MkdirAll(filepath.Join(d, "passes"), 0o755)
 		if json {
-			os.WriteFile(filepath.Join(d, "gate.json"), []byte(fmt.Sprintf(`{"at":%d}`, now.Add(-time.Hour).Unix())), 0o644)
+			os.WriteFile(filepath.Join(d, "gate.json"), fmt.Appendf(nil, `{"at":%d}`, now.Add(-time.Hour).Unix()), 0o644)
 		}
 		os.Chtimes(d, mtime, mtime)
 		return d
@@ -860,7 +863,7 @@ func TestPruneGateKeepsRunningGates(t *testing.T) {
 	running := mk("running", false, now.Add(-time.Minute))
 	abandoned := mk("abandoned", false, now.Add(-gateKeepDays*24*time.Hour-time.Second))
 	mk("cur", false, now)
-	for i := 0; i < gateKeepRuns; i++ {
+	for i := range gateKeepRuns {
 		mk(fmt.Sprintf("done%d", i), true, now)
 	}
 	pruneGate(root, "cur", now)

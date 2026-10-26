@@ -1116,7 +1116,7 @@ func executeAdjudication(rr *roleRun, budget *RunBudget, env adjudicationEnvelop
 		route.Provider = selected.Harness
 	}
 	audit.Execution = reviewExecution{SchemaVersion: 1, ID: env.AttemptID, Route: route, PromptVersion: adjudicatorVersion, ToolVersion: adjudicatorVersion, PolicyVersion: reviewReducerPolicyVersion}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		fallback := budget.LastRoute != "" && budget.LastRoute != selected.String()
 		if err := budget.admit(req.InputAllowance, attempt > 0, fallback); err != nil {
 			return fail(err)

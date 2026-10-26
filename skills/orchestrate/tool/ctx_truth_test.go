@@ -156,7 +156,7 @@ func TestCtxTextCountRowsAreCountedBeyondRetention(t *testing.T) {
 	c := newCtxHarness(t)
 	e := newCtxEnv(c.repo, ctxOpts{})
 	var raw strings.Builder
-	for i := 0; i < 2105; i++ {
+	for i := range 2105 {
 		fmt.Fprintf(&raw, "src/f%04d.ts:2\n", i)
 	}
 	q := rgQuery{Pattern: "needle", Count: true, ViewFilters: true}

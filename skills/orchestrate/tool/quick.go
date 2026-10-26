@@ -214,7 +214,7 @@ func (a *app) quickVerify(id string) string {
 	va.out = &buf
 	err := cmdVerify(&va, []string{id})
 	// Keep the full first line, including a preliminary pass's "(not integrated)".
-	first := strings.SplitN(strings.TrimSpace(buf.String()), "\n", 2)[0]
+	first, _, _ := strings.Cut(strings.TrimSpace(buf.String()), "\n")
 	if first == "" && err != nil {
 		first = "verify: " + err.Error()
 	}

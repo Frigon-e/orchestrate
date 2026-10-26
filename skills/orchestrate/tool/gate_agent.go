@@ -222,18 +222,25 @@ func claudePassArgs(choice profile, p gatePass) []string {
 // pane's shell. PATH is not touched: the pane's own PATH must find orch.
 func paneLaunchScript(header string, env []string, argv []string) string {
 	var b strings.Builder
-	b.WriteString("# orch gate pass " + strings.ReplaceAll(header, "\n", " ") + "\n")
+	b.WriteString("# orch gate pass ")
+	b.WriteString(strings.ReplaceAll(header, "\n", " "))
+	b.WriteString("\n")
 	for _, entry := range env {
 		key, value, _ := strings.Cut(entry, "=")
 		if key == "PATH" || key == "" {
 			continue
 		}
 		// Env names come from CtxCLIFor; values remain literal shell strings.
-		b.WriteString("export " + key + "=" + shellQuote(value) + "\n")
+		b.WriteString("export ")
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(shellQuote(value))
+		b.WriteString("\n")
 	}
 	b.WriteString("exec")
 	for _, a := range argv {
-		b.WriteString(" " + shellQuote(a))
+		b.WriteString(" ")
+		b.WriteString(shellQuote(a))
 	}
 	b.WriteString("\n")
 	return b.String()

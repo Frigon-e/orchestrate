@@ -58,7 +58,7 @@ func reducerFixture(language string) (*gateSubject, []reviewCheck, []reviewAnswe
 func TestReduceStatePrecedenceAndReplay(t *testing.T) {
 	// All combinations of corruption, staleness, accepted blockers and missing
 	// answers exercise precedence, not just one example per overall state.
-	for mask := 0; mask < 16; mask++ {
+	for mask := range 16 {
 		s, cs, as, fs, p := reducerFixture("python")
 		want := "pass"
 		if mask&1 != 0 {
@@ -106,7 +106,7 @@ func TestReduceStatePrecedenceAndReplay(t *testing.T) {
 }
 
 func TestReduceExperimentRetainsNonApprovalDetails(t *testing.T) {
-	for mask := 0; mask < 16; mask++ {
+	for mask := range 16 {
 		s, cs, as, fs, p := reducerFixture("go")
 		if mask&1 != 0 {
 			as = nil
@@ -157,7 +157,7 @@ func TestReduceMissingAnswerPermutations(t *testing.T) {
 		checks = append(checks, c)
 		answers = append(answers, a)
 	}
-	for mask := 0; mask < 8; mask++ {
+	for mask := range 8 {
 		var selected []reviewAnswer
 		for i, a := range answers {
 			if mask&(1<<i) != 0 {

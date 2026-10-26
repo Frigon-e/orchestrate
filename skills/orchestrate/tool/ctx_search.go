@@ -49,7 +49,7 @@ func jbcontextBin() string {
 // process share one jbcontext call, and a rate limited search is retried, then
 // skipped for a short cooldown (see jbRun).
 func searchCode(bin, dir, cacheDir, rev, pathFilter string, limit int, query string) ([]codeHit, error) {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", query, rev, pathFilter, limit)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%s\x00%d", query, rev, pathFilter, limit))
 	cache := filepath.Join(cacheDir, fmt.Sprintf("jb3-%x.json", sum[:8]))
 	if b, err := os.ReadFile(cache); err == nil {
 		var hits []codeHit

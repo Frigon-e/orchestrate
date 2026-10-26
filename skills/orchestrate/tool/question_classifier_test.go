@@ -215,7 +215,7 @@ func TestClassifierQueueReturnsWithoutRunningJobAndDoesNotRepeat(t *testing.T) {
 	b := classifierFixture()
 	launches := 0
 	launch := func(string) error { launches++; return nil }
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if e := classifierQueue(dir, b, launch); e != nil {
 			t.Fatal(e)
 		}

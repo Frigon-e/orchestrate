@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -74,8 +75,8 @@ func cmdCtx(a *app, args []string) (retErr error) {
 		if arg == "--" {
 			break
 		}
-		if strings.HasPrefix(arg, "--schema-version=") {
-			version, _ = strconv.Atoi(strings.TrimPrefix(arg, "--schema-version="))
+		if after, ok := strings.CutPrefix(arg, "--schema-version="); ok {
+			version, _ = strconv.Atoi(after)
 		}
 		if arg == "--schema-version" && i+1 < len(args) {
 			version, _ = strconv.Atoi(args[i+1])
@@ -397,7 +398,7 @@ func ctxEnvFor(a *app) (*ctxEnv, error) {
 
 // emit prints the body then the notes and the sources line; with asJSON it
 // prints the data, the notes and the sources as JSON instead.
-func (a *app) ctxEmit(e *ctxEnv, asJSON bool, body string, data any) error {
+func (a *app) ctxEmit(e *ctxEnv, asJSON bool, data any) error {
 	if _, ok := a.out.(ctxV2Output); ok {
 		return a.ctxEmitV2(e, data, ctxFmt{SchemaVersion: 2}, 0)
 	}
@@ -478,10 +479,8 @@ func indexSummary(e *ctxEnv, head string) string {
 	case len(revs) == 0:
 		return "none (orch ctx refresh builds one under ctx_index = full)"
 	}
-	for _, r := range revs {
-		if r == head {
-			return "fresh (" + sha7(head) + ")"
-		}
+	if slices.Contains(revs, head) {
+		return "fresh (" + sha7(head) + ")"
 	}
 	return "stale (at " + sha7(revs[0]) + "; orch ctx refresh)"
 }
@@ -576,7 +575,7 @@ func ctxStatusCmd(a *app, args []string) error {
 			fmt.Fprintf(&b, "  %s,%d,%s,%s\n", l.ID, l.Files, agentScalar(orDefault(l.Server, "missing")), agentScalar(l.Hint))
 		}
 	}
-	return a.ctxEmit(e, *asJSON, b.String(), st)
+	return a.ctxEmit(e, *asJSON, st)
 }
 
 // ---- refresh and watch ----
@@ -593,15 +592,11 @@ func ctxRefreshCmd(a *app, args []string) error {
 		return err
 	}
 	if why := e.jbMissing(); why != "" {
-		return a.ctxEmit(e, *asJSON, "refresh: nothing to do ("+why+")\n", map[string]string{"skipped": why})
+		return a.ctxEmit(e, *asJSON, map[string]string{"skipped": why})
 	}
 	st := e.Refresh(*full)
 	e.use("jbcontext", e.indexDetail())
-	msg := "refresh: index is current (" + sha7(st.rev) + ")"
-	if st.rev == "" {
-		msg = "refresh: index is not current (HEAD " + sha7(st.head) + ")"
-	}
-	return a.ctxEmit(e, *asJSON, msg+"\n", map[string]any{"head": st.head, "indexed": st.indexd, "current": st.rev != ""})
+	return a.ctxEmit(e, *asJSON, map[string]any{"head": st.head, "indexed": st.indexd, "current": st.rev != ""})
 }
 
 func ctxWatchCmd(a *app, args []string) error {
@@ -721,7 +716,7 @@ func (a *app) ctxView(e *ctxEnv, asJSON bool, f ctxFmt, v *ctxView) error {
 		emitErr = a.ctxEmitV2(e, v, f, f.answerCap())
 	} else {
 		v.write(&b, f, nil, 0, f.answerCap())
-		emitErr = a.ctxEmit(e, asJSON, b.String(), v)
+		emitErr = a.ctxEmit(e, asJSON, v)
 	}
 	if err := emitErr; err != nil {
 		return err
@@ -941,7 +936,7 @@ func ctxBatchCmd(a *app, args []string) error {
 		}
 		emitErr = a.ctxEmitV2(e, views, f, budget)
 	} else {
-		emitErr = a.ctxEmit(e, *common.json, renderBatch(views, f), views)
+		emitErr = a.ctxEmit(e, *common.json, views)
 	}
 	if err := emitErr; err != nil {
 		return err
@@ -1022,7 +1017,7 @@ func ctxBriefCmd(a *app, args []string) error {
 	if !f.Full && len(body) > *size {
 		body = cutLines(strings.TrimRight(body, "\n"), *size) + " (--full or --max N lifts the cap)\n"
 	}
-	return a.ctxEmit(e, *common.json, body, b)
+	return a.ctxEmit(e, *common.json, b)
 }
 
 // briefTOON renders a brief: ranked files, the interface sheet, look-alikes

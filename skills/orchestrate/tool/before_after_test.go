@@ -160,7 +160,6 @@ func TestBeforeAfter(t *testing.T) {
 	bin := beforeAfterBinary(t, false)
 	cases := []beforeAfterCase{}
 	for _, reply := range []struct{ name, text string }{{"empty-adversary", `{}`}, {"id-only-adversary", `{"packages":[{"id":"api"}]}`}} {
-		reply := reply
 		cases = append(cases, beforeAfterCase{reply.name, func(t *testing.T, h *harness, bin string, before bool) string {
 			h.gateRepo(1)
 			h.fakePi(gatePasses(map[string]string{"group": cleanPackageReply, "adv-a": reply.text}))
@@ -175,9 +174,7 @@ func TestBeforeAfter(t *testing.T) {
 		return beforeAfterGateStatus(t, code, rec, before, "future-file collision")
 	}})
 	for _, lang := range []string{"py", "ts"} {
-		lang := lang
 		for _, mutation := range []string{"body", "second-worktree", "untracked", "delete", "mode"} {
-			mutation := mutation
 			cases = append(cases, beforeAfterCase{"approval-" + lang + "-" + mutation, func(t *testing.T, h *harness, bin string, before bool) string {
 				path, body, changed := "app.py", "def value():\n    return 1\n", "def value():\n    return 2\n"
 				if lang == "ts" {
@@ -228,7 +225,6 @@ func TestBeforeAfter(t *testing.T) {
 		}
 	}
 	for _, mutation := range []string{"source", "HEAD"} {
-		mutation := mutation
 		cases = append(cases, beforeAfterCase{"verify-mutates-" + mutation, func(t *testing.T, h *harness, bin string, before bool) string {
 			h.setCheck("true")
 			h.commitSpec(intSpec())
@@ -263,13 +259,12 @@ func TestBeforeAfter(t *testing.T) {
 		}
 		f := f
 		for _, kind := range []string{"excluded-hits", "changed-body", "wrong-receiver", "missing-server", "failed-backend", "fifth-definition"} {
-			kind := kind
 			cases = append(cases, beforeAfterCase{f.name + "-" + kind, func(t *testing.T, _ *harness, bin string, before bool) string {
 				h := fixtureRepo(t, f.name)
 				switch kind {
 				case "excluded-hits":
 					var raw strings.Builder
-					for i := 0; i < 2105; i++ {
+					for range 2105 {
 						raw.WriteString(fixtureMatch(f.test, 1, "Normalize test"))
 					}
 					raw.WriteString(fixtureMatch(f.path, f.line, "Normalize production"))
@@ -407,7 +402,6 @@ func TestBeforeAfter(t *testing.T) {
 		}
 	}
 	for _, kind := range []string{"exact-duplicate-questions", "related-questions-and-authority"} {
-		kind := kind
 		cases = append(cases, beforeAfterCase{kind, func(t *testing.T, h *harness, bin string, before bool) string {
 			src := planHeader + planPkg("api", "kind: ship\nowns: app.py", "") + planTail
 			src = strings.Replace(src, "May decide:", "May decide: test layout,", 1)
@@ -474,10 +468,8 @@ func TestBeforeAfter(t *testing.T) {
 		}})
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			for _, before := range []bool{true, false} {
-				before := before
 				side := "AFTER"
 				if before {
 					side = "BEFORE"

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,7 +138,7 @@ func fakeHerdr(path string, args []string) int {
 	case "pane close":
 		delete(st.Panes, args[2])
 		delete(st.Agents, args[2])
-		ws := strings.SplitN(args[2], ":", 2)[0] // the last pane of a worktree workspace closes the workspace
+		ws, _, _ := strings.Cut(args[2], ":") // the last pane of a worktree workspace closes the workspace
 		if _, ok := st.Workspaces[ws]; ok && fakePanes(st, ws) == 0 {
 			delete(st.Workspaces, ws)
 		}
@@ -806,12 +807,8 @@ var gateClean = map[string]string{
 
 func gatePasses(over map[string]string) map[string]string {
 	m := map[string]string{}
-	for k, v := range gateClean {
-		m[k] = v
-	}
-	for k, v := range over {
-		m[k] = v
-	}
+	maps.Copy(m, gateClean)
+	maps.Copy(m, over)
 	return m
 }
 
@@ -2802,7 +2799,7 @@ func TestCheckWarnsOnLargeBrief(t *testing.T) {
 func TestPlanScopeOutIsCapped(t *testing.T) {
 	h := setup(t)
 	spec := planHeader
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		spec += planPkg(fmt.Sprintf("pkg%d", i), "kind: ship\nowns: "+strings.Repeat("internal/some/long/dir/name/", 2)+fmt.Sprintf("file%d.go", i), "")
 	}
 	h.commitSpec(spec + planTail)

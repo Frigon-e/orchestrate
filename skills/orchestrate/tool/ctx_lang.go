@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -396,12 +397,7 @@ func isEntryPoint(p string) bool {
 		return false
 	}
 	base := filepath.Base(p)
-	for _, e := range l.Entry {
-		if e == base {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(l.Entry, base)
 }
 
 // lookAlikePath is a file a look-alike may come from: code, not a test, not
@@ -486,12 +482,7 @@ func isCommentLine(l *langDef, t string) bool {
 }
 
 func (l *langDef) hasDoc(m string) bool {
-	for _, d := range l.Doc {
-		if d == m {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(l.Doc, m)
 }
 
 // ---- detection from the tracked files ----

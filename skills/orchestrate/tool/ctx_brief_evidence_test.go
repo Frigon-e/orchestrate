@@ -36,7 +36,7 @@ func TestBriefSummaryPreservesLegacySheet(t *testing.T) {
 func jbOrderFake(t *testing.T, n int, slots int) (code, dir string) {
 	t.Helper()
 	files := map[string]string{}
-	for k := 0; k < n; k++ {
+	for k := range n {
 		files[fmt.Sprintf("lib/f%d.go", k)] = "package lib\nfunc F() {}\n"
 	}
 	code = rankRepo(t, files)
@@ -77,7 +77,7 @@ printf '{"type":"search_result","results":[{"result":{"sourcePosition":{"relativ
 
 func conceptJobs(n int) []lookupJob {
 	var jobs []lookupJob
-	for k := 0; k < n; k++ {
+	for k := range n {
 		jobs = append(jobs, lookupJob{name: fmt.Sprintf("q%d", k)})
 	}
 	return jobs
@@ -85,8 +85,8 @@ func conceptJobs(n int) []lookupJob {
 
 func TestRunJobsReturnsAnswersInJobOrderWhateverFinishesFirst(t *testing.T) {
 	code, dir := jbOrderFake(t, 10, 4)
-	for k := 0; k < 10; k++ { // the earlier the job, the later its answer
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("delay.%d", k)), []byte(fmt.Sprintf("0.%d", 9-k)), 0o644)
+	for k := range 10 { // the earlier the job, the later its answer
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("delay.%d", k)), fmt.Appendf(nil, "0.%d", 9-k), 0o644)
 	}
 	outs := newCtxEnv(code, ctxOpts{}).runJobs(conceptJobs(10))
 	for k, o := range outs {

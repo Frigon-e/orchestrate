@@ -52,7 +52,9 @@ func taskFacts(s site, o taskOpts) (out string) {
 	sb.WriteString("Computed by code when this brief was written (`orch ctx brief`); exact for that moment. Check against the code before relying on it, and use `orch ctx` for more.\n\n")
 	sb.WriteString(b.Render("", "task", taskBriefChars))
 	for _, n := range e.Notes() {
-		sb.WriteString("note: " + n + "\n")
+		sb.WriteString("note: ")
+		sb.WriteString(n)
+		sb.WriteString("\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

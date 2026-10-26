@@ -105,7 +105,7 @@ func TestBriefIsDeterministicCachedAndCapped(t *testing.T) {
 	}
 
 	// 60 owned files: 40 are taken, 12 are ranked, and long sections are cut between entries.
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		os.WriteFile(filepath.Join(code, "internal", "queue", fmt.Sprintf("f%02d.go", i)), []byte("package queue\n"), 0o644)
 	}
 	cmd := exec.Command("git", "add", ".")

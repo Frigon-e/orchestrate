@@ -198,8 +198,8 @@ func contextTokens(harness, session string) int {
 		return 0
 	}
 	lines := bytes.Split(readTail(path, 4<<20), []byte("\n"))
-	for i := len(lines) - 1; i >= 0; i-- {
-		if n := turnTokens(lines[i]); n > 0 {
+	for _, line := range slices.Backward(lines) {
+		if n := turnTokens(line); n > 0 {
 			return n
 		}
 	}

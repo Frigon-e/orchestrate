@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"math"
 	"strings"
 	"testing"
@@ -27,9 +28,7 @@ func TestManifestRequiredFields(t *testing.T) {
 		for _, field := range []string{"schema_version", "baseline", "held_out_cases", "trial_count", "maximum_spend", "promotion_criteria", "model_routes", "cache_settings", "mode"} {
 			t.Run(mode+"/missing-"+field, func(t *testing.T) {
 				copy := map[string]json.RawMessage{}
-				for k, v := range object {
-					copy[k] = v
-				}
+				maps.Copy(copy, object)
 				copy["mode"], _ = json.Marshal(mode)
 				delete(copy, field)
 				raw, _ := json.Marshal(copy)

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -245,9 +246,7 @@ func (s *lspSession) refine(e *ctxEnv, l *langDef, f *symFact, base string) *sym
 
 func withCtx(pos map[string]any, ctx map[string]any) map[string]any {
 	m := map[string]any{}
-	for k, v := range pos {
-		m[k] = v
-	}
+	maps.Copy(m, pos)
 	m["context"] = ctx
 	return m
 }

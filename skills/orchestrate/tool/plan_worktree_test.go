@@ -382,7 +382,7 @@ func TestGateNotesAShipPackageThatOwnsTooMuch(t *testing.T) {
 	// owns builds n file entries spread over d parent directories.
 	owns := func(n, d int) string {
 		var p []string
-		for i := 0; i < n; i++ {
+		for i := range n {
 			p = append(p, fmt.Sprintf("web/d%d/f%d.go", i%d, i))
 		}
 		return "owns: " + strings.Join(p, ", ")

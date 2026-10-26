@@ -458,7 +458,7 @@ func (e *ctxEnv) textView(q rgQuery, tests string, res rgResult, max, page, ctx 
 			v.Zero = pastEnd(rows, max, page, unit)
 			return
 		}
-		v.Pager = pageFooter(lo, hi, rows, max, page, false, f.Batch, narrowText)
+		v.Pager = pageFooter(lo, hi, rows, page, false, f.Batch, narrowText)
 	}
 	switch {
 	case q.FilesOnly:
@@ -647,7 +647,8 @@ func (v *ctxView) header(num int) string {
 		b.WriteString(" (partial)")
 	}
 	if s := v.scope(); s != "" {
-		b.WriteString(" " + s)
+		b.WriteString(" ")
+		b.WriteString(s)
 	}
 	if v.Hidden > 0 && v.TestsIn != "include" {
 		fmt.Fprintf(&b, " (+%d in tests; tests=include|only)", v.Hidden)
@@ -742,7 +743,8 @@ func (v *ctxView) write(b *strings.Builder, f ctxFmt, seen ctxSeen, num, limit i
 	v.finishTruth()
 	start := b.Len()
 	if h := v.header(num); h != "" {
-		b.WriteString(h + "\n")
+		b.WriteString(h)
+		b.WriteString("\n")
 	}
 	drop, sameRows := v.sameLines()
 	total, printed, skipped := 0, 0, 0
@@ -756,10 +758,12 @@ func (v *ctxView) write(b *strings.Builder, f ctxFmt, seen ctxSeen, num, limit i
 parts:
 	for pi, p := range v.Parts {
 		if p.Title != "" {
-			b.WriteString(p.Title + "\n")
+			b.WriteString(p.Title)
+			b.WriteString("\n")
 		}
 		for _, r := range p.Raw {
-			b.WriteString(r + "\n")
+			b.WriteString(r)
+			b.WriteString("\n")
 		}
 		for fi, fh := range p.Files {
 			if over() {
@@ -806,10 +810,13 @@ parts:
 				switch {
 				case p.Refs && fh.Path == p.Home:
 				case p.Refs:
-					b.WriteString("  " + head + "\n")
+					b.WriteString("  ")
+					b.WriteString(head)
+					b.WriteString("\n")
 					ind = "    "
 				default:
-					b.WriteString(head + "\n")
+					b.WriteString(head)
+					b.WriteString("\n")
 				}
 				lastIn := ""
 				for _, l := range keep {
@@ -836,14 +843,17 @@ parts:
 							lastIn = l.In
 						}
 					}
-					b.WriteString(line + "\n")
+					b.WriteString(line)
+					b.WriteString("\n")
 					printed++
 					if seen != nil {
 						seen.add(fh.Path, l.N, num)
 					}
 				}
 				for _, n := range fh.Notes {
-					b.WriteString("  " + n + "\n")
+					b.WriteString("  ")
+					b.WriteString(n)
+					b.WriteString("\n")
 				}
 			}
 			var ns []int
@@ -856,36 +866,48 @@ parts:
 			}
 		}
 		if p.Foot != "" {
-			b.WriteString(p.Foot + "\n")
+			b.WriteString(p.Foot)
+			b.WriteString("\n")
 		}
 	}
 	for _, r := range sameRows {
-		b.WriteString(r + "\n")
+		b.WriteString(r)
+		b.WriteString("\n")
 	}
 	if left := total - printed - skipped; left > 0 {
 		fmt.Fprintf(b, "cut at about %d characters: %d more lines (%d more files) not shown; --full raises the bounded cap, or narrow the lookup\n", limit, left, filesLeft)
 	}
 	for _, err := range v.Errors {
 		if v.Status == "partial" {
-			b.WriteString("error: " + err + "\n")
+			b.WriteString("error: ")
+			b.WriteString(err)
+			b.WriteString("\n")
 		}
 	}
 	if v.Kind == "text" && v.Total == 0 && v.Err == "" {
 		if v.SearchedScope != "" {
-			b.WriteString("searched_scope: " + v.SearchedScope + "\n")
+			b.WriteString("searched_scope: ")
+			b.WriteString(v.SearchedScope)
+			b.WriteString("\n")
 		}
 		if len(v.Excluded) > 0 {
-			b.WriteString("excluded: " + strings.Join(v.Excluded, "; ") + "\n")
+			b.WriteString("excluded: ")
+			b.WriteString(strings.Join(v.Excluded, "; "))
+			b.WriteString("\n")
 		}
 	}
 	if v.Cut != "" {
-		b.WriteString("cut: " + v.Cut + "\n")
+		b.WriteString("cut: ")
+		b.WriteString(v.Cut)
+		b.WriteString("\n")
 	}
 	if v.Pager != "" {
-		b.WriteString(v.Pager + "\n")
+		b.WriteString(v.Pager)
+		b.WriteString("\n")
 	}
 	if v.Tip != "" {
-		b.WriteString(v.Tip + "\n")
+		b.WriteString(v.Tip)
+		b.WriteString("\n")
 	}
 }
 

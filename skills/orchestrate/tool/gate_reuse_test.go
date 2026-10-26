@@ -94,8 +94,8 @@ func TestBuildsWarningsAndReusePointers(t *testing.T) {
 	}
 	var many strings.Builder
 	many.WriteString("#### Builds\n")
-	for i := 0; i < 9; i++ {
-		many.WriteString(fmt.Sprintf("- Code that does thing %d\n", i))
+	for i := range 9 {
+		fmt.Fprintf(&many, "- Code that does thing %d\n", i)
 	}
 	sp = parseSpec(mk(many.String() + "\n"))
 	sp.validate()

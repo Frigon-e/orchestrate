@@ -23,7 +23,7 @@ func symParallel(n int, fn func(int)) {
 			}
 		}()
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		jobs <- i
 	}
 	close(jobs)

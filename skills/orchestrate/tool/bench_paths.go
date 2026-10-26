@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -80,8 +81,8 @@ func benchSafe(path string) error {
 		for {
 			real, e := filepath.EvalSymlinks(p)
 			if e == nil {
-				for i := len(suffix) - 1; i >= 0; i-- {
-					real = filepath.Join(real, suffix[i])
+				for _, s := range slices.Backward(suffix) {
+					real = filepath.Join(real, s)
 				}
 				return real, nil
 			}

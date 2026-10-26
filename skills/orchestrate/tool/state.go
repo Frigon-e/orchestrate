@@ -103,8 +103,8 @@ func leadEntries(entries []entry) []entry {
 }
 
 func lastState(entries []entry) string {
-	for i := len(entries) - 1; i >= 0; i-- {
-		if s := entries[i].State; s != "note" && s != "question" && slices.Contains(leadStates, s) {
+	for _, entrie := range slices.Backward(entries) {
+		if s := entrie.State; s != "note" && s != "question" && slices.Contains(leadStates, s) {
 			return s
 		}
 	}

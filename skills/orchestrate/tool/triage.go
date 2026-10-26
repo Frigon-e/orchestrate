@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -406,10 +407,8 @@ func cmdTriage(a *app, args []string) error {
 func triageOutcome(entries []entry) (outcome, why string) {
 	var hits []string
 	add := func(s string) {
-		for _, h := range hits {
-			if h == s {
-				return
-			}
+		if slices.Contains(hits, s) {
+			return
 		}
 		hits = append(hits, s)
 	}

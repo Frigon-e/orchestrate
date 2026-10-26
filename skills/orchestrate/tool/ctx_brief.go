@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -133,10 +134,8 @@ type briefPlan struct {
 }
 
 func addUniq(list []string, s string, max int) []string {
-	for _, x := range list {
-		if x == s {
-			return list
-		}
+	if slices.Contains(list, s) {
+		return list
 	}
 	if len(list) >= max {
 		return list
@@ -389,7 +388,8 @@ func capEntries(entries []string, max int) string {
 			fmt.Fprintf(&b, "- ... %d more omitted\n", len(entries)-i)
 			break
 		}
-		b.WriteString(en + "\n")
+		b.WriteString(en)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

@@ -44,7 +44,7 @@ func TestBriefRankingKeepsDocsBelowCodeAndCountsTextOnlyWhenRare(t *testing.T) {
 		"docs/rare.md":     "the rare_flag is described here\n",
 		"docs/features.md": "rare_flag and more\n",
 	}
-	for i := 0; i < 25; i++ { // a name with 25 hits is noise
+	for i := range 25 { // a name with 25 hits is noise
 		files[fmt.Sprintf("svc/common%02d.go", i)] = "package svc\n\nvar common_name = 1\n"
 	}
 	code := rankRepo(t, files)
@@ -113,11 +113,11 @@ func TestBriefLookAlikesAreConceptChunksOfCodeOutsideTheOwns(t *testing.T) {
 	for _, p := range []string{"svc/own.go", "svc/other.go", "svc/x_test.go", "api/openapi.json", "deploy/run.sh", "svc/gen/x.pb.go"} {
 		results = append(results, fmt.Sprintf(`{"result":{"sourcePosition":{"relativePath":"%s"}},"content":"\nfunc SvcThing() {}\nbody","contentStartLine":2}`, p))
 	}
-	for i := 0; i < 9; i++ { // more look-alikes than the cap
+	for i := range 9 { // more look-alikes than the cap
 		results = append(results, fmt.Sprintf(`{"result":{"sourcePosition":{"relativePath":"svc/more%d.go"}},"content":"\nfunc SvcThingMore%d() {}","contentStartLine":2}`, i, i))
 	}
-	for i := 0; i < 9; i++ {
-		os.WriteFile(filepath.Join(code, "svc", fmt.Sprintf("more%d.go", i)), []byte(fmt.Sprintf("package svc\n\nfunc SvcThingMore%d() {}\n", i)), 0o644)
+	for i := range 9 {
+		os.WriteFile(filepath.Join(code, "svc", fmt.Sprintf("more%d.go", i)), fmt.Appendf(nil, "package svc\n\nfunc SvcThingMore%d() {}\n", i), 0o644)
 	}
 	dir := t.TempDir()
 	jb := filepath.Join(dir, "jbcontext")
@@ -233,11 +233,11 @@ func TestLookAlikesMergeEveryChunkOfAFileIntoOneEntry(t *testing.T) {
 func TestLookAlikesHaveAQuotaPerTreeAndTheOwnsTreeComesFirst(t *testing.T) {
 	files := map[string]string{"svc/own.go": "package svc\n", "web/a.ts": "x\n", "svc/z.go": "package svc\n"}
 	var chunks [][3]string
-	for i := 0; i < 6; i++ { // the web results come first and are more numerous
+	for i := range 6 { // the web results come first and are more numerous
 		files[fmt.Sprintf("web/p%d.ts", i)] = fmt.Sprintf("// svc helpers\n\nexport function svcThing%d() {}\n", i)
 		chunks = append(chunks, [3]string{fmt.Sprintf("web/p%d.ts", i), "2", fmt.Sprintf(`\nexport function svcThing%d() {}`, i)})
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		files[fmt.Sprintf("svc/q%d.go", i)] = fmt.Sprintf("package svc\n\nfunc SvcThing%d() {}\n", i)
 		chunks = append(chunks, [3]string{fmt.Sprintf("svc/q%d.go", i), "2", fmt.Sprintf(`\nfunc SvcThing%d() {}`, i)})
 	}

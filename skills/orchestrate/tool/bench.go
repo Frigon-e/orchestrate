@@ -1091,7 +1091,7 @@ func benchRescore(r *benchRun, k *benchKey) (benchScore, error) {
 		}
 	}
 	packages := benchRunPackages(r, nil)
-	ad := benchArmScoped(r, snap, &rec, packages)
+	ad := benchArmScoped(snap, &rec, packages)
 	filtered := *k
 	filtered.Items = nil
 	for _, it := range k.Items {
@@ -1270,15 +1270,16 @@ func cmdBenchKey(a *app, args []string) error {
 	if e != nil {
 		return e
 	}
-	if args[0] == "rescore" {
+	switch args[0] {
+	case "rescore":
 		if e := benchOnlyFlags(fs, "key"); e != nil {
 			return e
 		}
-	} else if args[0] == "add" {
+	case "add":
 		if e := benchOnlyFlags(fs, "note", "from-reference", "prompt", "subject", "from-run", "author", "blind", "items", "base-key", "git-status"); e != nil {
 			return e
 		}
-	} else {
+	default:
 		return fail("unknown bench key command %q; use add or rescore", args[0])
 	}
 	if e := exactArgs(pos, 2, "bench key add <suite> <file.json> --note TEXT [--from-reference] [--prompt FILE] | bench key rescore <suite> <run> --key N"); e != nil {

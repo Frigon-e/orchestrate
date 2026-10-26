@@ -610,7 +610,7 @@ func cmdBenchImportArchive(a *app, args []string) error {
 		if e != nil {
 			return e
 		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+		if h.Typeflag != tar.TypeReg {
 			return fail("archive links and non-regular entries are forbidden")
 		}
 		if e := benchArchiveMember(h.Name); e != nil {

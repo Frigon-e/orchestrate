@@ -261,9 +261,10 @@ func benchRatio(base, current *float64, metric string) string {
 	ratio := *base / *current
 	if ratio >= 1.25 || ratio <= 0.8 {
 		word := "fewer"
-		if metric == "wall" {
+		switch metric {
+		case "wall":
 			word = "faster"
-		} else if metric == "cache_read" || metric == "max_context" || metric == "cost" {
+		case "cache_read", "max_context", "cost":
 			word = "less"
 		}
 		if ratio < 1 {
@@ -1139,7 +1140,7 @@ func cmdBenchReport(a *app, command string, args []string) error {
 		return e
 	}
 	if *save {
-		if e := benchSaveReport(a, suite, h); e != nil {
+		if e := benchSaveReport(suite, h); e != nil {
 			return e
 		}
 	}

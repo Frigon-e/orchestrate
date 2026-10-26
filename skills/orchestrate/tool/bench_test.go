@@ -713,7 +713,7 @@ func TestBenchTwoGroupComparisonGolden(t *testing.T) {
 		rec.PassSeconds = map[string]int{"group:api+2": walls[0], "group:p3+3": walls[1]}
 		rec.PassTokens = nil
 		rec.Findings = nil
-		for i := 0; i < findings; i++ {
+		for i := range findings {
 			rec.Findings = append(rec.Findings, gateFinding{Where: "package api", Source: "reuse", Evidence: fmt.Sprintf("store.go:%d", i+1)})
 		}
 		data, _ := json.Marshal(rec)

@@ -241,7 +241,7 @@ func TestCtxSymbolGoplsIdentityAndFifthScopedDefinition(t *testing.T) {
 func TestTSFactsFifthScopedDefinition(t *testing.T) {
 	code := evalOr(t.TempDir())
 	var syms []any
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		p := fmt.Sprintf("p%d/app.ts", i)
 		writeTree(t, code, map[string]string{p: "export const RefreshCart = () => {}\n"})
 		syms = append(syms, map[string]any{"name": "RefreshCart", "kind": 13, "location": map[string]any{"uri": fileURI(filepath.Join(code, p)), "range": map[string]any{"start": map[string]int{"line": 0, "character": 13}, "end": map[string]int{"line": 0, "character": 24}}}})
@@ -266,7 +266,7 @@ func TestCtxSymbolHiddenDefinitionFailuresRemainVisible(t *testing.T) {
 	code := pyFixture(t)
 	e := newCtxEnv(code, ctxOpts{})
 	f := symFact{Symbol: "Cart", Lang: "python"}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		d := symDef{Where: "shop/cart.py:1", Kind: "Class", Match: "exact"}
 		if i == 4 {
 			symDefError(&d, "references", fmt.Errorf("timeout"))
@@ -283,7 +283,7 @@ func TestPythonWorkspaceSymbolsKeepScannedFifthDefinition(t *testing.T) {
 	needRG(t)
 	code := evalOr(t.TempDir())
 	var syms []any
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		p := fmt.Sprintf("src/item%d.py", i)
 		writeTree(t, code, map[string]string{p: "def refresh_cart():\n    pass\n"})
 		if i < 4 {
@@ -343,7 +343,7 @@ func TestTSFactsConcurrentOpenAndTimeoutCleanup(t *testing.T) {
 		return nil
 	})
 	var wg sync.WaitGroup
-	for i := 0; i < 24; i++ {
+	for range 24 {
 		wg.Add(1)
 		go func() { defer wg.Done(); c.open(path) }()
 	}
@@ -357,7 +357,7 @@ func TestTSFactsConcurrentOpenAndTimeoutCleanup(t *testing.T) {
 		t.Fatalf("sent %d didOpen notifications for one file", got)
 	}
 	// A zero budget may race a valid response but must always remove the waiter.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, _ = c.call("test", nil, time.Nanosecond)
 	}
 	c.mu.Lock()

@@ -77,7 +77,7 @@ func TestJbcontextIdenticalQueriesRunOneProcess(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "sleep"), []byte("0.3"), 0o644)
 	code, cache := t.TempDir(), t.TempDir()
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -100,7 +100,7 @@ func jbRateBurst(t *testing.T, n int, sleep string) string {
 	jbMarkWarm()
 	code, cache := t.TempDir(), t.TempDir()
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -151,7 +151,7 @@ func TestJbcontextColdStampRunsOneCallFirst(t *testing.T) {
 	code, cache := t.TempDir(), t.TempDir()
 	var wg sync.WaitGroup
 	start := time.Now()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -193,7 +193,7 @@ func TestJbcontextCapHoldsAcrossProcesses(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "sleep"), []byte("0.4"), 0o644)
 	code := t.TempDir()
 	var procs []*exec.Cmd
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestJbcontextCapHoldsAcrossProcesses$")
 		cmd.Env = append(os.Environ(), "ORCH_JBCONTEXT="+bin, "ORCH_JB_HELPER_CODE="+code, "ORCH_JB_HELPER_CACHE="+t.TempDir(), fmt.Sprintf("ORCH_JB_HELPER_QUERY=question %d", i))
 		cmd.Stderr = os.Stderr

@@ -24,7 +24,7 @@ func TestPageFooterWordingNarrowingAndEnd(t *testing.T) {
 		{0, 5, 5, 10, 1, false, ""},
 	}
 	for _, c := range cases {
-		if got := pageFooter(c.lo, c.hi, c.total, c.limit, c.page, c.atLeast, false, "X"); got != c.want {
+		if got := pageFooter(c.lo, c.hi, c.total, c.page, c.atLeast, false, "X"); got != c.want {
 			t.Errorf("pageFooter(%+v) = %q, want %q", c, got, c.want)
 		}
 	}
@@ -35,7 +35,7 @@ func TestPageFooterWordingNarrowingAndEnd(t *testing.T) {
 
 func fakeHits(n int) rgResult {
 	var res rgResult
-	for i := 0; i < n; i++ {
+	for i := range n {
 		res.Hits = append(res.Hits, rgHit{Path: fmt.Sprintf("p/f%02d.go", i/3), Line: i%3 + 1, Text: "needle"})
 	}
 	return res
@@ -58,7 +58,7 @@ func locsOf(v *ctxView) []string {
 
 func TestTextPagesAreDisjointStableAndCoverTheList(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		os.MkdirAll(filepath.Join(dir, "p"), 0o755)
 		os.WriteFile(filepath.Join(dir, "p", fmt.Sprintf("f%02d.go", i)), []byte("needle\nneedle\nneedle\n"), 0o644)
 	}
@@ -235,11 +235,11 @@ func TestPageFooterInABatchSpeaksInQueryKeys(t *testing.T) {
 		{30, 40, 80, 10, 4, narrowFind, "showing 31-40 of 80; 40 more; narrow with path=/tests="},
 		{18, 24, 40, 6, 4, narrowSym, "showing 19-24 of 40; narrow with in=/def_kind=/tests="},
 	} {
-		if got := pageFooter(c.lo, c.hi, c.total, c.limit, c.page, false, true, c.narrow); got != c.want {
+		if got := pageFooter(c.lo, c.hi, c.total, c.page, false, true, c.narrow); got != c.want {
 			t.Errorf("batch footer = %q, want %q", got, c.want)
 		}
 	}
-	if got := pageFooter(0, 4, 31, 4, 1, false, false, narrowText); got != "showing 1-4 of 31; next: --page 2" {
+	if got := pageFooter(0, 4, 31, 1, false, false, narrowText); got != "showing 1-4 of 31; next: --page 2" {
 		t.Errorf("a single call keeps the flag form: %q", got)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1106,9 +1107,7 @@ func TestCtxReminderSharedReadCases(t *testing.T) {
 					}
 				}
 				input := map[string]any{"path": path}
-				for k, v := range c.Input {
-					input[k] = v
-				}
+				maps.Copy(input, c.Input)
 				blocks := ""
 				if c.Block {
 					blocks = "big-read"

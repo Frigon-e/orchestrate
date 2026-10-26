@@ -68,7 +68,7 @@ func pastEnd(total, limit, page int, unit string) string {
 
 // pageFooter says which items are shown and how to get the rest. atLeast marks
 // a total that is only a lower bound (a ranked list asked for P*N results).
-func pageFooter(lo, hi, total, limit, page int, atLeast, batch bool, narrow string) string {
+func pageFooter(lo, hi, total, page int, atLeast, batch bool, narrow string) string {
 	if hi <= lo || hi <= 0 {
 		return ""
 	}

@@ -368,8 +368,8 @@ func acceptanceCommand(span string) (string, bool) {
 func ownDirs(owns []string) int {
 	dirs := map[string]bool{}
 	for _, o := range owns {
-		if strings.HasSuffix(o, "/") {
-			dirs[strings.TrimSuffix(o, "/")] = true
+		if before, ok := strings.CutSuffix(o, "/"); ok {
+			dirs[before] = true
 		} else {
 			dirs[path.Dir(o)] = true
 		}
@@ -540,7 +540,13 @@ func gatePackageShared(sp *spec, src, rel string) string {
 	}
 	b.WriteString("\nPACKAGE INDEX:\n")
 	for _, p := range sp.packages {
-		b.WriteString("- " + p.id + ": " + p.title + " (owns: " + strings.Join(p.owns, ", ") + ")\n")
+		b.WriteString("- ")
+		b.WriteString(p.id)
+		b.WriteString(": ")
+		b.WriteString(p.title)
+		b.WriteString(" (owns: ")
+		b.WriteString(strings.Join(p.owns, ", "))
+		b.WriteString(")\n")
 	}
 	return b.String()
 }
@@ -618,8 +624,8 @@ func pkgAffinity(p, q *specPackage) int {
 // "/", else its parent.
 func ownDir(o string) string {
 	o = strings.TrimLeft(strings.TrimPrefix(o, "./"), "/")
-	if strings.HasSuffix(o, "/") {
-		return strings.TrimSuffix(o, "/")
+	if before, ok := strings.CutSuffix(o, "/"); ok {
+		return before
 	}
 	return path.Dir(o)
 }
@@ -1133,7 +1139,7 @@ func cmdGate(a *app, args []string) (retErr error) {
 		}
 	}
 	if *dry {
-		return gateDryRun(a, pos[0], hash, code, src, rel, s.cfg, sp, opts, only)
+		return gateDryRun(a, pos[0], hash, code, src, rel, s.cfg, sp, only)
 	}
 	dir := gateDir(s.root, hash)
 	runDir, experiment := dir, *expF != ""
@@ -1828,7 +1834,8 @@ func writeGate(dir string, rec *gateRecord) error {
 		r.WriteString("Reuse checklist: plain (spec text and author pointers; no lookups, no candidates)\n\n")
 	}
 	if c := rec.coverageLine(); c != "" {
-		r.WriteString(c + "\n\n")
+		r.WriteString(c)
+		r.WriteString("\n\n")
 	}
 	if rec.Cache == "long" {
 		r.WriteString("Cache: long (PI_CACHE_RETENTION=long)\n\n")
@@ -1922,7 +1929,7 @@ func slug(s string) string {
 // gateDryRun shows what a gate run would do without calling a model or
 // writing anything: the deterministic checks, then each pass with its
 // packages and prompt sizes (an estimated token is four characters).
-func gateDryRun(a *app, specArg, hash, code, src, rel string, cfg config, sp *spec, opts gateOpts, only map[string]bool) error {
+func gateDryRun(a *app, specArg, hash, code, src, rel string, cfg config, sp *spec, only map[string]bool) error {
 	det := gateDeterministic(code, cfg, sp, src)
 	groups := map[string][]string{}
 	passes := buildGatePasses(code, src, rel, sp, groups, only)

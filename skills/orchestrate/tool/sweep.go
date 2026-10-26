@@ -187,7 +187,7 @@ func cmdSweep(a *app, args []string) error {
 			continue
 		}
 		r.question = c.question
-		results = append(results, a.judgeQuestion(&r, s.repo, roots, topic, passDirs, humanOnly, *minPasses, *final, *acceptURLs))
+		results = append(results, a.judgeQuestion(&r, s.repo, roots, passDirs, humanOnly, *minPasses, *final, *acceptURLs))
 	}
 
 	issues := checkDropped(topic, cards, s.repo, roots, *acceptURLs)
@@ -244,7 +244,7 @@ func cmdSweep(a *app, args []string) error {
 	return nil
 }
 
-func (a *app) judgeQuestion(r *sweepResult, repo string, roots map[string]string, topic string, passDirs []string, humanOnly map[string]bool, minPasses int, final string, acceptURLs bool) sweepResult {
+func (a *app) judgeQuestion(r *sweepResult, repo string, roots map[string]string, passDirs []string, humanOnly map[string]bool, minPasses int, final string, acceptURLs bool) sweepResult {
 	c := r.card
 	options := map[string]bool{}
 	for _, o := range c.options {

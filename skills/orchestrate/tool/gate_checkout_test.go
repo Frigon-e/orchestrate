@@ -118,7 +118,7 @@ func TestGateCheckoutMutationDiscardsAndStops(t *testing.T) {
 			rec := &gateRecord{PassErrors: map[string]string{}, PassSeconds: map[string]int{}, PassKept: map[string]string{}, PassTokens: map[string]passTokens{}}
 			var applied atomic.Int32
 			var passes []gatePass
-			for i := 0; i < 12; i++ {
+			for i := range 12 {
 				passes = append(passes, gatePass{name: fmt.Sprintf("p%d", i), class: "package", prompt: "review", apply: func(_ string, r *gateRecord, _ string, _ *spec) error {
 					applied.Add(1)
 					r.Findings = append(r.Findings, gateFinding{Claim: "must be discarded"})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -398,9 +399,7 @@ func gateApproval(root, code string, src []byte) (bool, string) {
 	// Ignored sources and symlink targets may change without a checkout-ID change.
 	// Other producers retain their own declared hash/range basis; never guess it.
 	hashes := make(map[string]string, len(policy.CurrentHashes))
-	for id, hash := range policy.CurrentHashes {
-		hashes[id] = hash
-	}
+	maps.Copy(hashes, policy.CurrentHashes)
 	sourceReads := map[string]bool{}
 	for _, lookup := range policy.Packet.Lookups {
 		if lookup.Unit == "source_read" {

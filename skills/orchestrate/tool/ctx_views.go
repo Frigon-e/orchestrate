@@ -388,7 +388,7 @@ func (e *ctxEnv) symView(f symFact, o symOpts) *ctxView {
 			} else if len(shown) > 0 {
 				sameCallers[key] = true
 				p := e.refPart(v, title+":", path, shown, o.Context, width)
-				if foot := pageFooter(lo, hi, d.Total, size, page, false, o.Batch, narrowSym); foot != "" {
+				if foot := pageFooter(lo, hi, d.Total, page, false, o.Batch, narrowSym); foot != "" {
 					p.Foot = "  " + foot + restNote(locFiles(sorted[min(hi, len(sorted)):]))
 				}
 				v.Parts = append(v.Parts, p)
@@ -418,7 +418,7 @@ func (e *ctxEnv) symView(f symFact, o symOpts) *ctxView {
 				v.Parts = append(v.Parts, &ctxPart{Raw: []string{strings.TrimSuffix(title, ":") + " - " + pastEnd(len(d.Impls), size, page, "implementers")}})
 			} else {
 				p := e.refPart(v, title, path, sortLocs(d.Impls)[lo:hi], 0, width)
-				if foot := pageFooter(lo, hi, len(d.Impls), size, page, false, o.Batch, narrowSym); foot != "" {
+				if foot := pageFooter(lo, hi, len(d.Impls), page, false, o.Batch, narrowSym); foot != "" {
 					p.Foot = "  " + foot + restNote(locFiles(sortLocs(d.Impls)[hi:]))
 				}
 				v.Parts = append(v.Parts, p)
@@ -868,9 +868,9 @@ func (e *ctxEnv) conceptLookup(l ctxLookup, f ctxFmt) *ctxView {
 			v.Zero = pastEnd(len(hits), limit, page, "hits")
 		}
 	case full && hi-lo == limit:
-		v.Pager = pageFooter(lo, hi, hi+len(ahead), limit, page, true, f.Batch, narrowFind)
+		v.Pager = pageFooter(lo, hi, hi+len(ahead), page, true, f.Batch, narrowFind)
 	default:
-		v.Pager = pageFooter(lo, hi, len(hits), limit, page, false, f.Batch, narrowFind)
+		v.Pager = pageFooter(lo, hi, len(hits), page, false, f.Batch, narrowFind)
 	}
 	// The header counts the hits on this page (the view counts merged blocks);
 	// how many exist is the footer's business.

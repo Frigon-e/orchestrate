@@ -265,7 +265,7 @@ func (r *roleRun) runAfter(after string, fn func(profile) (string, string, error
 	}
 	var last error
 	var used profile
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		choices, _ := r.available()
 		filtered := choices[:0]
 		for _, p := range choices {

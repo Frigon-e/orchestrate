@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,9 +38,7 @@ func agentTrimmed(v any) any {
 		return v
 	}
 	out := map[string]any{}
-	for k, val := range obj {
-		out[k] = val
-	}
+	maps.Copy(out, obj)
 	delete(out, "excerpt_budget_bytes")
 	delete(out, "excerpt_bytes")
 	if o, ok := out["omissions"].([]any); ok && len(o) == 0 {
@@ -381,7 +380,7 @@ func TestAgentOutputLegacyJSONBytes(t *testing.T) {
 	e := &ctxEnv{}
 	var b bytes.Buffer
 	a := &app{out: &b}
-	if err := a.ctxEmit(e, true, "ignored prose budget", v); err != nil {
+	if err := a.ctxEmit(e, true, v); err != nil {
 		t.Fatal(err)
 	}
 	want := "{\n  \"notes\": null,\n  \"result\": {\n    \"kind\": \"text\",\n    \"query\": \"x\",\n    \"unit\": \"matches\",\n    \"total\": 1,\n    \"shown\": 1,\n    \"parts\": [\n      {\n        \"files\": [\n          {\n            \"path\": \"a.py\",\n            \"lines\": [\n              {\n                \"n\": 2,\n                \"text\": \"return False\",\n                \"match\": true\n              }\n            ]\n          }\n        ]\n      }\n    ]\n  },\n  \"sources\": \"none\"\n}\n"
@@ -399,7 +398,7 @@ func TestAgentOutputV2BatchConceptTipOnceWithoutMutatingViews(t *testing.T) {
 	legacy := func() string {
 		var b bytes.Buffer
 		a := &app{out: &b}
-		if err := a.ctxEmit(&ctxEnv{}, true, "", views); err != nil {
+		if err := a.ctxEmit(&ctxEnv{}, true, views); err != nil {
 			t.Fatal(err)
 		}
 		return b.String()

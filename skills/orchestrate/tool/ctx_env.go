@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -127,10 +128,8 @@ func (e *ctxEnv) jbMissing() string {
 func (e *ctxEnv) note(s string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, n := range e.notes {
-		if n == s {
-			return
-		}
+	if slices.Contains(e.notes, s) {
+		return
 	}
 	e.notes = append(e.notes, s)
 }
@@ -151,7 +150,7 @@ func (e *ctxEnv) use(tool, detail string) {
 // parallel runs fn for every index with at most ctxParallel at once.
 func (e *ctxEnv) parallel(n int, fn func(i int)) {
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		e.sem <- struct{}{}
 		go func(i int) {
@@ -181,7 +180,7 @@ func fanOut(width, n int, fn func(i int)) {
 			}
 		}()
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		next <- i
 	}
 	close(next)
@@ -351,12 +350,7 @@ func (e *ctxEnv) checkIndex(forceFull bool) jbState {
 		return jbState{} // the searches will say what is wrong
 	}
 	has := func(revs []string) bool {
-		for _, r := range revs {
-			if r == head {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(revs, head)
 	}
 	refreshErr := ""
 	run := func(limit time.Duration, args ...string) {

@@ -163,7 +163,7 @@ func TestViewCutSaysWhatWasLeftOutAndTheFlag(t *testing.T) {
 
 func TestBatchBudgetStopsLaterAnswersWithASentence(t *testing.T) {
 	var views []*ctxView
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		v := &ctxView{Kind: "find", Query: fmt.Sprintf("q%d", i), Unit: "hits", Total: 1, Shown: 1}
 		for n := 1; n <= 80; n++ {
 			v.part(0).add(fmt.Sprintf("f%d.go", i), ctxLine{N: n, Text: strings.Repeat("y", 100), Match: true})
@@ -588,7 +588,7 @@ func TestCtxTextWithRipgrepKeepsItsSemanticsAndShapesHits(t *testing.T) {
 
 	// per-file and total caps say how many were left out and the flag that shows them.
 	body := "package pay\n"
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		body += fmt.Sprintf("var m%d = \"marker\"\n", i)
 	}
 	os.WriteFile(filepath.Join(c.repo, "pay", "many.go"), []byte(body), 0o644)

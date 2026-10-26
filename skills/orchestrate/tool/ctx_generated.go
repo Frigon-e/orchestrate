@@ -79,6 +79,7 @@ func (e *ctxEnv) genHeader(path string) bool {
 			return true
 		}
 	}
+	_ = sc.Err() // a read error or an over-long line just means no header was found
 	return false
 }
 
@@ -140,12 +141,12 @@ func (e *ctxEnv) gitattrGenerated(path string) bool {
 				continue
 			}
 			for _, a := range f[1:] {
-				switch {
-				case a == "linguist-generated" || a == "linguist-generated=true":
+				switch a {
+				case "linguist-generated", "linguist-generated=true":
 					if re := attrGlob(f[0]); re != nil {
 						e.attrRules = append(e.attrRules, attrRule{re, true})
 					}
-				case a == "-linguist-generated" || a == "linguist-generated=false":
+				case "-linguist-generated", "linguist-generated=false":
 					if re := attrGlob(f[0]); re != nil {
 						e.attrRules = append(e.attrRules, attrRule{re, false})
 					}

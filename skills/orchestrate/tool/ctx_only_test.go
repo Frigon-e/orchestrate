@@ -105,10 +105,11 @@ func TestGateCtxShellDefaultAndExplicitOpen(t *testing.T) {
 			t.Setenv("HERDR_ENV", "")
 			args := []string{"gate", "spec.md"}
 			want := "ctx-only"
-			if mode == "open" {
+			switch mode {
+			case "open":
 				args = append(args, "--ctx-shell", "open")
 				want = "open"
-			} else if mode == "off" {
+			case "off":
 				args = append(args, "--ctx-tool", "off")
 				want = "open"
 			}

@@ -18,7 +18,7 @@ const (
 func scoreFixture() *ctxBrief {
 	d := &ctxBrief{ID: "crm", root: "/work/repo"}
 	scopes := []string{".", "web/", "internal/"}
-	for qi := 0; qi < 24; qi++ {
+	for qi := range 24 {
 		q := fmt.Sprintf("Code that handles shell concern number %d for storefront pages", qi)
 		for si, sc := range scopes {
 			switch {
@@ -31,7 +31,7 @@ func scoreFixture() *ctxBrief {
 			}
 		}
 	}
-	for ni := 0; ni < 10; ni++ {
+	for ni := range 10 {
 		d.Lookups = append(d.Lookups, lookupRecord(fmt.Sprintf("crm1-name%d", ni), ".", "text", 40+ni, 0, nil, ""))
 	}
 	d.Lookups = append(d.Lookups,
@@ -40,7 +40,7 @@ func scoreFixture() *ctxBrief {
 	d.Files = []string{"- `internal/alpha/alpha.go` (score 5: jb+sym): defines Alpha", "- `web/beta.ts` (score 4: jb): concept search", "- `internal/gamma/gamma.go` (score 2: text): text `Gamma`"}
 	d.interfaceSummary = []string{"- Alpha (go; exact)\n  `internal/alpha/alpha.go:10` [evidence-sig] match=exact signature: func Alpha(); callers: 3 (by_name=false); tests: 1"}
 	d.Facts = []symFact{{Symbol: "Alpha", Defs: []symDef{{Where: "internal/alpha/alpha.go:10"}}}}
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		d.Like = append(d.Like, fmt.Sprintf("- `web/like%02d.ts` (lines 1-3) in func Like%02d via text `Like`\n    func Like%02d() {}", i, i, i))
 	}
 	d.Missing = []string{"- `Nonexistent`", "- `transfer_rows`"}
@@ -141,7 +141,7 @@ func TestBriefScoreFirstOmitsSectionsWithNothingToSay(t *testing.T) {
 func TestBriefScoreFirstBudgetCutsLookAlikesBeforeTheNotes(t *testing.T) {
 	full := scoreFixture()
 	likeMissing := func(out string) bool {
-		for i := 0; i < 12; i++ {
+		for i := range 12 {
 			if !strings.Contains(out, fmt.Sprintf("web/like%02d.ts", i)) {
 				return true
 			}

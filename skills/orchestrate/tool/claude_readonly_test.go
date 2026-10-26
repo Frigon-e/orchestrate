@@ -116,7 +116,7 @@ func TestInstalledClaudeRefusesMutatingTools(t *testing.T) {
 	defer srv.Close()
 	var env []string
 	for _, value := range os.Environ() {
-		key := strings.SplitN(value, "=", 2)[0]
+		key, _, _ := strings.Cut(value, "=")
 		if strings.HasPrefix(key, "ANTHROPIC_") || strings.HasPrefix(key, "CLAUDE_") || strings.HasPrefix(key, "ORCH_") || key == "HOME" || key == "CLAUDECODE" {
 			continue
 		}

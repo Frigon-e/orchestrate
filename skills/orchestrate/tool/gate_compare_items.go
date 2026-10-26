@@ -444,14 +444,16 @@ func printItemComparison(w io.Writer, arms []*armData, ref map[string]refEntry, 
 	}
 	fmt.Fprintf(w, "per-item verdicts (%d items; group = the group pass, decider and flash = shadow judges, record only; raw ID columns do not assert revision equivalence):\n", len(order))
 	for _, id := range order {
-		line := fmt.Sprintf("  %s \"%s\"", id, short(flat(itemsByID[id].Text), 40))
+		var line strings.Builder
+		fmt.Fprintf(&line, "  %s \"%s\"", id, short(flat(itemsByID[id].Text), 40))
 		for i, a := range arms {
-			line += fmt.Sprintf(" | %s [%s]", string(rune('A'+i)), cell(a, id))
+			fmt.Fprintf(&line, " | %s [%s]", string(rune('A'+i)), cell(a, id))
 		}
 		if hasRef {
-			line += " | reference=" + orDefault(normVerdict(ref[id].Verdict), "-")
+			line.WriteString(" | reference=")
+			line.WriteString(orDefault(normVerdict(ref[id].Verdict), "-"))
 		}
-		fmt.Fprintln(w, line)
+		fmt.Fprintln(w, line.String())
 	}
 	// Agreement between each pair of judges.
 	type judge struct {

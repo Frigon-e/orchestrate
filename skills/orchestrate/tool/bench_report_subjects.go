@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -61,10 +62,8 @@ func benchHistorySubjects(runs []*benchRun, key *benchKey) []benchSubjectSummary
 		if s == "" {
 			return list
 		}
-		for _, old := range list {
-			if old == s {
-				return list
-			}
+		if slices.Contains(list, s) {
+			return list
 		}
 		return append(list, s)
 	}
@@ -94,7 +93,7 @@ func benchHistorySubjects(runs []*benchRun, key *benchKey) []benchSubjectSummary
 	}
 	return out
 }
-func benchSaveReport(a *app, suite string, h benchHistory) error {
+func benchSaveReport(suite string, h benchHistory) error {
 	lock := filepath.Join(benchDir(), suite, ".lock")
 	if e := benchSafe(lock); e != nil {
 		return e

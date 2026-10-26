@@ -198,7 +198,7 @@ func benchComparisonScope(s benchSuite, runs []*benchRun, base *benchRun, key *b
 	}
 	return benchSortedKeys(groups), notes, nil
 }
-func benchArmScoped(r *benchRun, snap string, rec *gateRecord, packages map[string]bool) *armData {
+func benchArmScoped(snap string, rec *gateRecord, packages map[string]bool) *armData {
 	cp := *rec
 	cp.Items = nil
 	cp.Findings = nil

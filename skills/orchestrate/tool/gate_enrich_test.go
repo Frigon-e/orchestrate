@@ -233,7 +233,7 @@ func TestEnrichRecordedDuplicateAnswerKeepsSurvivorIDAcrossReruns(t *testing.T) 
 		t.Fatal(err)
 	}
 	writeFiles(t, dir, map[string]string{"gate.json": string(b)})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		res, err := enrichGate(dir, code, src, "spec.md", sp)
 		if err != nil {
 			t.Fatal(err)

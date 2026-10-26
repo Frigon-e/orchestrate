@@ -30,7 +30,7 @@ func TestCtxCLIShimNoticeAndTools(t *testing.T) {
 		if len(cfg.Env) != 3 || cfg.Env[0] != "ORCH_CTX_ROOT="+evalOr(c.repo) || cfg.Env[1] != "ORCH_CTX_READONLY=1" {
 			t.Fatalf("env=%v", cfg.Env)
 		}
-		shimDir := strings.SplitN(strings.TrimPrefix(cfg.Env[2], "PATH="), string(os.PathListSeparator), 2)[0]
+		shimDir, _, _ := strings.Cut(strings.TrimPrefix(cfg.Env[2], "PATH="), string(os.PathListSeparator))
 		shim := filepath.Join(shimDir, "orch")
 		if !strings.HasPrefix(shimDir, ctxCacheDir(evalOr(c.repo))+string(filepath.Separator)) {
 			t.Fatal(shimDir)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -23,8 +24,8 @@ const unfreezeNote = "unfrozen by the user"
 // frozenReason returns why a task is frozen, or "" when it is not. Only
 // entries after the last unfreeze count.
 func frozenReason(entries []entry) string {
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].By == "orch" && entries[i].Text == unfreezeNote {
+	for i, entrie := range slices.Backward(entries) {
+		if entrie.By == "orch" && entrie.Text == unfreezeNote {
 			entries = entries[i+1:]
 			break
 		}

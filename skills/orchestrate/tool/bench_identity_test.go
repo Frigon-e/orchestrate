@@ -370,7 +370,7 @@ func TestBenchCompareIncompatibleSubjectsNeverRankWinner(t *testing.T) {
 	}
 	b.Subject = a.Subject
 	b.Groups = map[string]benchGroup{}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		b.Groups[fmt.Sprintf("group:%d", i)] = benchGroup{Packages: []string{"api"}, Cost: benchCost{USD: evidenceTestPtr(float64(i + 1))}}
 	}
 	scoped := a.Groups["group:api"]

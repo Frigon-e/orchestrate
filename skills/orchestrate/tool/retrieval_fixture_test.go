@@ -16,7 +16,7 @@ func TestFixtureRetrievalTruth(t *testing.T) {
 			t.Run("excluded-before-production", func(t *testing.T) {
 				var raw strings.Builder
 				// More excluded matches than the retention cap, then a production match.
-				for i := 0; i < 2105; i++ {
+				for range 2105 {
 					raw.WriteString(fixtureMatch(f.test, 1, "Normalize test"))
 					raw.WriteString(fixtureMatch("generated/sample"+f.ext, 1, "Normalize generated"))
 					raw.WriteString(fixtureMatch("vendor/sample"+f.ext, 1, "Normalize vendor"))

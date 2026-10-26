@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -135,10 +136,8 @@ func (e *ctxEnv) assemble(pl *briefPlan) *ctxBrief {
 			files[path] = r
 		}
 		r.kinds[kind] = true
-		for _, w := range r.why {
-			if w == why {
-				return
-			}
+		if slices.Contains(r.why, why) {
+			return
 		}
 		r.why = append(r.why, why)
 	}
@@ -723,12 +722,7 @@ type likeEntry struct {
 }
 
 func containsStr(l []string, s string) bool {
-	for _, x := range l {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(l, s)
 }
 
 func rangeText(a, b int) string {
