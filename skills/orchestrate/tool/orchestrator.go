@@ -198,7 +198,7 @@ func reportBack(dir, id, kind, repo, base, sha string, cfg config, skill string)
 		fmt.Sprintf("You are lead `%s`. The orchestrator is your only contact: never address the user directly; anything for them goes up as needs-decision.", id),
 		fmt.Sprintf("Read the lead protocol before starting: `%s`.", filepath.Join(skill, "references", "lead.md")),
 		fmt.Sprintf("- Report: `%s report --dir %s <state> [--key <slug>] \"<one line>\"`. States: working, needs-decision, question, escalate, blocked, paused, done, failed, note.", me, dir),
-		fmt.Sprintf("- Messages: when a line starting `orch:` says a message arrived, run `%s inbox --dir %s`.", me, dir),
+		fmt.Sprintf("- Messages: when a line starting `orch:` says a message arrived, run `%s inbox --dir %s`. Run it once more before you report `done`, so a late redirect is not missed.", me, dir),
 		"- Deliverable: " + deliverable + ".",
 		"- Skills to load for the work: " + skills + ".",
 	}
@@ -386,7 +386,8 @@ func (a *app) spawn(id, brief string) error {
 		}
 	}
 	name := leadName(id)
-	env := []string{"ORCH_TASK_DIR=" + dir, "ORCH_TASK_ID=" + id, "ORCH_ROLE=lead"}
+	epoch := newSessionID() // a respawn mints a new one, so `orch report` can refuse the replaced session
+	env := []string{"ORCH_TASK_DIR=" + dir, "ORCH_TASK_ID=" + id, "ORCH_ROLE=lead", "ORCH_EPOCH=" + epoch}
 	// The slot check, the pane and the lead record go under one guard, so two
 	// spawns cannot both see a free slot or both take the same task. The slow
 	// agent start and prompt below run outside it.
@@ -403,7 +404,7 @@ func (a *app) spawn(id, brief string) error {
 		}
 		paneID = pane
 		_, _ = herdrCmd(herdrTimeout, "pane", "rename", paneID, name)
-		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me}
+		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch}
 		if l.Harness == "pi" {
 			l.Session = newSessionID()
 		}
@@ -637,13 +638,24 @@ func cmdSend(a *app, args []string) error {
 	case "blocked":
 		fmt.Fprintf(a.out, "stored message %s; the lead is waiting at a prompt in its pane, so no doorbell was sent (orch peek %s)\n", name, l.ID)
 	default:
-		bell := fmt.Sprintf("orch: new message for you. Run: %s inbox --dir %s", selfPath(), dir)
-		if _, err := herdrCmd(herdrTimeout, "agent", "prompt", l.PaneID, bell); err != nil {
+		if err := ringDoorbell(l, dir, status); err != nil {
 			return err
 		}
 		fmt.Fprintf(a.out, "sent message %s to %s\n", name, l.Name)
 	}
 	return nil
+}
+
+// ringDoorbell types the new-message line into the lead's pane. It rings
+// nothing for a lead that is not running or waits at a prompt, where typing
+// would answer the prompt.
+func ringDoorbell(l *lead, dir, status string) error {
+	if status == "" || status == "blocked" {
+		return nil
+	}
+	bell := fmt.Sprintf("orch: new message for you. Run: %s inbox --dir %s", selfPath(), dir)
+	_, err := herdrCmd(herdrTimeout, "agent", "prompt", l.PaneID, bell)
+	return err
 }
 
 type row struct {
@@ -953,6 +965,8 @@ type watchSeen struct {
 	LastSample   int64  `json:"last_sample,omitempty"`
 	StallAlerted bool   `json:"stall_alerted,omitempty"`
 	LoopAlerted  string `json:"loop_alerted,omitempty"`
+	// RungFor is the oldest unread message the doorbell was rung again for.
+	RungFor string `json:"rung_for,omitempty"`
 }
 
 func cmdWatch(a *app, args []string) error {
@@ -1156,6 +1170,16 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 		}
 	} else {
 		st.IdleSince = 0
+	}
+	if pending := pendingMessages(ol.dir); len(pending) == 0 {
+		st.RungFor = ""
+	} else if (ag.Status == "idle" || ag.Status == "done") && cfg.UnreadMinutes > 0 && st.RungFor != filepath.Base(pending[0]) {
+		if info, err := os.Stat(pending[0]); err == nil && a.now().Sub(info.ModTime()) >= time.Duration(cfg.UnreadMinutes)*time.Minute {
+			if err := ringDoorbell(ol.lead, ol.dir, ag.Status); err == nil {
+				st.RungFor = filepath.Base(pending[0])
+				emit(fmt.Sprintf("reminder: %d unread message(s) for %dm; rang the doorbell again", len(pending), int(a.now().Sub(info.ModTime())/time.Minute)))
+			}
+		}
 	}
 	if ag.Status == "working" {
 		a.stallCheck(ol, st, ag, cfg, now, emit)

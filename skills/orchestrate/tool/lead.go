@@ -41,6 +41,11 @@ func cmdReport(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
+	if epoch := os.Getenv("ORCH_EPOCH"); epoch != "" {
+		if l, err := loadLead(dir); err == nil && l != nil && l.Epoch != "" && l.Epoch != epoch {
+			return fail("this lead session was replaced by a respawn; stop working")
+		}
+	}
 	state, text := pos[0], strings.TrimSpace(strings.Join(pos[1:], " "))
 	if !slices.Contains(leadStates, state) {
 		return fail("state must be one of: %s", strings.Join(leadStates, ", "))

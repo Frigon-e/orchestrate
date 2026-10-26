@@ -164,6 +164,9 @@ type lead struct {
 	// Owner is the Herdr pane of the orchestrator that watches this lead.
 	// Empty on leads spawned before owners existed: every orchestrator sees those.
 	Owner string `json:"owner,omitempty"`
+	// Epoch is the token of the session spawn started; a respawn replaces it,
+	// and `orch report` refuses a session holding an older one.
+	Epoch string `json:"epoch,omitempty"`
 }
 
 // orchID names the orchestrator running this command by its Herdr pane, so

@@ -146,11 +146,13 @@ your turn:
 | `ui-blocked` | The pane waits at a prompt, often a permission. `orch peek <id>`. Tell the user and `orch focus <id>`; never answer permission prompts for them. |
 | `stalled` / `looping` | A lead is busy but not getting anywhere: nothing reported and nothing changed in its worktree for `stall_minutes`, or its transcript repeats one tool call while the worktree stands still. `orch peek <id>` first. A long test run is the usual false alarm. Otherwise `orch send` a nudge naming the loop, and if the lead is a pi lead on a hard problem, tell it to `escalate`. The third alert on one task freezes it. |
 | `quiet` | Idle with no report: `orch peek <id>`, then `orch send` a nudge. |
+| `reminder` | A message sat unread while the lead was idle; the watcher rang the doorbell once more. Usually none; if it repeats, `orch peek <id>`. |
 | `gone` | The agent or pane went away. Check `orch status`; respawn after `orch close <id> --force` only with the user's agreement if work may be lost. |
 
 `orch send` delivers a message file plus a doorbell line in the lead's pane.
-A lead acknowledges by reading its inbox. Never type into a lead's pane any
-other way.
+A lead acknowledges by reading its inbox. Messages arrive through `orch send`
+(plus the watcher's single re-ring of an unread one); nothing else types into
+a lead's pane.
 
 ## Talking to the user
 
@@ -306,7 +308,7 @@ other way.
   `references/repo-config.md` owns its keys, what a note may hold, when
   to change it (rarely, with evidence and the user's approval) and setup.
   Settings a repo must not control live in
-  `~/.config/orchestrate/config.toml`: `max_leads`, `lead_context_limit`,
+  `~/.config/orchestrate/config.toml`: `max_leads`, `lead_context_limit`, `unread_minutes` (default 10, 0 turns off the watcher's re-ring of an unread message),
   `claude_args` and `pi_args` (extra CLI flags for leads), `triage_mode` (shadow, enforce or off), `quick_mode` (same values; for `orch quick`), `triage_model`, `weak_models`, `ctx_index` (`full`, the default, builds a missing jbcontext index and refreshes a stale one; `incremental` only refreshes; `off` never calls jbcontext), `ctx_deny` (repos that never use jbcontext) and `dispatch`
   rules (a profile may set `degraded = true` for a weaker fallback). orch refuses them in a repo file, so a commit can't change how
   leads launch.

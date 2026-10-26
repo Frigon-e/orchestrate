@@ -221,8 +221,12 @@ func (a *app) leadStop(dir string, p hookPayload) string {
 		prev, _ = strconv.Atoi(strings.TrimSpace(string(b)))
 	}
 	_ = os.WriteFile(mark, []byte(strconv.Itoa(len(mine))), 0o644)
-	if p.StopHookActive || len(mine) > prev {
+	if p.StopHookActive {
 		return ""
+	}
+	me := selfPath()
+	if len(mine) > prev {
+		return a.unreadOnce(dir, me)
 	}
 	answered := false
 	for i := len(entries) - 1; i >= 0 && entries[i].By == "orch"; i-- {
@@ -232,12 +236,43 @@ func (a *app) leadStop(dir string, p hookPayload) string {
 	if waitingOnOrch[lastState(mine)] && unread == 0 && !answered {
 		return ""
 	}
-	me := selfPath()
 	msg := fmt.Sprintf("orchestrate lead: this turn wrote no status line, so the orchestrator cannot tell why you stopped. "+
 		"Run `%s report --dir %s <state> \"<one line>\"` first: working (say what you are waiting on), done, "+
 		"needs-decision, blocked, paused or failed.", me, dir)
 	if unread > 0 {
 		msg += fmt.Sprintf(" You also have %d unread message(s): run `%s inbox --dir %s`.", unread, me, dir)
+		markUnread(dir)
 	}
 	return msg
+}
+
+// markUnread records the pending messages as mentioned, in .stop-unread, and
+// reports whether any of them was new.
+func markUnread(dir string) (n int, fresh bool) {
+	mark := filepath.Join(dir, ".stop-unread")
+	told := map[string]bool{}
+	if b, err := os.ReadFile(mark); err == nil {
+		for _, name := range strings.Fields(string(b)) {
+			told[name] = true
+		}
+	}
+	var names []string
+	for _, p := range pendingMessages(dir) {
+		name := filepath.Base(p)
+		fresh = fresh || !told[name]
+		names = append(names, name)
+	}
+	_ = os.WriteFile(mark, []byte(strings.Join(names, "\n")), 0o644)
+	return len(names), fresh
+}
+
+// unreadOnce is the block message for a turn that did write a status line: it
+// names unread mail, but only mail no earlier Stop hook has mentioned. Pi
+// leads have no Stop guard, so only Claude leads reach it.
+func (a *app) unreadOnce(dir, me string) string {
+	n, fresh := markUnread(dir)
+	if !fresh {
+		return ""
+	}
+	return fmt.Sprintf("orchestrate lead: you have %d unread message(s): run `%s inbox --dir %s`.", n, me, dir)
 }

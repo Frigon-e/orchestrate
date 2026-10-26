@@ -148,7 +148,8 @@ silent turn back once. `done` without evidence counts as not done.
 When a line starting `orch:` appears in your pane, run the inbox command
 from Report-back. It prints new messages and marks them read. A message
 with `re: <key>` answers your decision `<key>`. Apply it, then report
-`working`.
+`working`. Run it once more before you report `done`, so a late redirect is
+not missed.
 
 ## Finishing
 

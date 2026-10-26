@@ -2949,3 +2949,164 @@ func TestAskListsOnlyMyLeads(t *testing.T) {
 		t.Fatalf("w1:p0 page should hold only its own lead's question:\n%s", page)
 	}
 }
+
+func TestBriefTellsLeadToReadInboxBeforeDone(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	wantContains(t, string(mustRead(t, filepath.Join(h.dir("t1"), "task.md"))), "inbox --dir "+h.dir("t1")+"`. Run it once more before you report `done`")
+}
+
+func TestLeadStopMentionsUnreadMailOnce(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	d := h.dir("t1")
+	send := func(text string) {
+		t.Setenv("ORCH_ROLE", "")
+		h.must("send", "t1", text)
+		t.Setenv("ORCH_ROLE", "lead")
+	}
+	t.Setenv("ORCH_ROLE", "lead")
+	t.Setenv("ORCH_TASK_DIR", d)
+	stop := func(active bool) (int, string) {
+		return h.hook("stop", map[string]any{"session_id": "x", "stop_hook_active": active})
+	}
+	h.must("report", "working", "step one")
+	if code, out := stop(false); code != 0 {
+		t.Fatalf("no mail, report written = %d %q", code, out)
+	}
+	send("first")
+	h.must("report", "working", "step two")
+	code, out := stop(false)
+	if code != 2 || !strings.Contains(out, "you have 1 unread message(s): run `/skill/scripts/orch inbox --dir "+d+"`") {
+		t.Fatalf("unread mail after a report = %d %q", code, out)
+	}
+	h.must("report", "working", "step three")
+	if code, out := stop(false); code != 0 {
+		t.Fatalf("same unread mail mentioned twice: %d %q", code, out)
+	}
+	if code, out := stop(true); code != 0 {
+		t.Fatalf("stop_hook_active blocked: %d %q", code, out)
+	}
+	send("second")
+	h.must("report", "working", "step four")
+	if code, out := stop(false); code != 2 || !strings.Contains(out, "2 unread message(s)") {
+		t.Fatalf("new mail not mentioned: %d %q", code, out)
+	}
+}
+
+func TestWatchRingsDoorbellOnceForStaleUnreadMail(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	d := h.dir("t1")
+	h.must("send", "t1", "please look")
+	msg := filepath.Join(d, "inbox", "001.msg")
+	age := func(m time.Duration) {
+		old := h.now.Add(-m)
+		if err := os.Chtimes(msg, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bells := func() int { return len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1")) }
+	base := bells()
+	setStatus := func(s string) { h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = s }) }
+
+	for _, s := range []string{"working", "blocked"} {
+		setStatus(s)
+		age(time.Hour)
+		h.must("watch", "--once")
+		if bells() != base {
+			t.Fatalf("rang a %s lead", s)
+		}
+	}
+	setStatus("idle")
+	age(9 * time.Minute)
+	if out := h.must("watch", "--once"); strings.Contains(out, "reminder") || bells() != base {
+		t.Fatalf("rang before unread_minutes: %q", out)
+	}
+	age(10 * time.Minute)
+	out := h.must("watch", "--once")
+	wantContains(t, out, "orch: t1 reminder: 1 unread message(s) for 10m; rang the doorbell again")
+	if bells() != base+1 {
+		t.Fatalf("bells = %d, want %d", bells(), base+1)
+	}
+	if out := h.must("watch", "--once"); strings.Contains(out, "reminder") || bells() != base+1 {
+		t.Fatalf("rang the same batch twice: %q", out)
+	}
+	h.must("inbox", "--dir", d)
+	h.must("watch", "--once")
+	h.must("send", "t1", "again")
+	msg = filepath.Join(d, "inbox", "002.msg")
+	age(time.Hour)
+	setStatus("idle") // the fake marks a prompted agent working
+	h.must("watch", "--once")
+	if bells() != base+3 { // the send's own bell plus one re-ring for the new batch
+		t.Fatalf("new batch not rung: bells = %d", bells())
+	}
+}
+
+func TestWatchUnreadMinutesZeroDisablesReminder(t *testing.T) {
+	h := setup(t)
+	if err := os.WriteFile(filepath.Join(h.tmp, "config.toml"), []byte("unread_minutes = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.task("t1")
+	h.must("spawn", "t1")
+	h.must("send", "t1", "please look")
+	old := h.now.Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(h.dir("t1"), "inbox", "001.msg"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	h.editFake(func(st *fakeState) { st.Agents["w1:p1"].Status = "idle" })
+	before := len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1"))
+	if out := h.must("watch", "--once"); strings.Contains(out, "reminder") || len(callsOf(h.fakeState(), "agent", "prompt", "w1:p1")) != before {
+		t.Fatalf("reminder with unread_minutes = 0: %q", out)
+	}
+}
+
+func TestUnreadMinutesIsAUserKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orchestrate.toml")
+	if err := os.WriteFile(path, []byte("unread_minutes = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := readRepoConfig(path, &repoConfig{})
+	if err == nil || !strings.Contains(err.Error(), "is not allowed here") {
+		t.Fatalf("repo file set a user key: %v", err)
+	}
+}
+
+func TestReportRefusesReplacedSession(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	d := h.dir("t1")
+	epoch := h.lead("t1").Epoch
+	if epoch == "" {
+		t.Fatal("spawn recorded no epoch")
+	}
+	log := filepath.Join(d, "status.log")
+	before := string(mustRead(t, log))
+
+	t.Setenv("ORCH_EPOCH", "stale")
+	if code, out := h.run("report", "--dir", d, "working", "ghost"); code != 1 || !strings.Contains(out, "replaced by a respawn") {
+		t.Fatalf("stale epoch report = %d %q", code, out)
+	}
+	if string(mustRead(t, log)) != before {
+		t.Fatal("refused report wrote to status.log")
+	}
+	t.Setenv("ORCH_EPOCH", epoch)
+	h.must("report", "--dir", d, "working", "current")
+	t.Setenv("ORCH_EPOCH", "")
+	h.must("report", "--dir", d, "working", "manual")
+
+	h.must("respawn", "t1", "--harness", "pi", "--model", "flash")
+	if h.lead("t1").Epoch == epoch {
+		t.Fatal("respawn kept the old epoch")
+	}
+	t.Setenv("ORCH_EPOCH", epoch)
+	if code, _ := h.run("report", "--dir", d, "working", "old session"); code != 1 {
+		t.Fatalf("replaced session could report: %d", code)
+	}
+}

@@ -48,6 +48,9 @@ type userConfig struct {
 	// LeadContextLimit is the context size, in tokens, past which a lead
 	// handed unrelated work asks for a compact or a fresh session.
 	LeadContextLimit int `toml:"lead_context_limit"`
+	// UnreadMinutes is how long a message may sit unread, with its lead idle,
+	// before the watcher rings the doorbell once more. 0 turns that off.
+	UnreadMinutes int `toml:"unread_minutes"`
 	// Dispatch rules say which harness and model suit which work. orch only
 	// prints them; the orchestrator matches them by judgment.
 	Dispatch   []dispatchRule       `toml:"dispatch"`
@@ -260,7 +263,7 @@ func userConfigPath() string {
 	return filepath.Join(envOr("XDG_CONFIG_HOME", expandHome("~/.config")), "orchestrate", "config.toml")
 }
 
-var userKeys = []string{"gate_budget", "ctx_trust", "roles", "max_leads", "claude_args", "pi_args", "lead_context_limit", "dispatch", "triage_model", "triage_mode", "quick_mode", "weak_models", "allowed_models", "allowed_when_limited"}
+var userKeys = []string{"gate_budget", "ctx_trust", "roles", "max_leads", "claude_args", "pi_args", "lead_context_limit", "unread_minutes", "dispatch", "triage_model", "triage_mode", "quick_mode", "weak_models", "allowed_models", "allowed_when_limited"}
 
 // removedKeys are config keys of removed features. A file that still has one
 // loads as if it did not.
@@ -342,7 +345,7 @@ func readRepoConfig(path string, rc *repoConfig) error {
 // loadUserConfig reads the machine's settings over their defaults. Leads use
 // it alone; they have no repo checkout to read the rest from.
 func loadUserConfig() (userConfig, error) {
-	uc := userConfig{MaxLeads: 3, LeadContextLimit: 150_000, TriageMode: "shadow", QuickMode: "shadow"}
+	uc := userConfig{MaxLeads: 3, LeadContextLimit: 150_000, UnreadMinutes: 10, TriageMode: "shadow", QuickMode: "shadow"}
 	err := decodeStrict(userConfigPath(), &uc, repoKeys, "<repo>/.agents/orchestrate.toml")
 	if err == nil && uc.GateBudget != nil {
 		limits := gateRunLimits(nil, uc.GateBudget)
