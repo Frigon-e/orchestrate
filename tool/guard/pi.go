@@ -261,7 +261,7 @@ func PiPre(ev *Event) PiResponse {
 	guardOn := os.Getenv("ORCH_TOOL_GUARD") != "off"
 	t := piInstalled()
 	state := openState(ev.Str("session"))
-	defer state.close()
+	defer func() { state.close() }() // state is reopened after a wait for a sibling lookup
 
 	block := func(reason string) PiResponse {
 		state.BlocksInRow++
@@ -296,6 +296,37 @@ func PiPre(ev *Event) PiResponse {
 		for _, r := range activeRules(forPi) {
 			if r.match(line, t) {
 				return block(r.reason(t, line))
+			}
+		}
+	}
+	if guardOn && searchFirstActive() && searchFirstRelevant(line) {
+		if found, ok := lookupShell(line); ok && isGood(found.tool) {
+			state.ConceptSeen = true
+		} else if reason, pattern := searchFirstReason(line, cwd, state.State, t); reason != "" {
+			session := ev.Str("session")
+			if state.SearchFirstWaited != state.Prompt+1 {
+				state.SearchFirstWaited = state.Prompt + 1
+				state.close() // release the lock while a sibling lookup may run
+				if waitForLookup(func() bool {
+					fresh := openState(session)
+					fresh.close()
+					return fresh.ConceptSeen
+				}) {
+					state = openState(session)
+					return PiResponse{}
+				}
+				state = openState(session)
+				reason, pattern = searchFirstReason(line, cwd, state.State, t)
+			}
+			if reason != "" {
+				state.SearchFirstPrompt = state.Prompt + 1
+				state.Pending = strPtr(searchFirstID)
+				repo := gitRoot(cwd)
+				if repo == "" {
+					repo = cwd
+				}
+				searchFirstLog("pi", session, repo, pattern)
+				return block(reason)
 			}
 		}
 	}
@@ -416,6 +447,13 @@ func PiCoach(ev *Event) PiResponse {
 		state := openState(session)
 		defer state.close()
 		if state.promptStep(true) {
+			if logOn {
+				repo := gitRoot(cwd)
+				if repo == "" {
+					repo = cwd
+				}
+				ladderLog("pi", session, repo)
+			}
 			return PiResponse{Message: coachPrefix + coachText["lookup-ladder"]}
 		}
 	case "tool_execution_end":

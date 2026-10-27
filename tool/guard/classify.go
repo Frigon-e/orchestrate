@@ -129,9 +129,8 @@ func docTarget(kind, value string) bool {
 	return true
 }
 
-// symbolRg: an rg whose pattern names a symbol, so orch lsp would answer it better.
-func symbolRg(args []string) bool {
-	pattern, paths, globs, types, word := rgParts(args)
+// docOnly: every glob, type and path target of an rg call is a doc target.
+func docOnly(globs, types, paths []string) bool {
 	type target struct{ kind, value string }
 	var targets []target
 	for _, g := range globs {
@@ -143,25 +142,36 @@ func symbolRg(args []string) bool {
 	for _, p := range paths {
 		targets = append(targets, target{"path", p})
 	}
-	if len(targets) > 0 {
-		all := true
-		for _, t := range targets {
-			if !docTarget(t.kind, t.value) {
-				all = false
-				break
-			}
-		}
-		if all {
+	if len(targets) == 0 {
+		return false
+	}
+	for _, t := range targets {
+		if !docTarget(t.kind, t.value) {
 			return false
 		}
+	}
+	return true
+}
+
+// symbolName is the identifier an rg pattern names, or "" when it does not name a symbol.
+func symbolName(args []string) string {
+	pattern, paths, globs, types, word := rgParts(args)
+	if docOnly(globs, types, paths) {
+		return ""
 	}
 	text := strings.NewReplacer(`\b`, "", `\<`, "", `\>`, "").Replace(pattern)
 	text = symTrail.ReplaceAllString(symLead.ReplaceAllString(text, ""), "")
 	if !ident.MatchString(text) {
-		return false
+		return ""
 	}
-	return word || strings.Contains(text, ".") || strings.Contains(text, "_") || capital.MatchString(text[1:])
+	if word || strings.Contains(text, ".") || strings.Contains(text, "_") || capital.MatchString(text[1:]) {
+		return text
+	}
+	return ""
 }
+
+// symbolRg: an rg whose pattern names a symbol, so orch lsp would answer it better.
+func symbolRg(args []string) bool { return symbolName(args) != "" }
 
 func lookupShell(line string) (lookup, bool) {
 	listing := segments(line, true)

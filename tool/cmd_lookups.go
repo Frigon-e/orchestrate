@@ -201,16 +201,26 @@ func buildLookupReport(lines []lookupLine) lookupReport {
 	}
 	sort.Strings(names)
 	report := lookupReport{Lookups: len(lines)}
+	for _, l := range lines {
+		if !isLookupRow(l) {
+			report.Lookups--
+		}
+	}
 	for _, name := range names {
 		report.Harnesses = append(report.Harnesses, harnessReport(name, byHarness[name]))
 	}
 	return report
 }
 
+// isLookupRow: a "prompt" row marks a fired ladder and a "blocked:" row a guard
+// block; neither is a lookup, so neither counts in lookups, turns or the first tool.
+func isLookupRow(l lookupLine) bool {
+	return l.Tool != "prompt" && !strings.HasPrefix(l.Tool, "blocked:")
+}
+
 func harnessReport(name string, lines []lookupLine) lookupHarnessReport {
 	r := lookupHarnessReport{
 		Harness:   name,
-		Lookups:   len(lines),
 		Tools:     map[string]lookupToolStats{},
 		Reminders: map[string]lookupReminderStats{},
 	}
@@ -223,20 +233,26 @@ func harnessReport(name string, lines []lookupLine) lookupHarnessReport {
 	var firstGood int
 	for _, l := range lines {
 		sessions[l.Session] = true
-		stats := r.Tools[l.Tool]
-		stats.Lookups++
-		if l.Empty {
-			stats.Empty++
+		real := isLookupRow(l)
+		if real {
+			r.Lookups++
 		}
-		if !l.OK {
-			stats.Errors++
+		if l.Tool != "prompt" {
+			stats := r.Tools[l.Tool]
+			stats.Lookups++
+			if l.Empty {
+				stats.Empty++
+			}
+			if !l.OK {
+				stats.Errors++
+			}
+			r.Tools[l.Tool] = stats
 		}
-		r.Tools[l.Tool] = stats
-		if l.Turn != nil {
+		if real && l.Turn != nil {
 			turns[l.Session+"\x00"+fmt.Sprint(l.Turn)]++
 			withTurn++
 		}
-		if l.Tool != "read" && !firstSeen[l.Session] {
+		if real && l.Tool != "read" && !firstSeen[l.Session] {
 			firstSeen[l.Session] = true
 			r.SessionsWithFirst++
 			if l.Tool == "jbcontext" || strings.HasPrefix(l.Tool, "lsp:") {
@@ -260,7 +276,8 @@ func harnessReport(name string, lines []lookupLine) lookupHarnessReport {
 			rs := r.Reminders[*l.Reminder]
 			rs.Fired++
 			r.Reminders[*l.Reminder] = rs
-			if *l.Reminder == "concept-first" || *l.Reminder == "symbol-via-lsp" {
+			switch *l.Reminder {
+			case "concept-first", "symbol-via-lsp", "search-first", "lookup-ladder":
 				pending[l.Session] = *l.Reminder
 			}
 		}

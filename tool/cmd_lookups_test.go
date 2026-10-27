@@ -194,3 +194,51 @@ func TestLookupsSinceUnits(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupsReportSkipsPromptAndBlockedRowsAndMeasuresSearchFirst(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ORCH_TOOL_GUARD_STATE_DIR", dir)
+	ts := lookupsNow.Add(-time.Hour).Format("2006-01-02T15:04:05.000000Z")
+	row := func(session string, turn any, tool string, reminder string, followed any) map[string]any {
+		out := map[string]any{"ts": ts, "harness": "claude", "session": session, "repo": "/r", "turn": turn, "tool": tool,
+			"query": "toast", "ok": true, "empty": false, "bytes": 1, "duration_ms": nil, "reminder": nil, "followed": followed}
+		if reminder != "" {
+			out["reminder"] = reminder
+		}
+		return out
+	}
+	rows := []map[string]any{
+		row("a", nil, "prompt", "lookup-ladder", nil),
+		row("a", "t1", "blocked:rg", "search-first", nil),
+		row("a", "t2", "jbcontext", "", true),
+		row("b", nil, "prompt", "lookup-ladder", nil),
+		row("b", "t1", "blocked:rg", "search-first", nil),
+		row("b", "t2", "rg", "", false),
+	}
+	var buf bytes.Buffer
+	for _, r := range rows {
+		raw, _ := json.Marshal(r)
+		buf.Write(raw)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lookups.jsonl"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := lookupsJSON(t)
+	h := harnessOf(t, report, "claude")
+	if report.Lookups != 2 || h.Lookups != 2 || h.Turns != 2 {
+		t.Errorf("lookups/turns = %d/%d/%d, want 2/2/2: blocked and prompt rows are not lookups", report.Lookups, h.Lookups, h.Turns)
+	}
+	if h.SessionsWithFirst != 2 || h.SessionsFirstGood != 0.5 {
+		t.Errorf("first good %v of %d, want 0.5 of 2", h.SessionsFirstGood, h.SessionsWithFirst)
+	}
+	if got := h.Tools["blocked:rg"]; got.Lookups != 2 {
+		t.Errorf("blocked:rg stats %+v, want 2 visible", got)
+	}
+	if _, ok := h.Tools["prompt"]; ok {
+		t.Errorf("prompt rows must not be in Tools: %+v", h.Tools)
+	}
+	if got := h.Reminders["search-first"]; got.Fired != 2 || got.Followed != 1 || got.Ignored != 1 || got.FollowRate != 0.5 {
+		t.Errorf("search-first %+v", got)
+	}
+}

@@ -229,11 +229,16 @@ func TestEveryPromptSequence(t *testing.T) {
 	}
 }
 
-func TestPromptWritesNoLookupRow(t *testing.T) {
+func TestPromptWritesOnlyTheLadderRow(t *testing.T) {
 	box := newSandbox(t)
 	box.prompt(inProc{}, nil)
-	if rows := box.log(); len(rows) != 0 {
-		t.Fatalf("a prompt logged %v", rows)
+	rows := box.log()
+	if len(rows) != 1 || rows[0]["tool"] != "prompt" || rows[0]["reminder"] != "lookup-ladder" {
+		t.Fatalf("a prompt logged %v, want one prompt row for lookup-ladder", rows)
+	}
+	box.prompt(inProc{}, nil)
+	if rows := box.log(); len(rows) != 1 {
+		t.Fatalf("a prompt without the ladder logged %v", rows)
 	}
 }
 

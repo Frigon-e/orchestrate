@@ -53,6 +53,12 @@ type State struct {
 	BlocksInRow      int    `json:"blocks_in_row,omitempty"`
 	FallbackReminded bool   `json:"fallback_reminded,omitempty"`
 	Open             []Open `json:"open,omitempty"`
+	// deny-search-first: Prompt+1 of the window it last blocked in, and the repos
+	// jbcontext has indexed (the probe result, false included).
+	SearchFirstPrompt int             `json:"search_first_prompt,omitempty"`
+	JBIndexed         map[string]bool `json:"jb_indexed,omitempty"`
+	// SearchFirstWaited is Prompt+1 of the window that already waited for a sibling lookup.
+	SearchFirstWaited int `json:"search_first_waited,omitempty"`
 }
 
 // Turn is one assistant message and how many lookups it made: nr non-read, rd reads.
@@ -76,7 +82,7 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 		switch *s.Pending {
 		case "concept-first":
 			f = tool == "jbcontext"
-		case "lookup-ladder":
+		case "lookup-ladder", "search-first":
 			f = isGood(tool)
 		default:
 			f = strings.HasPrefix(tool, "lsp:")
@@ -371,7 +377,7 @@ func coachPrompt(ev *Event, stdout io.Writer) error {
 	if os.Getenv("ORCH_LOOKUP_COACH") == "off" {
 		return nil
 	}
-	_, name := sessionName(ev)
+	session, name := sessionName(ev)
 	dir := StateDir()
 	if err := os.MkdirAll(filepath.Join(dir, "coach"), 0o777); err != nil {
 		return err
@@ -387,6 +393,7 @@ func coachPrompt(ev *Event, stdout io.Writer) error {
 		return err
 	}
 	if due {
+		ladderLog("claude", session, repoOf(ev.Str("cwd")))
 		writeReminder(stdout, "UserPromptSubmit", "lookup-ladder")
 	}
 	return nil

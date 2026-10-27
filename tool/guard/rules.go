@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -419,7 +420,7 @@ func Pre(ev *Event, stderr io.Writer) int {
 		return 0
 	}
 	active := activeRules(forClaude)
-	if len(active) == 0 {
+	if len(active) == 0 && !searchFirstActive() {
 		return 0
 	}
 	t := installed()
@@ -429,5 +430,66 @@ func Pre(ev *Event, stderr io.Writer) int {
 			return 2
 		}
 	}
-	return 0
+	return claudeSearchFirst(ev, line, t, stderr)
+}
+
+// claudeSearchFirst runs deny-search-first for a Bash line the other rules passed.
+// Same-message detection relies on concurrent PreToolUse hooks or an earlier
+// sibling: a would-be block waits a moment for a sibling jbcontext or orch lsp
+// call to mark the window. If Claude runs the rg's hook alone before its
+// sibling's, the rg is blocked once.
+func claudeSearchFirst(ev *Event, line string, t tools, stderr io.Writer) int {
+	if !searchFirstActive() || !searchFirstRelevant(line) {
+		return 0
+	}
+	t.orch = onPath("orch")
+	session, name := sessionName(ev)
+	dir := StateDir()
+	if os.MkdirAll(filepath.Join(dir, "coach"), 0o777) != nil {
+		return 0
+	}
+	cwd := ev.Str("cwd")
+	f, state, err := lockState(dir, name)
+	if err != nil {
+		return 0
+	}
+	if found, ok := lookupShell(line); ok && isGood(found.tool) {
+		if !state.ConceptSeen {
+			state.ConceptSeen = true
+			saveState(f, state)
+		}
+		f.Close()
+		return 0
+	}
+	reason, pattern := searchFirstReason(line, cwd, state, t)
+	if reason != "" && state.SearchFirstWaited != state.Prompt+1 {
+		state.SearchFirstWaited = state.Prompt + 1
+		saveState(f, state)
+		f.Close()
+		if waitForLookup(func() bool {
+			g, fresh, err := lockState(dir, name)
+			if err != nil {
+				return false
+			}
+			g.Close()
+			return fresh.ConceptSeen
+		}) {
+			return 0
+		}
+		if f, state, err = lockState(dir, name); err != nil {
+			return 0
+		}
+		reason, pattern = searchFirstReason(line, cwd, state, t)
+	}
+	defer f.Close()
+	if reason == "" {
+		saveState(f, state)
+		return 0
+	}
+	state.SearchFirstPrompt = state.Prompt + 1
+	state.Pending = strPtr(searchFirstID)
+	saveState(f, state)
+	searchFirstLog("claude", session, repoOf(cwd), pattern)
+	io.WriteString(stderr, reason+"\n")
+	return 2
 }
