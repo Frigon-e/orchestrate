@@ -62,6 +62,12 @@ while True:
         note(method="close", uri=p["textDocument"]["uri"])
     elif method == "workspace/didChangeWatchedFiles":
         note(method="watched", changes=p["changes"])
+    elif method == "workspace/symbol":
+        rows = []
+        if p.get("query") == "StartCheckout":
+            rows = [{"name": "Gateway.StartCheckout", "kind": 6, "location": loc("pay/pay.go", 3)},
+                    {"name": "Stripe.StartCheckout", "kind": 6, "location": loc("pay/pay.go", 6)}]
+        send({"jsonrpc": "2.0", "id": rid, "result": rows})
     elif method == "textDocument/prepareCallHierarchy":
         send({"jsonrpc": "2.0", "id": rid, "result": [{"name": "StartCheckout", "uri": p["textDocument"]["uri"]}]})
     elif method == "callHierarchy/incomingCalls":

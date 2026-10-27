@@ -12,47 +12,11 @@ import (
 // did not find) with the TypeScript 7 server, one server for all of them. A
 // missing tool leaves an availability error, never a zero-reference fact.
 func (e *ctxEnv) Symbols(goNames []string, ts []tsJob) (map[string]*symFact, map[tsJob]*symFact) {
-	goFacts := map[string]*symFact{}
-	if len(goNames) > 0 && repoHasLang(e.Code, "go") {
-		if _, err := exec.LookPath(e.Gopls); err != nil {
-			why := "Go language server unavailable: " + e.Gopls + " was not found"
-			e.note(why)
-			for _, n := range goNames {
-				goFacts[n] = &symFact{Symbol: n, Lang: "go", Errors: []string{e.Code + ": " + why}}
-			}
-		} else {
-			e.use("gopls", e.Gopls)
-			// gopls works inside a Go module: one runner per module of the repo.
-			var runners []*goplsRunner
-			for _, dir := range e.goModuleDirs() {
-				runners = append(runners, &goplsRunner{bin: e.Gopls, dir: dir, root: e.Code, cacheDir: e.CacheDir})
-			}
-			var mu sync.Mutex
-			symParallel(len(goNames), func(i int) {
-				merged := symFact{Symbol: goNames[i], Lang: "go", Tier: "gopls"}
-				got := false
-				for _, g := range runners {
-					f, err := g.symbolFacts(goNames[i])
-					if err != nil {
-						merged.Errors = append(merged.Errors, g.dir+": workspace/symbol: "+err.Error())
-						continue
-					}
-					got = true
-					merged.Defs = append(merged.Defs, f.Defs...)
-				}
-				if got || len(merged.Errors) > 0 {
-					mu.Lock()
-					goFacts[goNames[i]] = &merged
-					mu.Unlock()
-				}
-			})
-			for _, g := range runners {
-				if g.note != "" {
-					e.note(g.note)
-				}
-			}
-		}
-	}
+	return e.symbolsFrom(goNames, ts, e.goFactsCLI(goNames))
+}
+
+// symbolsFrom is Symbols with the Go facts already resolved by the caller.
+func (e *ctxEnv) symbolsFrom(goNames []string, ts []tsJob, goFacts map[string]*symFact) (map[string]*symFact, map[tsJob]*symFact) {
 	var jobs []tsJob
 	roots := map[string]int{}
 	for _, j := range ts {
@@ -263,4 +227,50 @@ func (e *ctxEnv) goModuleDirs() []string {
 		return []string{e.Code}
 	}
 	return dirs
+}
+
+// goFactsCLI looks the Go names up with one gopls command per question.
+func (e *ctxEnv) goFactsCLI(goNames []string) map[string]*symFact {
+	goFacts := map[string]*symFact{}
+	if len(goNames) > 0 && repoHasLang(e.Code, "go") {
+		if _, err := exec.LookPath(e.Gopls); err != nil {
+			why := "Go language server unavailable: " + e.Gopls + " was not found"
+			e.note(why)
+			for _, n := range goNames {
+				goFacts[n] = &symFact{Symbol: n, Lang: "go", Errors: []string{e.Code + ": " + why}}
+			}
+		} else {
+			e.use("gopls", e.Gopls)
+			// gopls works inside a Go module: one runner per module of the repo.
+			var runners []*goplsRunner
+			for _, dir := range e.goModuleDirs() {
+				runners = append(runners, &goplsRunner{bin: e.Gopls, dir: dir, root: e.Code, cacheDir: e.CacheDir})
+			}
+			var mu sync.Mutex
+			symParallel(len(goNames), func(i int) {
+				merged := symFact{Symbol: goNames[i], Lang: "go", Tier: "gopls"}
+				got := false
+				for _, g := range runners {
+					f, err := g.symbolFacts(goNames[i])
+					if err != nil {
+						merged.Errors = append(merged.Errors, g.dir+": workspace/symbol: "+err.Error())
+						continue
+					}
+					got = true
+					merged.Defs = append(merged.Defs, f.Defs...)
+				}
+				if got || len(merged.Errors) > 0 {
+					mu.Lock()
+					goFacts[goNames[i]] = &merged
+					mu.Unlock()
+				}
+			})
+			for _, g := range runners {
+				if g.note != "" {
+					e.note(g.note)
+				}
+			}
+		}
+	}
+	return goFacts
 }

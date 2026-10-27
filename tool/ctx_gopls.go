@@ -134,6 +134,9 @@ type symDef struct {
 	Func        bool // references were looked up
 	ByName      bool // callers are word matches by name, not a call graph
 	GenHidden   int  // callers left out because they are in generated files
+	// Served: found through a language server session that also answers the
+	// reference questions (orch lsp), so no references were looked up here.
+	Served bool `json:"-"`
 }
 
 type symFact struct {
@@ -255,6 +258,13 @@ func evalOr(p string) string {
 // or method its call sites and test references, and for an interface method
 // its implementations.
 func (g *goplsRunner) symbolFacts(sym string) (symFact, error) {
+	return g.symbolFactsWith(sym, func(q string) (string, error) { return g.run("workspace_symbol", q) }, true)
+}
+
+// symbolFactsWith is symbolFacts with the workspace symbol rows (in the format
+// of `gopls workspace_symbol`) supplied by symbols. Without refs only the
+// definitions are looked up, for a caller that asks the references itself.
+func (g *goplsRunner) symbolFactsWith(sym string, symbols func(query string) (string, error), refs bool) (symFact, error) {
 	f := symFact{Symbol: sym, Lang: "go"}
 	typ, name := "", sym
 	if i := strings.LastIndex(sym, "."); i >= 0 {
@@ -266,7 +276,7 @@ func (g *goplsRunner) symbolFacts(sym string) (symFact, error) {
 	if typ != "" && typ[0] >= 'a' && typ[0] <= 'z' {
 		query = sym
 	}
-	out, err := g.run("workspace_symbol", query)
+	out, err := symbols(query)
 	if err != nil {
 		return f, err
 	}

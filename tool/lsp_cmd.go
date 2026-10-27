@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -276,7 +277,7 @@ func (r *lspRun) byName(verb string, names []string, limit int) []lspAnswer {
 	var goFacts map[string]*symFact
 	var tsFacts map[tsJob]*symFact
 	if len(goNames) > 0 {
-		goFacts, tsFacts = e.Symbols(goNames, tsJobs)
+		goFacts, tsFacts = e.symbolsFrom(goNames, tsJobs, r.goFacts(goNames))
 	}
 	var out []lspAnswer
 	for _, q := range names {
@@ -361,7 +362,7 @@ func (r *lspRun) one(verb, name string, f *symFact, d symDef, limit int) lspAnsw
 		an.Items = append(an.Items, it)
 		return an
 	case "refs":
-		if d.Func && !d.RefsUnknown && !d.ByName && len(d.Errors) == 0 {
+		if d.Func && !d.Served && !d.RefsUnknown && !d.ByName && len(d.Errors) == 0 {
 			for _, loc := range append(append([]string(nil), d.Callers...), d.TestRefs...) {
 				p, n := splitWhere(loc)
 				p = r.rel(p)
@@ -544,6 +545,12 @@ func (r *lspRun) session(path string) (*lspSession, string) {
 	}
 	root, _ := rootFor(e.Code, path, l.ID)
 	dir := filepath.Join(e.Code, filepath.FromSlash(strings.TrimSuffix(root.Dir, "/")))
+	return r.sessionIn(l, dir)
+}
+
+// sessionIn starts (or reuses) the server for language l on project root dir.
+func (r *lspRun) sessionIn(l *langDef, dir string) (*lspSession, string) {
+	e := r.e
 	key := l.ID + "\x00" + dir
 	if s, ok := r.sessions[key]; ok {
 		return s, r.whys[key]
@@ -560,6 +567,79 @@ func (r *lspRun) session(path string) (*lspSession, string) {
 	s, why := start()
 	r.sessions[key], r.whys[key] = s, why
 	return s, why
+}
+
+// goFacts resolves Go names through the gopls serve session the request then
+// uses, so a call loads gopls once. Definitions only: the references come from
+// the same session. Without a usable gopls binary it falls back to the command
+// line pass, which reports the unavailability.
+func (r *lspRun) goFacts(names []string) map[string]*symFact {
+	e := r.e
+	l := langByID("go")
+	if len(names) == 0 || !repoHasLang(e.Code, "go") || l == nil {
+		return map[string]*symFact{}
+	}
+	if _, err := exec.LookPath(e.Gopls); err != nil {
+		return e.goFactsCLI(names)
+	}
+	dirs := e.goModuleDirs()
+	for _, dir := range dirs {
+		if s, _ := r.sessionIn(l, dir); s == nil {
+			// No serve session: the command line pass answers, or reports why not.
+			return e.goFactsCLI(names)
+		}
+	}
+	e.use("gopls", e.Gopls)
+	facts := map[string]*symFact{}
+	for _, name := range names {
+		merged := symFact{Symbol: name, Lang: "go", Tier: "gopls"}
+		got := false
+		for _, dir := range dirs {
+			s, _ := r.sessionIn(l, dir)
+			g := &goplsRunner{dir: dir, root: e.Code}
+			f, err := g.symbolFactsWith(name, func(q string) (string, error) { return s.goSymbolRows(q) }, false)
+			if err != nil {
+				merged.Errors = append(merged.Errors, dir+": workspace/symbol: "+err.Error())
+				continue
+			}
+			got = true
+			merged.Defs = append(merged.Defs, f.Defs...)
+		}
+		if got || len(merged.Errors) > 0 {
+			facts[name] = &merged
+		}
+	}
+	return facts
+}
+
+// goSymbolRows asks workspace/symbol and prints the rows the way
+// `gopls workspace_symbol` does: path:line:col name Kind.
+func (s *lspSession) goSymbolRows(query string) (string, error) {
+	raw, err := s.c.call("workspace/symbol", map[string]any{"query": query}, tsRequestLimit)
+	if err != nil {
+		return "", err
+	}
+	var syms []struct {
+		Name     string `json:"name"`
+		Kind     int    `json:"kind"`
+		Location lspLoc `json:"location"`
+	}
+	if err := json.Unmarshal(raw, &syms); err != nil {
+		return "", fmt.Errorf("workspace/symbol: malformed result: %w", err)
+	}
+	var b strings.Builder
+	for _, sym := range syms {
+		if err := validLSPSymbol(sym.Name, sym.Kind, sym.Location); err != nil {
+			return "", fmt.Errorf("workspace/symbol: %w", err)
+		}
+		u, err := url.Parse(sym.Location.URI)
+		if err != nil || strings.ContainsAny(sym.Name, " \t\n") {
+			continue
+		}
+		kind := orDefault(lspKindNames[sym.Kind], "Symbol")
+		fmt.Fprintf(&b, "%s:%d:%d %s %s\n", u.Path, sym.Location.Range.Start.Line+1, sym.Location.Range.Start.Character+1, sym.Name, kind)
+	}
+	return b.String(), nil
 }
 
 func lspHandshake(c *lspClient, dir string) (lspCaps, error) {

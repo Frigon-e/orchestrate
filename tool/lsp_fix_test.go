@@ -61,6 +61,28 @@ func TestLspExitAndShutdownCarryNoParams(t *testing.T) {
 	}
 }
 
+// A Go name is resolved on the gopls serve session the request then uses: one
+// gopls start per call, no command line gopls pass before it.
+func TestLspGoNameResolvesOnTheServeSession(t *testing.T) {
+	w := newFakeGoplsEnv(t)
+	if out := w.must("lsp", "refs", "Stripe.StartCheckout"); out != "svc/svc.go:7: return g.StartCheckout(1)\n" {
+		t.Fatalf("refs = %q", out)
+	}
+	if n := len(w.events("start")); n != 1 {
+		t.Errorf("gopls serve started %d times, want 1", n)
+	}
+	if n := len(w.events("workspace/symbol")); n != 1 {
+		t.Errorf("workspace/symbol asked %d times on the session, want 1", n)
+	}
+	if cli := w.ctxHarness.log(w.gCall); cli != "" {
+		t.Errorf("the command line gopls ran: %q", cli)
+	}
+	code, out := w.run("lsp", "def", "zzzNone")
+	if code != 1 || strings.TrimSpace(out) != "no symbol zzzNone" {
+		t.Errorf("not found: exit %d %q", code, out)
+	}
+}
+
 func TestLspImplsAcceptsLimit(t *testing.T) {
 	w := newFakeGoplsEnv(t)
 	out := w.must("lsp", "impls", "Gateway.StartCheckout", "--limit", "1")
