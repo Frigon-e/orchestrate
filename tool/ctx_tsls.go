@@ -142,12 +142,19 @@ func pnpmStoresIn(code string) []string {
 // executable inside the highest typescript@7 version of any pnpm store, in the
 // platform package that version depends on. It is empty when there is none.
 func tsNativeServer(code string) string {
+	exe, _ := tsNativeServerVersion(code)
+	return exe
+}
+
+// tsNativeServerVersion is tsNativeServer plus the version in the store
+// directory name (for example "7.0.2").
+func tsNativeServerVersion(code string) (string, string) {
 	plat := map[string]string{"darwin": "darwin", "linux": "linux", "windows": "win32"}[runtime.GOOS]
 	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
 	if plat == "" || arch == "" {
-		return ""
+		return "", ""
 	}
-	best, bestVer := "", []int(nil)
+	best, bestVer, bestName := "", []int(nil), ""
 	for _, pnpm := range pnpmStores(code) {
 		dirs, _ := filepath.Glob(filepath.Join(pnpm, "typescript@7*"))
 		for _, d := range dirs {
@@ -163,11 +170,11 @@ func tsNativeServer(code string) string {
 				exe += ".exe"
 			}
 			if fileExists(exe) && (best == "" || versionLess(bestVer, ver)) {
-				best, bestVer = exe, ver
+				best, bestVer, bestName = exe, ver, name
 			}
 		}
 	}
-	return best
+	return best, bestName
 }
 
 func versionLess(a, b []int) bool {
@@ -606,10 +613,18 @@ func tsServerChoiceUncached(code string) (string, string) {
 		return p, "" // a missing override is reported by the caller
 	}
 	why := ""
+	type cand struct {
+		bin  string
+		ver  tsVersion
+		rank int // lower wins a tie: repo-local, tsgo, tsc
+	}
+	var cands []cand
 	if ctxRepoTrusted(code) {
-		if p := tsNativeServer(code); p != "" {
+		if p, name := tsNativeServerVersion(code); p != "" {
 			if real, err := ctxServerBinary(code, p); err == nil {
-				return real, ""
+				if v, ok := parseTSVersion(name); ok {
+					cands = append(cands, cand{real, v, 0})
+				}
 			}
 		}
 	} else if ctxLocalTSExists(code) {
@@ -617,12 +632,12 @@ func tsServerChoiceUncached(code string) (string, string) {
 	}
 	// Generic tsc on PATH is usually the JavaScript compiler, not an LSP, so
 	// tsc is accepted only when it reports TypeScript 7 or newer.
-	for _, name := range []string{"tsgo", "tsc"} {
+	for rank, name := range []string{"tsgo", "tsc"} {
 		p, err := exec.LookPath(name)
 		if err != nil {
 			continue
 		}
-		// Trust first: tscIsNative executes p, so a candidate that fails the
+		// Trust first: tsBinaryVersion executes p, so a candidate that fails the
 		// trust check must never reach it.
 		real, err := ctxServerBinary(code, p)
 		if err != nil {
@@ -631,42 +646,91 @@ func tsServerChoiceUncached(code string) (string, string) {
 			}
 			continue
 		}
+		v, ok := tsBinaryVersion(p)
+		if !ok || v.nums[0] < 7 {
+			continue
+		}
+		bin := real
 		if name == "tsc" {
-			if !tscIsNative(p) {
-				continue
-			}
 			// A shim such as vite-plus `vp` acts as tsc only under that
 			// name, so launch the PATH entry, not its resolved target.
-			return p, why
+			bin = p
 		}
-		return real, why
+		cands = append(cands, cand{bin, v, rank + 1})
 	}
-	return "", why
+	best := -1
+	for i, c := range cands {
+		if best < 0 || tsVersionLess(cands[best].ver, c.ver) || (!tsVersionLess(c.ver, cands[best].ver) && c.rank < cands[best].rank) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", why
+	}
+	return cands[best].bin, why
 }
 
-var tscVersionRe = regexp.MustCompile(`(?m)^Version (\d+)\.`)
+// tsVersion is major.minor.patch; pre marks a prerelease, which sorts below
+// the release of the same numbers.
+type tsVersion struct {
+	nums [3]int
+	pre  bool
+}
 
-// tscNativeCache holds the version answer per binary path, so the check runs
-// once per process.
+func tsVersionLess(a, b tsVersion) bool {
+	for i := range a.nums {
+		if a.nums[i] != b.nums[i] {
+			return a.nums[i] < b.nums[i]
+		}
+	}
+	return a.pre && !b.pre
+}
+
+var tsSemverRe = regexp.MustCompile(`^(\d+)\.(\d+)(?:\.(\d+))?(-\S*)?`)
+
+func parseTSVersion(s string) (tsVersion, bool) {
+	m := tsSemverRe.FindStringSubmatch(s)
+	if m == nil {
+		return tsVersion{}, false
+	}
+	var v tsVersion
+	for i := 0; i < 3; i++ {
+		v.nums[i], _ = strconv.Atoi(m[i+1])
+	}
+	v.pre = m[4] != ""
+	return v, true
+}
+
+var tscVersionRe = regexp.MustCompile(`(?m)^Version (\S+)`)
+
+// tscNativeCache holds the version answer per binary path (a tsVersion, or
+// nil when the output was not a version), so the probe runs once per process.
 var tscNativeCache sync.Map
 
-// tscIsNative reports whether the tsc at path is TypeScript 7 or newer, the
-// native server, and not the JavaScript compiler of 5 or 6.
-func tscIsNative(path string) bool {
+// tsBinaryVersion runs path --version and returns the version it reports.
+func tsBinaryVersion(path string) (tsVersion, bool) {
 	if v, ok := tscNativeCache.Load(path); ok {
-		return v.(bool)
+		tv, _ := v.(*tsVersion)
+		if tv == nil {
+			return tsVersion{}, false
+		}
+		return *tv, true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	native := false
+	var found *tsVersion
 	if out, err := exec.CommandContext(ctx, path, "--version").Output(); err == nil {
 		if m := tscVersionRe.FindSubmatch(out); m != nil {
-			n, _ := strconv.Atoi(string(m[1]))
-			native = n >= 7
+			if v, ok := parseTSVersion(string(m[1])); ok {
+				found = &v
+			}
 		}
 	}
-	tscNativeCache.Store(path, native)
-	return native
+	tscNativeCache.Store(path, found)
+	if found == nil {
+		return tsVersion{}, false
+	}
+	return *found, true
 }
 
 // Presence checks are only for the skip note, never execution candidates.
