@@ -12,7 +12,7 @@ type CtxCLI struct {
 	Env    []string
 	Tools  []string
 	Notice string
-	// Extension is a pi extension that limits the shell to orch ctx; a pass
+	// Extension is a pi extension that limits the shell to the lookup commands; a pass
 	// loads it only when the ctx-only shell is asked for.
 	Extension string
 	// Guard is the tool guard extension (pi_ctx_reminder.ts); an open-shell pi
@@ -26,20 +26,18 @@ Do not run commands that write. No network.
 
 HOW TO LOOK AT CODE. You have no project instructions, so this is the whole guide.
 Your shell runs from the repository root, so paths are repo-relative: never cd.
-Use "orch ctx" first for search: hits are grouped by file, tests and generated files are hidden by default, and independent lookups can share a call. If a backend cannot answer, use scoped native search or inspect source; in a ctx-only shell, shell fallbacks are blocked.
-` + ctxResultGuide + `
-  orch ctx batch -q "find:Code that ..." -q "symbol:Name refs=3" -q "text:pattern glob=dir/**"   up to 50 lookups; answers return in order, a repeated place prints once. Normal output budgets are about 70000 characters/batch and 9000/lookup; narrow broad lookups or run a cut lookup alone.
-The lookups (find, sym and text are the batch kinds find, symbol and text):
-  orch ctx find "<one behaviour in plain words>"              ranked candidates when you do not know a name. Write "Code that lists payment gateways" or "Code that verifies a webhook signature, producing a stored receipt" (one behaviour per query, not a list of nouns)
-  orch ctx sym <Name|Type.Method> [--refs N]                  exact/candidate definitions, doc, body preview and available references/implementers
-  orch ctx text '<regex>' [--glob 'dir/**'] [--word] [-F]      pattern matches in the stated scope (--files-only lists files)
-An answer ends with a sources: line and notes (a stale index, files edited in this worktree): read the notes.
+Look things up in this order, and send independent lookups in one message (several tool calls at once):
+  jbcontext search "<one behaviour in plain language>"   when you do not know where the code is. One concept per query, several queries in one message. The results are candidates, not proof of absence.
+  orch lsp def|refs|callers|impls <Name>                  for a symbol you can name (Name, pkg.Name or Type.Method). orch lsp symbols <file> outlines a file; orch lsp hover <path:line:col> gives a type.
+  rg -n -w '<text>'                                       for exact text
+  fd <name>                                               for file names
+A lookup that cannot answer says so; then use rg or the read tool.
 
-HOW TO READ CODE. Use your native read tool with offset and limit. When you need several files or ranges, issue all the reads in one turn. Never use sed, cat, head or tail, and never read a whole large file to find one function: orch ctx sym or text gives its line, then read that range.
+HOW TO READ CODE. Use your native read tool with offset and limit. When you need several files or ranges, issue all the reads in one turn. Never use sed, cat, head or tail, and never read a whole large file to find one function: orch lsp def or rg -n gives its line, then read that range.
 A violation fails the review.`
 
-// ctxOnlyNotice is added to the notice when the shell is limited to orch ctx.
-const ctxOnlyNotice = `YOUR SHELL RUNS ONLY orch ctx. One call per command, no pipes, no redirects, no globs, no cd, and no grep, head, tail, sed, cat, ls or find: the shell blocks them. Shorten output with --compact, or limit=N on a lookup in a batch (--limit N on a single call).`
+// ctxOnlyNotice is added to the notice when the shell is limited to the lookup commands.
+const ctxOnlyNotice = `YOUR SHELL RUNS ONLY jbcontext search, orch lsp, rg, fd, ls and wc. One command per call, no pipes, no redirects, no unquoted globs, no cd, and no grep, head, tail, sed, cat or find: the shell blocks them. Put independent lookups in separate calls in one message.`
 
 // CtxCLIFor pins orch ctx and puts a shim for this binary first on PATH.
 func CtxCLIFor(harness, code string) (CtxCLI, error) {
@@ -56,7 +54,7 @@ func ctxCLIForExecutable(harness, code, exe string) (CtxCLI, error) {
 	case "pi":
 		tools = []string{"bash"}
 	case "claude":
-		tools = []string{"Bash(orch ctx:*)"}
+		tools = []string{"Bash(jbcontext search:*)", "Bash(orch lsp:*)", "Bash(rg:*)", "Bash(fd:*)"}
 	default:
 		return CtxCLI{}, fmt.Errorf("unsupported ctx harness %q", harness)
 	}
