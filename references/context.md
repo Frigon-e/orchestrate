@@ -15,9 +15,11 @@ Agents look code up in this order, most specific tool first:
 5. Read with the native read tool (Pi `read`, Claude `Read`), using offset and
    limit for part of a file.
 
-Independent lookups go as parallel calls in one message. `grep`, a plain `find`
-while `fd` is installed, `cat`, `head`, `tail` and `sed -n` are blocked by the
-tool guard; plain `rg` is allowed. Never re-read what you already read.
+Independent lookups go as parallel calls in one message. `grep` (also `egrep`,
+`fgrep`, `ag`, `git grep`), a plain `find` while `fd` is installed, and a bare
+`cat` or `sed -n` over one file are blocked by the tool guard; `head` and
+`tail` are not, but their output is not a Read, so use Read. Plain `rg` is
+allowed. Never re-read what you already read.
 
 `orch ctx find|sym|text|batch` remain available for scripts and the gate
 planner, and `orch ctx brief` writes task briefs, but agents are no longer

@@ -113,9 +113,10 @@ the reuse checklist: `references/gate.md`. Model roles and connector health:
 3. Exact text: `rg`. 4. File names: `fd`. 5. Inspect source with native Read,
    offset and limit.
 
-Send independent lookups as parallel calls in one message. `grep`, `cat`,
-`head`, `tail` and `sed -n` stay blocked; plain `rg` is allowed, and plain
-`find` only when `fd` is not installed. `orch ctx find|sym|text|batch` remain
+Send independent lookups as parallel calls in one message. `grep` (also
+`egrep`, `fgrep`, `ag`, `git grep`), a bare `cat FILE` and `sed -n` over one
+file stay blocked; plain `rg` is allowed, and plain `find` only when `fd` is
+not installed. `orch ctx find|sym|text|batch` remain
 for scripts and the gate planner but are not what agents are taught; `orch ctx
 brief` still writes task briefs. Check `status` (`ok|empty|partial|failed`),
 `count_kind`, scope and cuts on ctx output: a missing server is not zero

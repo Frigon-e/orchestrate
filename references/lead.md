@@ -85,16 +85,12 @@ crowds out what matters. Route by context as well as by model (`route-work`,
   for file names. Send independent lookups as parallel calls in one message.
   Inspect source with native Read/read after locating it; read files over about 30 KB by
   offset/limit, only the part needed. Give subagents the excerpt or the
-  exact `path:line-range`, not "read task.md". No blanket speed or
-  absence guarantee: check `status`, `count_kind`, scope, exclusions, errors,
-  caps and staleness. Semantic candidates never establish absence; missing
-  servers are not zero callers. Narrow path/glob scope or use native reads
-  when bounded `--full` is insufficient; `--all` still honors gitignore/hidden
-  rules and the tests filter. A failed single lookup or all-failed batch exits
-  1; partial batches exit 0 with `status: partial`. Repo-local servers require
-  user-config `ctx_trust = ["/absolute/repo"]` outside the installed-skill repo;
-  `ctx_deny` wins and read-only mode never runs them. Never re-read a file or
-  spec you already read unless it changed.
+  exact `path:line-range`, not "read task.md". Semantic candidates never
+  establish absence, and a missing language server (`orch lsp` exit 2) is not
+  zero callers. Repo-local servers require user-config
+  `ctx_trust = ["/absolute/repo"]` outside the installed-skill repo; `ctx_deny`
+  wins and read-only mode never runs them. Never re-read a file or spec you
+  already read unless it changed.
 
 **Full context and new work.** When `orch inbox` prints a `context:` line,
 your context is past the lead limit. If the new message starts work that
