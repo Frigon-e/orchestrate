@@ -98,7 +98,7 @@ for (const c of JSON.parse(process.argv[1])) {
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), out }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, cases)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY="}, env...))
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off"}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)

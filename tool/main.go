@@ -36,6 +36,7 @@ Orchestrator:
   orch spec queries <spec> [--package id | --item id#n] [--json] [--generate [--dry-run] [--all]]
   orch test-changed [--base main] [--print] [--run-extra <regex>]   (build, vet and only the tests the branch changed)
   orch ctx status|refresh|watch|find|sym|text|batch|brief   (code facts for any git repo; see references/context.md)
+  orch lookups report [--since 7d] [--repo PATH] [--json]   (what the lookup coach logged: tools, turns, reminders)
   orch quick <id> --owns <file>[,<file>] <request...>
   orch models
   orch triage <id>... [--force] | orch triage report
@@ -101,6 +102,7 @@ var commands = map[string]func(*app, []string) error{
 	"gate":         cmdGate,
 	"bench":        cmdBench,
 	"ctx":          cmdCtx,
+	"lookups":      cmdLookups,
 	"test-changed": cmdTestChanged,
 	"models":       cmdModels,
 	"triage":       cmdTriage,

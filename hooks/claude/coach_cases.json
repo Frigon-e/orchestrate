@@ -1,0 +1,1067 @@
+{
+ "classify": [
+  {
+   "name": "jbcontext search",
+   "bash": "jbcontext search \"Code that saves a card\"",
+   "lookup": {
+    "tool": "jbcontext",
+    "query": "Code that saves a card"
+   }
+  },
+  {
+   "name": "jbcontext flags before the query",
+   "bash": "jbcontext search --limit 5 -p internal \"validate token\"",
+   "lookup": {
+    "tool": "jbcontext",
+    "query": "validate token"
+   }
+  },
+  {
+   "name": "jbcontext after cd",
+   "bash": "cd /repo && jbcontext search \"x\"",
+   "lookup": {
+    "tool": "jbcontext",
+    "query": "x"
+   }
+  },
+  {
+   "name": "jbcontext after var",
+   "bash": "FOO=1 jbcontext search x",
+   "lookup": {
+    "tool": "jbcontext",
+    "query": "x"
+   }
+  },
+  {
+   "name": "jbcontext other subcommand",
+   "bash": "jbcontext start",
+   "lookup": null
+  },
+  {
+   "name": "orch lsp refs",
+   "bash": "orch lsp refs Gateway Foo",
+   "lookup": {
+    "tool": "lsp:refs",
+    "query": "Gateway Foo"
+   }
+  },
+  {
+   "name": "orch lsp by skill path",
+   "bash": "~/.agents/skills/orchestrate/scripts/orch lsp def Name",
+   "lookup": {
+    "tool": "lsp:def",
+    "query": "Name"
+   }
+  },
+  {
+   "name": "orch lsp callers",
+   "bash": "orch lsp callers Gateway --limit 3",
+   "lookup": {
+    "tool": "lsp:callers",
+    "query": "Gateway"
+   }
+  },
+  {
+   "name": "orch ctx text",
+   "bash": "orch ctx text Foo",
+   "lookup": {
+    "tool": "ctx:text",
+    "query": "Foo"
+   }
+  },
+  {
+   "name": "orch other",
+   "bash": "orch status",
+   "lookup": null
+  },
+  {
+   "name": "rg",
+   "bash": "rg -n Gateway internal",
+   "lookup": {
+    "tool": "rg",
+    "query": "Gateway"
+   },
+   "symbol": false
+  },
+  {
+   "name": "rg -e",
+   "bash": "rg -g '*.go' -e Foo",
+   "lookup": {
+    "tool": "rg",
+    "query": "Foo"
+   },
+   "symbol": false
+  },
+  {
+   "name": "rg absolute",
+   "bash": "/opt/homebrew/bin/rg Gateway .",
+   "lookup": {
+    "tool": "rg",
+    "query": "Gateway"
+   },
+   "symbol": false
+  },
+  {
+   "name": "rg first of a pipe",
+   "bash": "rg foo | head -5",
+   "lookup": {
+    "tool": "rg",
+    "query": "foo"
+   },
+   "symbol": false
+  },
+  {
+   "name": "rg after cd",
+   "bash": "cd internal && rg -n Gateway .",
+   "lookup": {
+    "tool": "rg",
+    "query": "Gateway"
+   },
+   "symbol": false
+  },
+  {
+   "name": "fd",
+   "bash": "fd gateway src",
+   "lookup": {
+    "tool": "fd",
+    "query": "gateway"
+   }
+  },
+  {
+   "name": "fd extension only",
+   "bash": "fd -e go",
+   "lookup": {
+    "tool": "fd",
+    "query": ""
+   }
+  },
+  {
+   "name": "rg later stage of a pipe",
+   "bash": "cat x | rg foo",
+   "lookup": null
+  },
+  {
+   "name": "grep later stage of a pipe",
+   "bash": "go test ./... | grep FAIL",
+   "lookup": null
+  },
+  {
+   "name": "grep is not a lookup",
+   "bash": "grep -rn foo .",
+   "lookup": null
+  },
+  {
+   "name": "go test",
+   "bash": "go test ./...",
+   "lookup": null
+  },
+  {
+   "name": "ls",
+   "bash": "ls",
+   "lookup": null
+  },
+  {
+   "name": "echo rg",
+   "bash": "echo \"rg foo\"",
+   "lookup": null
+  },
+  {
+   "name": "second command is not classified",
+   "bash": "ls && rg foo",
+   "lookup": null
+  },
+  {
+   "name": "query truncated to 200",
+   "bash": "rg xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "lookup": {
+    "tool": "rg",
+    "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "symbol": false
+  },
+  {
+   "name": "claude Read whole file",
+   "read": {
+    "path": "/a/b.go"
+   },
+   "lookup": {
+    "tool": "read",
+    "query": "/a/b.go"
+   }
+  },
+  {
+   "name": "claude Read range",
+   "read": {
+    "path": "/a/b.go",
+    "offset": 10,
+    "limit": 50
+   },
+   "lookup": {
+    "tool": "read",
+    "query": "/a/b.go:10-50"
+   }
+  },
+  {
+   "name": "claude Read offset only",
+   "read": {
+    "path": "/a/b.go",
+    "offset": 10
+   },
+   "lookup": {
+    "tool": "read",
+    "query": "/a/b.go:10-"
+   }
+  },
+  {
+   "name": "claude Read limit only",
+   "read": {
+    "path": "/a/b.go",
+    "limit": 50
+   },
+   "lookup": {
+    "tool": "read",
+    "query": "/a/b.go:-50"
+   }
+  },
+  {
+   "name": "claude LSP",
+   "lsp": {
+    "operation": "findReferences",
+    "filePath": "/a/b.go",
+    "line": 3,
+    "character": 4
+   },
+   "harness": "claude",
+   "lookup": {
+    "tool": "lsp:findReferences",
+    "query": "/a/b.go:3"
+   }
+  },
+  {
+   "name": "claude jbcontext mcp",
+   "mcp": {
+    "query": "Code that saves a card"
+   },
+   "harness": "claude",
+   "lookup": {
+    "tool": "jbcontext",
+    "query": "Code that saves a card"
+   }
+  },
+  {
+   "name": "symbol rg '\\bFooBar\\b' internal",
+   "bash": "rg '\\bFooBar\\b' internal",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg \"\\bFooBar\\b\" internal",
+   "bash": "rg \"\\bFooBar\\b\" internal",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg \"\\bGateway\\b\" internal",
+   "bash": "rg \"\\bGateway\\b\" internal",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg 'func NewGateway' -g '*.go'",
+   "bash": "rg 'func NewGateway' -g '*.go'",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg 'NewGateway\\(' src",
+   "bash": "rg 'NewGateway\\(' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg 'NewGateway(' src",
+   "bash": "rg 'NewGateway(' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg 'Gateway(' src",
+   "bash": "rg 'Gateway(' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg 'def parse_token\\(' src",
+   "bash": "rg 'def parse_token\\(' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg -w gateway",
+   "bash": "rg -w gateway",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg -nw Gateway src",
+   "bash": "rg -nw Gateway src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg 'pkg.Name' src",
+   "bash": "rg 'pkg.Name' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg parse_token src",
+   "bash": "rg parse_token src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg -e FooBar",
+   "bash": "rg -e FooBar",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg gateway",
+   "bash": "rg gateway",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg Gateway",
+   "bash": "rg Gateway",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg 'handle request'",
+   "bash": "rg 'handle request'",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg 'Foo|Bar' src",
+   "bash": "rg 'Foo|Bar' src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg DatabaseURL README.md",
+   "bash": "rg DatabaseURL README.md",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg -g '*.md' FooBar",
+   "bash": "rg -g '*.md' FooBar",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg -t md FooBar",
+   "bash": "rg -t md FooBar",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg -n FooBar docs/spec.md notes.txt config.toml",
+   "bash": "rg -n FooBar docs/spec.md notes.txt config.toml",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  },
+  {
+   "name": "symbol rg FooBar -g '*.go' -g '*.md'",
+   "bash": "rg FooBar -g '*.go' -g '*.md'",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg FooBar docs/spec.md src",
+   "bash": "rg FooBar docs/spec.md src",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": true
+  },
+  {
+   "name": "symbol rg FooBar -g '*.{yaml,yml}'",
+   "bash": "rg FooBar -g '*.{yaml,yml}'",
+   "lookup": {
+    "tool": "rg",
+    "query": "*"
+   },
+   "symbol": false
+  }
+ ],
+ "sequences": [
+  {
+   "name": "first rg before any jbcontext gets concept-first, then jbcontext follows it",
+   "turns": [
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"a b\""
+     }
+    ]
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "concept-first"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     true
+    ]
+   ]
+  },
+  {
+   "name": "concept-first not followed",
+   "turns": [
+    [
+     {
+      "bash": "fd gateway"
+     }
+    ],
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "concept-first"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "concept-first is followed only by jbcontext, not lsp",
+   "turns": [
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ],
+    [
+     {
+      "bash": "orch lsp def Gateway"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "concept-first"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "no concept-first after jbcontext",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "no concept-first after lsp",
+   "turns": [
+    [
+     {
+      "bash": "orch lsp def A"
+     },
+     {
+      "bash": "orch lsp def B"
+     }
+    ],
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "only the first rg or fd of the session can fire concept-first",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg gateway"
+     }
+    ],
+    [
+     {
+      "bash": "rg other"
+     },
+     {
+      "bash": "fd x"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a later rg after non-search lookups still gets concept-first once",
+   "turns": [
+    [
+     {
+      "read": {
+       "path": "/a.go"
+      }
+     },
+     {
+      "read": {
+       "path": "/b.go"
+      }
+     }
+    ],
+    [
+     {
+      "bash": "rg -n gateway src"
+     },
+     {
+      "bash": "rg -n other src"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     1,
+     0,
+     "concept-first"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     1,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "symbol-via-lsp after jbcontext, followed by lsp",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg '\\bFooBar\\b' src"
+     }
+    ],
+    [
+     {
+      "bash": "orch lsp refs FooBar"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     1,
+     0,
+     "symbol-via-lsp"
+    ]
+   ],
+   "followed": [
+    [
+     2,
+     0,
+     true
+    ]
+   ]
+  },
+  {
+   "name": "symbol-via-lsp not followed",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg parse_token src"
+     }
+    ],
+    [
+     {
+      "bash": "rg other_thing src"
+     },
+     {
+      "bash": "rg more src"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     1,
+     0,
+     "symbol-via-lsp"
+    ]
+   ],
+   "followed": [
+    [
+     2,
+     0,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "symbol-via-lsp once per session",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg FooBar src"
+     },
+     {
+      "bash": "rg BazQux src"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     1,
+     0,
+     "symbol-via-lsp"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     1,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "symbol rg in docs only is quiet",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "rg FooBar -g '*.md'"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "batch-lookups after two single-lookup turns",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"c\""
+     }
+    ]
+   ],
+   "expect": [
+    [
+     2,
+     0,
+     "batch-lookups"
+    ]
+   ]
+  },
+  {
+   "name": "batch-lookups once per session",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"c\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"d\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"e\""
+     }
+    ]
+   ],
+   "expect": [
+    [
+     2,
+     0,
+     "batch-lookups"
+    ]
+   ]
+  },
+  {
+   "name": "a turn with two lookups breaks the batch run",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"b\""
+     },
+     {
+      "bash": "jbcontext search \"c\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"d\""
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "one lookup turn followed by a long turn is quiet",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"c\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"d\""
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a turn without a lookup between breaks the run",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     }
+    ],
+    [
+     {
+      "bash": "go test ./..."
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"b\""
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"c\""
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "read-batch after two single-read turns",
+   "turns": [
+    [
+     {
+      "read": {
+       "path": "/a.go",
+       "offset": 1,
+       "limit": 20
+      }
+     }
+    ],
+    [
+     {
+      "read": {
+       "path": "/b.go",
+       "offset": 1,
+       "limit": 20
+      }
+     }
+    ],
+    [
+     {
+      "read": {
+       "path": "/c.go",
+       "offset": 1,
+       "limit": 20
+      }
+     }
+    ]
+   ],
+   "expect": [
+    [
+     2,
+     0,
+     "read-batch"
+    ]
+   ]
+  },
+  {
+   "name": "read-batch needs a read and no other lookup",
+   "turns": [
+    [
+     {
+      "read": {
+       "path": "/a.go"
+      }
+     },
+     {
+      "read": {
+       "path": "/x.go"
+      }
+     }
+    ],
+    [
+     {
+      "read": {
+       "path": "/b.go"
+      }
+     }
+    ],
+    [
+     {
+      "read": {
+       "path": "/c.go"
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "reads mixed with a search do not trigger read-batch",
+   "turns": [
+    [
+     {
+      "bash": "jbcontext search \"a\""
+     },
+     {
+      "read": {
+       "path": "/a.go"
+      }
+     }
+    ],
+    [
+     {
+      "bash": "jbcontext search \"b\""
+     },
+     {
+      "read": {
+       "path": "/b.go"
+      }
+     }
+    ],
+    [
+     {
+      "read": {
+       "path": "/c.go"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    [
+     2,
+     0,
+     "batch-lookups"
+    ]
+   ]
+  },
+  {
+   "name": "non-lookups are ignored",
+   "turns": [
+    [
+     {
+      "bash": "go test ./..."
+     }
+    ],
+    [
+     {
+      "bash": "ls"
+     }
+    ],
+    [
+     {
+      "bash": "rg x | head"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     2,
+     0,
+     "concept-first"
+    ]
+   ]
+  }
+ ]
+}

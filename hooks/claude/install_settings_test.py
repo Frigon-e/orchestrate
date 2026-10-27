@@ -72,6 +72,14 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(added), len(FRAGMENT_COMMANDS) - 1)
         self.assertEqual(inst.missing(settings, FRAGMENT), [])
 
+    def test_lookup_coach_is_registered_after_every_result_event(self):
+        settings = {}
+        inst.merge(settings, FRAGMENT)
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            groups = settings["hooks"][event]
+            self.assertEqual([g["matcher"] for g in groups], ["Bash|Read|LSP|mcp__jbcontext__.*"])
+            self.assertTrue(groups[0]["hooks"][0]["command"].endswith('/hooks/claude/lookup-coach.sh"'))
+
     def test_timeout_is_kept(self):
         settings = {}
         inst.merge(settings, FRAGMENT)

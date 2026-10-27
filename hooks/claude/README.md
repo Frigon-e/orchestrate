@@ -54,6 +54,31 @@ A blocked command stays blocked on every retry. Two switches are the human escap
 
 `prefer-read-tool.sh` stays. It is a non-blocking reminder for the wider reader set (`less`, `more`, `bat`, `nl`, and `sed` without `-n` as well), so it complements `deny-cat-head-tail.sh`; it is not replaced by it. Register both if you want the block and the reminder.
 
+## Lookup coach
+
+A non-blocking coach, in both harnesses, that logs every lookup and reminds the worker when it uses the wrong tool or spends one turn per lookup. It never blocks and always exits 0; any error fails open silently. `lookup-coach.sh` runs `toolguard.py coach` as a PostToolUse and PostToolUseFailure hook (matcher `Bash|Read|LSP|mcp__jbcontext__.*`). The pi side is the same file as the guard, `tool/pi_ctx_reminder.ts`, which logs on `tool_execution_end` and appends a reminder to the tool result; it stays silent in the ctx-only gate shell.
+
+What counts as a lookup is decided by `coach_cases.json`, shared by both implementations: the first command of a shell line (after `VAR=x` and a leading `cd DIR &&`) is `jbcontext search` (`jbcontext`), `orch lsp <verb>` (`lsp:<verb>`), `orch ctx <sub>` (`ctx:<sub>`), `rg` or `fd`; anything else, and an `rg` or `grep` later in a pipe, is not. Claude's `Read` and pi's `read` are `read` (query `path:offset-limit`), Claude's `LSP` is `lsp:<operation>`, and `mcp__jbcontext__*` is `jbcontext`.
+
+**Log.** One JSON line per lookup in `$ORCH_TOOL_GUARD_STATE_DIR/lookups.jsonl` (default `~/.local/state/orchestrate/lookups.jsonl`), written with one call: `ts`, `harness`, `session`, `repo`, `turn`, `tool`, `query` (200 characters at most), `ok`, `empty`, `bytes`, `duration_ms`, `reminder` and `followed`. `rg`, `fd` and `orch lsp` exiting 1 with no output are `ok` and `empty`; a `jbcontext search` that prints "No relevant results found" is `empty`. A turn is the id of the assistant message that made the call (Claude: found through `transcript_path` and `tool_use_id`, in the last 512 KB of the transcript; pi: the `turn_start` index). Per-session state lives in `<state dir>/coach/<session_id>.json`, locked with `flock` because parallel calls fire their hooks at once.
+
+**Reminders**, each kind at most once per session, text prefixed `orch lookup coach: `:
+
+| Kind | Fires when |
+|---|---|
+| `concept-first` | the session's first `rg` or `fd` comes before any `jbcontext` or `orch lsp` call |
+| `symbol-via-lsp` | an `rg` pattern is a symbol (CamelCase, snake_case, `pkg.Name`, or any identifier with `-w`, after stripping `\b`, `\<`, `\>`, a leading `func `/`def `/`class `/`type `/`interface ` and a trailing `(`), unless every `-g`/`-t`/path targets md, txt, json, yaml, yml or toml |
+| `batch-lookups` | on the first lookup of a new turn, the previous two consecutive turns each held exactly one non-read lookup |
+| `read-batch` | on the first lookup of a new turn, the previous two consecutive turns each held exactly one read and no other lookup |
+
+`followed` is set on the first lookup after a `concept-first` (true only for `jbcontext`) or `symbol-via-lsp` (true only for `lsp:*`) reminder; the batch reminders leave it null. A reminder reaches Claude as `additionalContext` on the hook's own event.
+
+**Switches.** `ORCH_LOOKUP_COACH=off` disables the reminders, `ORCH_LOOKUP_LOG=off` the log, and `ORCH_TOOL_GUARD=off` both.
+
+**Report.** `orch lookups report [--since 7d] [--repo PATH] [--json]` reads the log: per harness, sessions, lookups, lookups per turn, the share of sessions whose first search was jbcontext or lsp, `rg` calls with a symbol pattern, the empty and error rate per tool, reminders fired and followed, and the same read repeated in a session.
+
+Tests: `python3 hooks/claude/coach_test.py` (real hook, temp state dir, synthetic transcript), `cd tool && go test -run 'CtxReminder|Lookups' .` (the pi extension in node, and the report).
+
 ## Tests
 
 `toolguard_cases.json` is one decision table shared with the pi guard: every case names the command, the PATH situation (`fd-rg` with both installed, `rg` only, `fd` only, or `none`) and the rule that must block it, or no rule when it is allowed. Its `readCases` table covers `deny-big-read` (file name, size in bytes, extra `Read` arguments, block or allow; the test makes the files in a temp directory, and pi's `read` tool runs the same table). Its `builtinCases` table covers pi's own `grep` and `find` tools, which are blocked while `rg` (for grep) or `fd` (for find) is on PATH and allowed for a path outside the session's repository. `toolguard_test.py` runs every case through the real shell scripts with only stub tools on PATH, plus `bash -n`/`shellcheck`, the two switches, the non-Bash and broken-stdin paths, the reasons byte for byte, the big-read hook with its switches and fail-open paths, and the task's required examples:

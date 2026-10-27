@@ -17,7 +17,8 @@
 // deny-big-read refuses pi's read of a file over 30 KB when it has no offset and
 // no limit, whatever is installed; it names a ranged read and how to get the lines.
 import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, mkdirSync, openSync, realpathSync, statSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const marker = "Lookup order:";
@@ -97,7 +98,7 @@ function installed(): tools {
 // Split a command line on unquoted separators, dropping quoted text, so an
 // argument that merely contains the word grep is not a search. Each word also
 // records whether it came from a quote, so a quoted word is never a command.
-function segments(command: string): segment[] {
+function segments(command: string, dqRaw = false): segment[] {
 	const out: segment[] = [];
 	let words: word[] = [];
 	let text = "";
@@ -129,6 +130,8 @@ function segments(command: string): segment[] {
 			quoted = true;
 			if (escaped) {
 				escaped = false;
+				// bash keeps the backslash before any character but these three
+				if (dqRaw && !'"\\$`'.includes(ch)) text += "\\";
 				text += ch;
 			} else if (quote === '"' && ch === "\\") escaped = true;
 			else if (ch === quote) quote = "";
@@ -574,6 +577,242 @@ function activeBuiltinRules(): builtinRule[] {
 	return builtinRules.filter((rule) => !skip.has(rule.id) && !skip.has(rule.name) && !skip.has(rule.group));
 }
 
+// ---------------------------------------------------------------------------
+// Lookup coach: a non-blocking log of every lookup (jbcontext, orch lsp, rg, fd,
+// read) and four reminders. hooks/claude/toolguard.py is the Claude side; both
+// follow hooks/claude/coach_cases.json.
+// ---------------------------------------------------------------------------
+const coachPrefix = "orch lookup coach: ";
+const coachText: Record<string, string> = {
+	"concept-first":
+		'Location unknown? Ask jbcontext first: jbcontext search "<one behavior>", one concept per query, several queries in one message.',
+	"symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
+	"batch-lookups": "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
+	"read-batch": "Read the ranges you already know as parallel reads in one message.",
+};
+const queryMax = 200;
+const docExtensions = new Set(["md", "txt", "json", "yaml", "yml", "toml"]);
+const docTypes = new Set([...docExtensions, "markdown"]);
+const rgValue = new Set([...grepValue, "--iglob", "-T", "--type-not", "-r", "--replace", "-d", "--max-depth", "-M", "--max-columns"]);
+const fdValue = new Set([
+	"-e", "-E", "-t", "-d", "-x", "-X", "-S", "-c", "-j", "--extension", "--exclude", "--type", "--max-depth",
+	"--size", "--changed-within", "--changed-before", "--owner", "--color", "--threads", "--base-directory",
+]);
+const jbValue = new Set(["--project-path", "--git-remote-url", "--limit", "--revision", "-p", "--path-filter", "--branch"]);
+const lspValue = new Set(["--limit"]);
+const identifier = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+type lookup = { tool: string; query: string; symbol: boolean };
+
+// The words of an argument list that are neither flags nor flag values.
+function positionals(args: string[], valueFlags: Set<string>): string[] {
+	const out: string[] = [];
+	for (let at = 0; at < args.length; at += 1) {
+		const arg = args[at];
+		if (arg === "--") {
+			out.push(...args.slice(at + 1));
+			break;
+		}
+		if (arg.startsWith("-") && arg !== "-") {
+			if (valueFlags.has(arg)) at += 1;
+			continue;
+		}
+		out.push(arg);
+	}
+	return out;
+}
+
+function rgParts(args: string[]) {
+	let pattern: string | undefined;
+	const globs: string[] = [];
+	const types: string[] = [];
+	let word = false;
+	let free: string[] = [];
+	for (let at = 0; at < args.length; at += 1) {
+		const arg = args[at];
+		const next = args[at + 1] ?? "";
+		if (arg === "--") {
+			free = free.concat(args.slice(at + 1));
+			break;
+		}
+		if (arg.startsWith("-") && arg !== "-") {
+			if (arg === "-e" || arg === "--regexp") {
+				pattern ??= next;
+				at += 1;
+				continue;
+			}
+			if (arg === "-g" || arg === "--glob" || arg === "--iglob") globs.push(next);
+			else if (arg === "-t" || arg === "--type") types.push(next);
+			else if (arg.startsWith("--glob=") || arg.startsWith("--iglob=")) globs.push(arg.slice(arg.indexOf("=") + 1));
+			else if (arg.startsWith("--type=")) types.push(arg.slice(arg.indexOf("=") + 1));
+			else if (arg === "--word-regexp" || (/^-[A-Za-z]+$/.test(arg) && arg.slice(1).includes("w"))) word = true;
+			if (rgValue.has(arg)) at += 1;
+			continue;
+		}
+		free.push(arg);
+	}
+	if (pattern === undefined && free.length) {
+		pattern = free[0];
+		free = free.slice(1);
+	}
+	return { pattern: pattern ?? "", paths: free, globs, types, word };
+}
+
+function docTarget(kind: string, value: string): boolean {
+	value = value.trim();
+	if (kind === "type") return docTypes.has(value);
+	const name = value.split("/").pop() ?? "";
+	if (!name.includes(".")) return false;
+	const ext = value.slice(value.lastIndexOf(".") + 1).replace(/^\{|\}$/g, "");
+	return ext !== "" && ext.split(",").every((part) => docExtensions.has(part));
+}
+
+// An rg whose pattern names a symbol, so orch lsp would answer it better.
+function symbolRg(args: string[]): boolean {
+	const { pattern, paths, globs, types, word } = rgParts(args);
+	const targets: [string, string][] = [
+		...globs.map((g): [string, string] => ["glob", g]),
+		...types.map((t): [string, string] => ["type", t]),
+		...paths.map((p): [string, string] => ["path", p]),
+	];
+	if (targets.length && targets.every(([kind, value]) => docTarget(kind, value))) return false;
+	let text = pattern.replaceAll("\\b", "").replaceAll("\\<", "").replaceAll("\\>", "");
+	text = text.replace(/^(func|def|class|type|interface) /, "").replace(/\\?\($/, "");
+	if (!identifier.test(text)) return false;
+	return word || text.includes(".") || text.includes("_") || /[A-Z]/.test(text.slice(1));
+}
+
+// The lookup the first command of a shell line is, or undefined.
+function lookupShell(line: string): lookup | undefined {
+	let list = segments(line, true);
+	if (list.length && command(list[0]).name === "cd") list = list.slice(1);
+	if (!list.length) return undefined;
+	const { name, args } = command(list[0]);
+	if (name === "jbcontext" && args[0] === "search")
+		return { tool: "jbcontext", query: positionals(args.slice(1), jbValue)[0] ?? "", symbol: false };
+	if (name === "orch" && args.length >= 2 && args[0] === "lsp" && !args[1].startsWith("-"))
+		return { tool: `lsp:${args[1]}`, query: positionals(args.slice(2), lspValue).join(" "), symbol: false };
+	if (name === "orch" && args.length >= 2 && args[0] === "ctx" && !args[1].startsWith("-"))
+		return { tool: `ctx:${args[1]}`, query: args.slice(2).filter((w) => !w.startsWith("-")).join(" "), symbol: false };
+	if (name === "rg") return { tool: "rg", query: rgParts(args).pattern, symbol: symbolRg(args) };
+	if (name === "fd") return { tool: "fd", query: positionals(args, fdValue)[0] ?? "", symbol: false };
+	return undefined;
+}
+
+function readQuery(path: string, offset: unknown, limit: unknown): string {
+	const blank = (v: unknown) => v === undefined || v === null || v === "";
+	if (blank(offset) && blank(limit)) return path;
+	return `${path}:${blank(offset) ? "" : offset}-${blank(limit) ? "" : limit}`;
+}
+
+function lookupOf(toolName: string, input: Record<string, unknown>): lookup | undefined {
+	if (toolName === "bash") return lookupShell(String(input.command ?? ""));
+	if (toolName === "read") {
+		const path = input.path;
+		if (typeof path !== "string" || !path) return undefined;
+		return { tool: "read", query: readQuery(path, input.offset, input.limit), symbol: false };
+	}
+	return undefined;
+}
+
+type coachState = {
+	fired: Set<string>;
+	firstSearchDone: boolean;
+	conceptSeen: boolean;
+	pending: string;
+	turns: { id: number; nr: number; rd: number }[];
+};
+
+// Advance the session state for one lookup; returns the reminder fired on this
+// call (or "") and whether it followed the previous reminder (null when none).
+function coachStep(state: coachState, found: lookup, turn: number | null, reminders: boolean) {
+	let followed: boolean | null = null;
+	if (reminders && state.pending) {
+		followed = state.pending === "concept-first" ? found.tool === "jbcontext" : found.tool.startsWith("lsp:");
+		state.pending = "";
+	}
+	const last = state.turns[state.turns.length - 1];
+	const newTurn = turn !== null && !(last && last.id === turn);
+	const candidates: string[] = [];
+	if ((found.tool === "rg" || found.tool === "fd") && !state.firstSearchDone) {
+		state.firstSearchDone = true;
+		if (!state.conceptSeen) candidates.push("concept-first");
+	}
+	if (found.tool === "jbcontext" || found.tool.startsWith("lsp:")) state.conceptSeen = true;
+	if (found.tool === "rg" && found.symbol) candidates.push("symbol-via-lsp");
+	if (newTurn && turn !== null && state.turns.length >= 2) {
+		const [a, b] = state.turns.slice(-2);
+		if (b.id === a.id + 1 && turn === b.id + 1) {
+			if (a.nr === 1 && b.nr === 1) candidates.push("batch-lookups");
+			if (a.rd === 1 && b.rd === 1 && a.nr === 0 && b.nr === 0) candidates.push("read-batch");
+		}
+	}
+	let reminder = "";
+	if (reminders) {
+		reminder = candidates.find((kind) => !state.fired.has(kind)) ?? "";
+		if (reminder) state.fired.add(reminder);
+		if (reminder === "concept-first" || reminder === "symbol-via-lsp") state.pending = reminder;
+	}
+	if (turn !== null) {
+		if (newTurn) {
+			state.turns.push({ id: turn, nr: 0, rd: 0 });
+			state.turns = state.turns.slice(-3);
+		}
+		state.turns[state.turns.length - 1][found.tool === "read" ? "rd" : "nr"] += 1;
+	}
+	return { reminder, followed };
+}
+
+// rg, fd and orch lsp exit 1 with no output when nothing matched; pi reports that
+// as an error result ending in "exited with code 1".
+function lookupOutcome(found: lookup, text: string, isError: boolean) {
+	if (isError) {
+		const body = text.replace(/\n*(Command )?exited with code 1\s*$/, "");
+		const clean = body !== text && body.trim() === "";
+		const quiet = found.tool === "rg" || found.tool === "fd" || found.tool.startsWith("lsp:");
+		return clean && quiet ? { ok: true, empty: true } : { ok: false, empty: false };
+	}
+	return { ok: true, empty: found.tool === "jbcontext" && text.includes("No relevant results found") };
+}
+
+type lookupRecord = {
+	session: string;
+	turn: number | null;
+	found: lookup;
+	ok: boolean;
+	empty: boolean;
+	bytes: number;
+	reminder: string;
+	followed: boolean | null;
+};
+
+// One write call per line, so concurrent sessions never interleave a record.
+function appendLookup(record: lookupRecord, durationMs: number | null) {
+	const dir = process.env.ORCH_TOOL_GUARD_STATE_DIR || join(homedir(), ".local", "state", "orchestrate");
+	mkdirSync(dir, { recursive: true });
+	const line = {
+		ts: new Date().toISOString(),
+		harness: "pi",
+		session: record.session,
+		repo: repositoryRoot() || process.cwd(),
+		turn: record.turn,
+		tool: record.found.tool,
+		query: record.found.query.slice(0, queryMax),
+		ok: record.ok,
+		empty: record.empty,
+		bytes: record.bytes,
+		duration_ms: durationMs,
+		reminder: record.reminder || null,
+		followed: record.followed,
+	};
+	const fd = openSync(join(dir, "lookups.jsonl"), "a");
+	try {
+		writeSync(fd, JSON.stringify(line) + "\n");
+	} finally {
+		closeSync(fd);
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	// The ctx-only gate shell already refuses everything but one orch ctx call,
 	// and has its own guard, so this one has to stay silent there.
@@ -589,16 +828,80 @@ export default function (pi: ExtensionAPI) {
 	const giveWay = `\nBlocked 3 times: use the replacement above; this guard does not give way.`;
 	let blocksInRow = 0;
 
-	let remindersByResult = false;
-	if (ready.orch) {
+	// The lookup coach: ORCH_LOOKUP_COACH=off silences its reminders, ORCH_LOOKUP_LOG=off
+	// its log, and ORCH_TOOL_GUARD=off both. pi runs one process per session, so the
+	// state lives here. A record is written once both the result (which knows the
+	// reminder) and tool_execution_end (which knows the duration) have been seen.
+	const coachOn = guard && process.env.ORCH_LOOKUP_COACH !== "off";
+	const logOn = guard && process.env.ORCH_LOOKUP_LOG !== "off";
+	const coaching = coachOn || logOn;
+	const state: coachState = { fired: new Set(), firstSearchDone: false, conceptSeen: false, pending: "", turns: [] };
+	let turn: number | null = null;
+	const open = new Map<string, { record?: lookupRecord; ended?: boolean; durationMs?: number | null }>();
+	const settle = (id: string, part: { record?: lookupRecord; ended?: boolean; durationMs?: number | null }) => {
 		try {
-			pi.on("tool_result", async (event: ToolResultEvent) => {
-				if (!isSearch(event.toolName, event.input)) return undefined;
-				// A search outside the repository is not guarded, so it gets no note.
-				if (!insideRepository(String(event.input.path ?? ""))) return undefined;
+			const entry = { ...open.get(id), ...part };
+			if (entry.record && entry.ended) {
+				open.delete(id);
+				appendLookup(entry.record, entry.durationMs ?? null);
+				return;
+			}
+			open.set(id, entry);
+			if (open.size > 200) open.delete(open.keys().next().value as string);
+		} catch {
+			// The log must never disturb a session.
+		}
+	};
+	const coachResult = (event: ToolResultEvent, ctx: unknown): string => {
+		if (!coaching) return "";
+		try {
+			const found = lookupOf(event.toolName, event.input);
+			if (!found) return "";
+			const text = (event.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
+			const { reminder: fired, followed } = coachStep(state, found, turn, coachOn);
+			const manager = (ctx as { sessionManager?: { getSessionId?: () => string } } | undefined)?.sessionManager;
+			const session = manager?.getSessionId?.() || `pi-${process.pid}`;
+			const record = { session, turn, found, ...lookupOutcome(found, text, event.isError), bytes: Buffer.byteLength(text), reminder: fired, followed };
+			if (logOn) settle(event.toolCallId, { record });
+			return fired;
+		} catch {
+			return "";
+		}
+	};
+	if (coaching) {
+		try {
+			pi.on("turn_start", async (event: { turnIndex: number }) => {
+				turn = event.turnIndex;
+			});
+			if (logOn) {
+				pi.on("tool_execution_end", async (event: { toolCallId: string; durationMs?: number }) => {
+					settle(event.toolCallId, { ended: true, durationMs: event.durationMs ?? null });
+				});
+			}
+		} catch {
+			// An older pi without these events: lookups still log, with a null turn.
+		}
+	}
+
+	let remindersByResult = false;
+	if (ready.orch || coaching) {
+		try {
+			pi.on("tool_result", async (event: ToolResultEvent, ctx?: unknown) => {
 				const content = event.content ?? [];
-				if (content.some((part) => part.type === "text" && part.text.includes(marker))) return undefined;
-				const next = [...content, { type: "text" as const, text: reminder }];
+				const extra: { type: "text"; text: string }[] = [];
+				// A search outside the repository is not guarded, so it gets no note.
+				if (
+					ready.orch &&
+					isSearch(event.toolName, event.input) &&
+					insideRepository(String(event.input.path ?? "")) &&
+					!content.some((part) => part.type === "text" && part.text.includes(marker))
+				) {
+					extra.push({ type: "text", text: reminder });
+				}
+				const coached = coachResult(event, ctx);
+				if (coached) extra.push({ type: "text", text: coachPrefix + coachText[coached] });
+				if (!extra.length) return undefined;
+				const next = [...content, ...extra];
 				return event.structuredContent === undefined
 					? { content: next }
 					: { content: next, structuredContent: event.structuredContent };

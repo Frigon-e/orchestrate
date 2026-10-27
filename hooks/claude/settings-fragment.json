@@ -16,6 +16,22 @@
           { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-big-read.sh\"", "timeout": 5 }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+        ]
+      }
     ]
   }
 }
