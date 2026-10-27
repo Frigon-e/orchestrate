@@ -1068,7 +1068,7 @@ func cmdGate(a *app, args []string) (retErr error) {
 	onlyF := fs.String("only", "", "experiment: run only these group passes (comma-separated keys); needs --experiment")
 	expF := fs.String("experiment", "", "experiment: write everything under the gate dir's experiments/<name>/ and leave the real gate record alone")
 	benchSuiteF := fs.String("bench-suite", "", "durable benchmark suite for experiment runs (default: user bench_suite, or none)")
-	lookupTool := fs.String("lookup-tool", "on", "on or off: read-only lookup CLI (jbcontext search, orch lsp, rg, fd) in gate agents (default on)")
+	lookupTool := fs.String("lookup-tool", "on", "on or off: read-only lookup CLI (jbcontext search, orch lsp, rg, fd) in gate agents")
 	lookupShell := fs.String("lookup-shell", "restricted", "open or restricted: pi with lookup-tool on defaults to read plus a shell limited to the lookup commands; open opts out; ignored by Claude and with lookup-tool off")
 	runnerF := fs.String("runner", "", "ordered harness:model[:effort],... choices for this run")
 	degraded := fs.Bool("degraded", false, "allow degraded role choices approved by the user")
