@@ -22,6 +22,11 @@ import (
 // The test binary doubles as a fake `herdr` when ORCH_FAKE_HERDR names its
 // state file, so the commands run against a recorded, scriptable Herdr.
 func TestMain(m *testing.M) {
+	// A fake multi-call binary: records the name it was started under.
+	if path := os.Getenv("ORCH_FAKE_ARGV0"); path != "" {
+		_ = os.WriteFile(path, []byte(os.Args[0]), 0o600)
+		os.Exit(0)
+	}
 	if path := os.Getenv("ORCH_FAKE_HERDR"); path != "" {
 		os.Exit(fakeHerdr(path, os.Args[1:]))
 	}

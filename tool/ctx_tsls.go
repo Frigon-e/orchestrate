@@ -257,6 +257,9 @@ func startLSP(bin string, dir string, args ...string) (*lspClient, error) {
 		return nil, err
 	}
 	cmd := exec.Command(resolved, args...)
+	// Run the checked file, but under the name it was found by: a multi-call
+	// shim such as vite-plus `vp` acts as tsc only when argv[0] says tsc.
+	cmd.Args[0] = bin
 	cmd.Dir = dir
 	in, err := cmd.StdinPipe()
 	if err != nil {

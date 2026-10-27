@@ -201,6 +201,35 @@ func TestCtxServerOverridesPATHAndSymlinks(t *testing.T) {
 	}
 }
 
+// A shim found as tsc that links to a multi-call binary (vite-plus vp) must
+// start under the name tsc, or it runs as something else and exits.
+func TestStartLSPKeepsTheNameItWasFoundBy(t *testing.T) {
+	c := newCtxHarness(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(t.TempDir(), "tsc")
+	if err := os.Symlink(self, shim); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "argv0")
+	t.Setenv("ORCH_FAKE_ARGV0", marker)
+	client, err := startLSP(shim, c.repo, "--lsp", "--stdio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-client.dead
+	werr := client.cmd.Wait()
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("%v (server: %v %v)", err, client.cmd.Args, werr)
+	}
+	if filepath.Base(string(got)) != "tsc" {
+		t.Fatalf("started as %q, want the name tsc", got)
+	}
+}
+
 func TestCtxTrustInstalledRepositoryOnly(t *testing.T) {
 	c := newCtxHarness(t)
 	t.Setenv("ORCH_SKILL_DIR", filepath.Join(c.repo, "skills", "orchestrate"))
