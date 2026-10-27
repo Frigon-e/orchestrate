@@ -210,7 +210,17 @@ func claudePassArgs(choice profile, p gatePass) []string {
 		}
 	}
 	// Exclude repository memories without --bare, which disables subscription auth.
-	return append(args, "--settings", `{"claudeMdExcludes":["**"]}`)
+	settings := map[string]any{"claudeMdExcludes": []string{"**"}}
+	if !p.noTools && p.cli.Hook != "" {
+		// Prefix allow rules cannot refuse rg --pre or fd -x, so every Bash call goes
+		// through the same check pi's shell uses. It adds to the user's own hooks.
+		settings["hooks"] = map[string]any{"PreToolUse": []any{map[string]any{
+			"matcher": "Bash",
+			"hooks":   []any{map[string]any{"type": "command", "command": p.cli.Hook}},
+		}}}
+	}
+	b, _ := json.Marshal(settings)
+	return append(args, "--settings", string(b))
 }
 
 // paneLaunchScript is the sh script a pane pass runs: it exports env and

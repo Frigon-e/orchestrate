@@ -21,51 +21,7 @@ func TestCtxOnlyExtensionAllowsOnlyOneLookupCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{
-		`jbcontext search "Code that saves a payment method"`,
-		`jbcontext search "Code that verifies a webhook signature" --limit 5`,
-		`orch lsp def Stripe.StartCheckout Gateway`,
-		`orch lsp refs StartCheckout --limit 10`,
-		`orch lsp hover pay/pay.go:7:18`,
-		`rg -n -w StartCheckout internal`,
-		`rg -n 'a|b(c)$' -g '*.go'`,
-		`rg -n "needle" -g "!vendor/**" -t go`,
-		`fd pay internal`,
-		`fd -e go -E '*_test.go' pay`,
-		`ls internal`,
-		`wc -l internal/pay.go`,
-	}
-	blocked := []string{
-		`grep -rn Gateway internal`,
-		`cat internal/pay.go`,
-		`cd internal && rg x`,
-		`rg x | head -3`,
-		`rg x; ls`,
-		`rg x > out.txt`,
-		`rg x && rm -r .`,
-		`rg "$(id)"`,
-		"rg \"`id`\"",
-		`rg x *.go`,
-		`ls *.go`,
-		`fd pay [a-z]*`,
-		`rg --pre cat x`,
-		`rg --pre=cat x`,
-		`rg --pre-glob '*.gz' x`,
-		`rg --pre-glob='*.gz' x`,
-		`rg --hostname-bin=hostname x`,
-		`fd -x rm`,
-		`fd pay -X rm`,
-		`fd --exec rm pay`,
-		`fd --exec=rm pay`,
-		`fd --exec-batch rm pay`,
-		`fd -Hx echo`,
-		`orch ctx text x`,
-		"orch lsp def X\nls",
-		`jbcontext index`,
-		`jbcontext searchx`,
-		`rg "unterminated`,
-		`rgx foo`,
-	}
+	allowed, blocked := ctxOnlyCases(t)
 	script := `
 import ext from ` + string(mustJSON(t, ext)) + `;
 let handler, start, active;
@@ -287,6 +243,94 @@ func TestGateCtxOnlyExtensionLoadFailsClosed(t *testing.T) {
 				t.Fatal("failed guard exposed shell at startup: " + calls)
 			}
 		})
+	}
+}
+
+// ctxOnlyCases is the case table shared by the pi extension (node) and orch ctx-only-check.
+func ctxOnlyCases(t *testing.T) (allowed, blocked []string) {
+	t.Helper()
+	var c struct{ Allowed, Blocked []string }
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "ctx_only_cases.json")), &c); err != nil {
+		t.Fatal(err)
+	}
+	return c.Allowed, c.Blocked
+}
+
+func TestCtxOnlyRefusalMatchesTheSharedCaseTable(t *testing.T) {
+	allowed, blocked := ctxOnlyCases(t)
+	for _, c := range allowed {
+		if why := ctxOnlyRefusal(c); why != "" {
+			t.Errorf("allowed call %q refused: %s", c, why)
+		}
+	}
+	for _, c := range blocked {
+		if ctxOnlyRefusal(c) == "" {
+			t.Errorf("did not refuse %q", c)
+		}
+	}
+}
+
+func TestCtxOnlyCheckHookExitCodes(t *testing.T) {
+	run := func(payload string) (int, string) {
+		var out strings.Builder
+		a := &app{stdin: strings.NewReader(payload), out: &out, errw: &out}
+		return a.run([]string{"ctx-only-check"}), out.String()
+	}
+	for _, c := range []struct {
+		name, payload string
+		code          int
+		want          string
+	}{
+		{"one lookup", `{"tool_name":"Bash","tool_input":{"command":"rg -n -w Save internal"}}`, 0, ""},
+		{"exec flag", `{"tool_name":"Bash","tool_input":{"command":"rg --pre=./evil.sh x"}}`, 2, "rg --pre runs another program"},
+		{"fd exec", `{"tool_name":"Bash","tool_input":{"command":"fd -Hx rm"}}`, 2, "fd -Hx runs another program"},
+		{"compound", `{"tool_name":"Bash","tool_input":{"command":"rg x; rm -rf y"}}`, 2, "Blocked: no unquoted"},
+		{"other tool", `{"tool_name":"Read","tool_input":{"file_path":"a.go"}}`, 0, ""},
+		{"bad json", `not json`, 2, "could not parse"},
+	} {
+		code, out := run(c.payload)
+		if code != c.code || !strings.Contains(out, c.want) {
+			t.Errorf("%s: exit %d %q, want %d containing %q", c.name, code, out, c.code, c.want)
+		}
+	}
+}
+
+func TestClaudeGatePassCarriesTheCtxOnlyHook(t *testing.T) {
+	h := setup(t)
+	pass := func(ctxTool bool) []string {
+		p, err := gateAgentPass(h.repo, "claude", gatePass{name: "a", shared: "s", task: "t", prompt: "st", ctxTool: ctxTool, ctxOnly: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claudePassArgs(profile{Model: "m"}, p)
+	}
+	settings := func(args []string) string {
+		for i, a := range args {
+			if a == "--settings" {
+				return args[i+1]
+			}
+		}
+		t.Fatal("no --settings in " + strings.Join(args, " "))
+		return ""
+	}
+	var got struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string
+				Hooks   []struct{ Type, Command string }
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(settings(pass(true))), &got); err != nil {
+		t.Fatal(err)
+	}
+	pre := got.Hooks.PreToolUse
+	if len(pre) != 1 || pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Type != "command" ||
+		!strings.HasSuffix(pre[0].Hooks[0].Command, "/orch' ctx-only-check") {
+		t.Fatalf("hook settings: %+v", got)
+	}
+	if strings.Contains(settings(pass(false)), "ctx-only-check") {
+		t.Error("a pass without the ctx tool has no shell to guard")
 	}
 }
 

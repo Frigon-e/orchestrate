@@ -19,6 +19,9 @@ type CtxCLI struct {
 	// pass loads it with -e, a ctx-only pass does not (the shell is restricted).
 	Guard string
 	Ready string // per-invocation acknowledgement from the loaded pi guard
+	// Hook is the shell command of the Claude PreToolUse hook on Bash that refuses
+	// anything but one plain lookup call (orch ctx-only-check); empty for pi.
+	Hook string
 }
 
 const ctxCLINotice = `READ ONLY. Nothing in the repository may be edited, created, deleted, moved or formatted.
@@ -87,6 +90,9 @@ func ctxCLIForExecutable(harness, code, exe string) (CtxCLI, error) {
 		Env:    []string{"ORCH_CTX_ROOT=" + root, "ORCH_CTX_READONLY=1", "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")},
 		Tools:  tools,
 		Notice: ctxCLINotice,
+	}
+	if harness == "claude" {
+		cli.Hook = shellQuote(shim) + " ctx-only-check"
 	}
 	if harness == "pi" {
 		if cli.Extension, err = writeCtxOnlyExtension(dir); err != nil {

@@ -120,6 +120,23 @@ func TestLspWordIndex(t *testing.T) {
 	}
 }
 
+func TestLspNameIndexSkipsTheReceiver(t *testing.T) {
+	for _, tc := range []struct {
+		line, base string
+		want       int
+	}{
+		{"func (s *Save) Save(x int)", "Save", 15},
+		{"func (save Save) save(x int)", "save", 17},
+		{"func (s *Save) Other()", "Save", 9}, // no method of that name: fall back to the first word
+		{"func Save() {}", "Save", 5},
+		{"type Save struct{}", "Save", 5},
+	} {
+		if got := nameIndex(tc.line, tc.base); got != tc.want {
+			t.Errorf("nameIndex(%q, %q) = %d, want %d", tc.line, tc.base, got, tc.want)
+		}
+	}
+}
+
 func TestLspHoverText(t *testing.T) {
 	got := hoverText(json.RawMessage(`{"contents":{"kind":"markdown","value":"` + "```go\\nfunc Greet(s Speaker) string\\n```\\n\\nGreet speaks." + `"}}`))
 	if got != "func Greet(s Speaker) string\nGreet speaks." {

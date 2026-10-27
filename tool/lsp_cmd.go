@@ -601,7 +601,7 @@ func (r *lspRun) target(path string, ln int, base string) (*lspSession, map[stri
 	s.c.open(abs)
 	col := 0
 	if ls := r.e.Lines(path); ln >= 1 && ln <= len(ls) {
-		col = max(wordIndex(ls[ln-1], base), 0)
+		col = max(nameIndex(ls[ln-1], base), 0)
 	}
 	return s, lspPos(abs, ln-1, col), ""
 }
@@ -633,6 +633,20 @@ func (s *lspSession) ask(method string, params any) (json.RawMessage, error) {
 func lspEmpty(raw json.RawMessage) bool {
 	s := strings.TrimSpace(string(raw))
 	return s == "" || s == "null" || s == "[]"
+}
+
+// nameIndex is the column of a declaration's name. In a Go method the receiver
+// comes first, and its type may share the method's name (func (s *Save) Save),
+// so the search starts after the receiver.
+func nameIndex(line, base string) int {
+	if strings.HasPrefix(strings.TrimSpace(line), "func (") {
+		if j := strings.Index(line, ")"); j >= 0 {
+			if k := wordIndex(line[j+1:], base); k >= 0 {
+				return j + 1 + k
+			}
+		}
+	}
+	return wordIndex(line, base)
 }
 
 // wordIndex is the index of base in line as a whole identifier, or -1.
