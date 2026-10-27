@@ -34,10 +34,12 @@ function words(cmd: string): string[] {
 }
 
 // Why the flags of an rg or fd call are refused: they run another program.
+// Every word is scanned, even after "--": a flag that takes a value (rg -g --)
+// can swallow the "--", so it does not reliably end the flags. A pattern that
+// looks like an exec flag is refused too.
 function execFlag(cmd: string): string {
 	const w = words(cmd);
-	const dd = w.indexOf("--");
-	const flags = dd < 0 ? w.slice(1) : w.slice(1, dd);
+	const flags = w.slice(1);
 	if (w[0] === "rg") {
 		for (const f of flags) {
 			if (/^--(pre|pre-glob|hostname-bin)(=|$)/.test(f)) return `rg ${f.split("=")[0]} runs another program`;

@@ -59,18 +59,15 @@ func ctxOnlyWords(cmd string) []string {
 }
 
 // ctxOnlyExecFlag says why the flags of an rg or fd call are refused: they run another program.
+// Every word is scanned, even after "--": a flag that takes a value (rg -g --)
+// can swallow the "--", so it does not reliably end the flags. A pattern that
+// looks like an exec flag is refused too.
 func ctxOnlyExecFlag(cmd string) string {
 	w := ctxOnlyWords(cmd)
 	if len(w) == 0 {
 		return ""
 	}
 	flags := w[1:]
-	for i, f := range w {
-		if i > 0 && f == "--" {
-			flags = w[1:i]
-			break
-		}
-	}
 	name := func(f string) string { return strings.SplitN(f, "=", 2)[0] }
 	switch w[0] {
 	case "rg":

@@ -12,8 +12,6 @@
   "fd -e go -E '*_test.go' pay",
   "ls internal",
   "wc -l internal/pay.go",
-  "fd -- -x",
-  "rg -n -- --pre",
   "ls",
   "wc -l internal/pay.go",
   "fd -e go -H pay",
@@ -58,6 +56,11 @@
   "ls && ls",
   "wc -l a < b",
   "",
-  "ls $(id)"
+  "ls $(id)",
+  "fd -- -x",
+  "rg -n -- --pre",
+  "rg -g -- --pre ./evil.sh x",
+  "rg -e -- --pre=./evil.sh x",
+  "fd -E -- -x rm"
  ]
 }

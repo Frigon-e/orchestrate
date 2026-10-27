@@ -80,7 +80,8 @@ extension cannot be written or loaded, the pass is an execution failure, never
 an open-shell fallback. `--ctx-shell open` restores Pi's native read/search
 tools and unrestricted bash. Claude ignores this setting and adds Bash with the
 `Bash(jbcontext search:*)`, `Bash(orch lsp:*)`, `Bash(rg:*)` and `Bash(fd:*)`
-permissions. Send independent lookups as parallel calls in one message; read
+permissions, plus an `orch ctx-only-check` PreToolUse hook that applies Pi's
+ctx-only refusal to every Bash call. Send independent lookups as parallel calls in one message; read
 what they return before searching again. With ctx off, the original read
 and search tools remain and the ctx notice/env are absent.
 
@@ -99,8 +100,8 @@ passes, sets state to `stale` (or `error` if the subject cannot be checked),
 and puts a loud warning in stdout/report. The record names changed files and
 passes in flight, not a proven culprit. Files are never reverted. Ignored
 files and writes outside the checkout are not covered; edits restored before
-the check can also escape detection. Pi's default ctx-only shell blocks
-unrelated commands, pipes and redirects. With `--ctx-shell open`, its shell is
+the check can also escape detection. Pi's default ctx-only shell and Claude's
+ctx-only hook block unrelated commands, pipes and redirects. With `--ctx-shell open`, its shell is
 unrestricted and can write ignored/outside files or use the network. Native
 read can still read outside the repo in either mode. The guard, prompt, pinned
 read-only ctx mode and post-pass check are not an operating-system sandbox.

@@ -510,14 +510,19 @@ A missing acknowledgement or extension-write error fails the pass, without an
 open-shell fallback. `--ctx-shell open` keeps Pi's native `read,grep,find,ls`
 and appends unrestricted `bash`. Claude ignores `--ctx-shell`; ctx off keeps the
 original native tools. `CtxCLI.Tools` contains only the extra shell entries.
-The Claude `Bash(...)` permissions are not an exclusive shell-command allowlist, and a Claude
-pass can read outside the checkout through native Read. `ORCH_CTX_ROOT`
+The Claude `Bash(...)` prefix permissions alone would let `rg --pre` or
+`fd -x` run another program, so a Claude pass with ctx on also gets a
+PreToolUse Bash hook, `orch ctx-only-check`, in its inline `--settings`. It
+applies the same refusal as Pi's ctx-only shell below (one table,
+`tool/testdata/ctx_only_cases.json`, tests both) and fails closed on input it
+cannot read. A Claude pass can still read outside the checkout through native Read. `ORCH_CTX_ROOT`
 constrains orch, not native Read; it is not a file-confidentiality boundary.
 
 Pi's default ctx-only shell accepts only one `jbcontext search`, `orch lsp`,
 `rg`, `fd`, `ls` or `wc` call, without pipes, redirects, command substitution,
 unquoted globs or other commands; `rg` and `fd` flags that run another program
-are refused. `--ctx-shell open` opts
+are refused anywhere in the line, after `--` too (a value-taking flag can
+swallow the `--`), so a pattern such as `--pre` is refused as well. `--ctx-shell open` opts
 out and permits arbitrary shell programs, including writes and network access.
 Native read is not root-confined in either mode. The prompt and post-pass
 unchanged check remain separate layers, not an operating-system sandbox;
