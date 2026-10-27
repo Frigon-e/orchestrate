@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -279,6 +280,8 @@ func startLSP(bin string, dir string, args ...string) (*lspClient, error) {
 	// shim such as vite-plus `vp` acts as tsc only when argv[0] says tsc.
 	cmd.Args[0] = bin
 	cmd.Dir = dir
+	// Its own process group, so close can kill whatever the server started.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -433,19 +436,25 @@ func (c *lspClient) open(path string) {
 	c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": fileURI(path), "languageId": lang, "version": 1, "text": string(text)}})
 }
 
-// close asks the server to shut down and kills it if it does not.
+// lspExitGrace is how long a server gets to leave after `exit` before it is
+// killed.
+const lspExitGrace = 100 * time.Millisecond
+
+// close stops the server at once and kills its whole process group, so nothing
+// it started is left running. orch only reads, so nothing is lost by skipping
+// the shutdown handshake: ask the server to exit, give it a moment, then kill
+// the group (also when the server left in time: its children may not have).
 func (c *lspClient) close() {
-	_, _ = c.call("shutdown", nil, 3*time.Second)
 	c.notify("exit", nil)
 	_ = c.in.Close()
 	done := make(chan struct{})
 	go func() { _ = c.cmd.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		_ = c.cmd.Process.Kill()
-		<-done
+	case <-time.After(lspExitGrace):
 	}
+	_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	<-done
 }
 
 type lspLoc struct {
@@ -810,42 +819,12 @@ func runTSServer(jobs []tsJob, facts map[tsJob]*symFact, cacheDir, code string, 
 	}
 	sort.Strings(others)
 	allRoots := append(slices.Clone(rootList), others...)
-	startTS := func() (*lspClient, json.RawMessage, string) {
-		c, err := startLSP(bin, allRoots[0], "--lsp", "--stdio")
-		if err != nil {
-			return nil, nil, "no TypeScript facts: " + err.Error()
-		}
-		var folders []map[string]string
-		for _, r := range allRoots {
-			folders = append(folders, map[string]string{"uri": fileURI(r), "name": filepath.Base(r)})
-		}
-		raw, err := c.call("initialize", map[string]any{
-			"processId": os.Getpid(), "rootUri": fileURI(allRoots[0]), "rootPath": allRoots[0], "workspaceFolders": folders,
-			"clientInfo": map[string]any{"name": "orch"}, "capabilities": tsClientCapabilities,
-		}, tsRequestLimit)
-		if err != nil {
-			c.close()
-			return nil, nil, "no TypeScript facts: " + err.Error()
-		}
-		var init struct {
-			Capabilities map[string]json.RawMessage `json:"capabilities"`
-		}
-		if json.Unmarshal(raw, &init) != nil || init.Capabilities == nil {
-			c.close()
-			return nil, nil, "no TypeScript facts: initialize: malformed capabilities result"
-		}
-		c.notify("initialized", map[string]any{})
-		for _, r := range allRoots {
-			if src := firstSource(r); src != "" {
-				c.open(src)
-			}
-		}
-		return c, raw, ""
+	sess, why := openServer(code, tsServer{}, allRoots[0], allRoots)
+	if sess == nil {
+		return "no TypeScript facts: " + why
 	}
-	c, _, note := startTS()
-	if c == nil {
-		return note
-	}
+	c := sess.c
+	note := ""
 	defer c.close()
 	// A project answers with empty results until it has loaded. Rather than
 	// asking again and again, an empty answer makes the server's projects prove

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -575,16 +574,7 @@ func (r *lspRun) sessionIn(l *langDef, dir string) (*lspSession, string) {
 	if s, ok := r.sessions[key]; ok {
 		return s, r.whys[key]
 	}
-	start := func() (*lspSession, string) {
-		switch l.Special {
-		case "gopls":
-			return r.openGopls(dir)
-		case "ts":
-			return r.openTS(dir)
-		}
-		return openLSP(e.Code, l, dir)
-	}
-	s, why := start()
+	s, why := openServer(e.Code, serverFor(e, l), dir, []string{dir})
 	r.sessions[key], r.whys[key] = s, why
 	return s, why
 }
@@ -678,61 +668,6 @@ func (s *lspSession) goSymbolRows(query string) (string, error) {
 		fmt.Fprintf(&b, "%s:%d:%d %s %s\n", u.Path, sym.Location.Range.Start.Line+1, sym.Location.Range.Start.Character+1, sym.Name, kind)
 	}
 	return b.String(), nil
-}
-
-func lspHandshake(c *lspClient, dir string) (lspCaps, error) {
-	raw, err := c.call("initialize", map[string]any{
-		"processId": os.Getpid(), "rootUri": fileURI(dir), "rootPath": dir,
-		"workspaceFolders": []map[string]string{{"uri": fileURI(dir), "name": filepath.Base(dir)}},
-		"clientInfo":       map[string]any{"name": "orch"}, "capabilities": tsClientCapabilities,
-	}, tsRequestLimit)
-	if err != nil {
-		return lspCaps{}, err
-	}
-	c.notify("initialized", map[string]any{})
-	return parseCaps(raw), nil
-}
-
-func (r *lspRun) openGopls(dir string) (*lspSession, string) {
-	if r.e.Gopls == "" {
-		return nil, "gopls is not trusted for this checkout"
-	}
-	if _, err := exec.LookPath(r.e.Gopls); err != nil {
-		return nil, r.e.Gopls + " was not found"
-	}
-	c, err := startLSP(r.e.Gopls, dir, "serve")
-	if err != nil {
-		return nil, err.Error()
-	}
-	caps, err := lspHandshake(c, dir)
-	if err != nil {
-		c.close()
-		return nil, err.Error()
-	}
-	return &lspSession{c: c, caps: caps, bin: "gopls"}, ""
-}
-
-func (r *lspRun) openTS(dir string) (*lspSession, string) {
-	bin, why := tsServerChoice(r.e.Code)
-	if bin == "" {
-		return nil, orDefault(why, "no native TypeScript 7 server found")
-	}
-	if _, err := exec.LookPath(bin); err != nil {
-		return nil, bin + " was not found"
-	}
-	c, err := startLSP(bin, dir, "--lsp", "--stdio")
-	if err != nil {
-		return nil, err.Error()
-	}
-	caps, err := lspHandshake(c, dir)
-	if err != nil {
-		c.close()
-		return nil, err.Error()
-	}
-	if src := firstSource(dir); src != "" {
-		c.open(src)
-	}
-	return &lspSession{c: c, caps: caps, bin: filepath.Base(bin), ts: true}, ""
 }
 
 // target opens the server for a definition and builds the position of its name.

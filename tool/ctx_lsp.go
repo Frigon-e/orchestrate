@@ -53,59 +53,7 @@ type lspSession struct {
 // openLSP starts the first server of l's list that is found, initializes it on
 // root (an absolute directory) and checks it can answer references.
 func openLSP(code string, l *langDef, root string) (*lspSession, string) {
-	tried := []string{}
-	servers := l.LSP
-	override := l.LSPEnv != "" && len(strings.Fields(os.Getenv(l.LSPEnv))) > 0
-	if override {
-		bin, args, ok, why := langServerReason(code, l)
-		if !ok {
-			return nil, why
-		}
-		servers = []lspCmd{{bin, args}} // the override is the only candidate
-	}
-	skipped := ""
-	for _, s := range servers {
-		tmp := *l
-		tmp.LSP = []lspCmd{s}
-		if !override {
-			tmp.LSPEnv = ""
-		}
-		bin, args, found, why := langServerReason(code, &tmp)
-		if why != "" {
-			skipped = why
-		}
-		if !found {
-			continue
-		}
-		tried = append(tried, filepath.Base(bin))
-		c, err := startLSP(bin, root, args...)
-		if err != nil {
-			continue
-		}
-		raw, err := c.call("initialize", map[string]any{
-			"processId": os.Getpid(), "rootUri": fileURI(root), "rootPath": root,
-			"workspaceFolders": []map[string]string{{"uri": fileURI(root), "name": filepath.Base(root)}},
-			"clientInfo":       map[string]any{"name": "orch"}, "capabilities": tsClientCapabilities,
-		}, tsRequestLimit)
-		if err != nil {
-			c.close()
-			continue
-		}
-		caps := parseCaps(raw)
-		if !caps.Refs {
-			c.close()
-			continue
-		}
-		c.notify("initialized", map[string]any{})
-		return &lspSession{c: c, caps: caps, bin: filepath.Base(bin)}, ""
-	}
-	if len(tried) == 0 {
-		if skipped != "" {
-			return nil, skipped
-		}
-		return nil, "no " + l.ID + " language server found"
-	}
-	return nil, l.ID + " language server(s) " + strings.Join(tried, ", ") + " did not complete the handshake with references"
+	return openServer(code, stdServer{l: l}, root, []string{root})
 }
 
 func (s *lspSession) locOf(code, uri string) string {
@@ -270,7 +218,7 @@ func (e *ctxEnv) lspTier(decl map[string]*symFact) map[string]*symFact {
 		for _, d := range f.Defs {
 			path, _ := splitWhere(d.Where)
 			l := langOf(path)
-			if l == nil || l.Special != "" || len(l.LSP) == 0 {
+			if l == nil || l.native() || len(l.LSP) == 0 {
 				continue
 			}
 			r, _ := rootFor(e.Code, path, l.ID)

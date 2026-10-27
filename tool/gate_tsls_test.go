@@ -206,7 +206,7 @@ func TestTSFactsFromALanguageServerOverStdio(t *testing.T) {
 		}
 	}
 	if methods[0] != "initialize" || idx("initialized") != 1 || idx("textDocument/didOpen") < 0 || idx("textDocument/didOpen") > idx("workspace/symbol") || refCount != 1 ||
-		methods[len(methods)-2] != "shutdown" || methods[len(methods)-1] != "exit" {
+		idx("shutdown") >= 0 || methods[len(methods)-1] != "exit" {
 		t.Errorf("methods = %v", methods)
 	}
 	registered, configured := false, false

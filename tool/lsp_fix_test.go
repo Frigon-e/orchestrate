@@ -50,11 +50,12 @@ func TestLspExitAndShutdownCarryNoParams(t *testing.T) {
 	if out := w.must("lsp", "callers", "Stripe.StartCheckout"); out != "svc/svc.go:7 in Handle\n" {
 		t.Fatalf("callers = %q", out)
 	}
-	for _, m := range []string{"shutdown", "exit"} {
-		ev := w.events(m)
-		if len(ev) != 1 || ev[0]["has_params"] != false {
-			t.Errorf("%s was sent as %v; tsgo rejects a null params", m, ev)
-		}
+	ev := w.events("exit")
+	if len(ev) != 1 || ev[0]["has_params"] != false {
+		t.Errorf("exit was sent as %v; tsgo rejects a null params", ev)
+	}
+	if ev := w.events("shutdown"); len(ev) != 0 {
+		t.Errorf("shutdown was sent: %v", ev)
 	}
 	if ev := w.events("initialized"); len(ev) != 1 || ev[0]["has_params"] != true {
 		t.Errorf("initialized must carry {}: %v", ev)

@@ -65,7 +65,7 @@ type langDef struct {
 	LSPEnv    string   // environment variable that overrides the server command
 	LocalDirs []string // project directories searched for the server before PATH
 	Hint      string   // how to install a server
-	Special   string   // "gopls" or "ts": discovered and spoken to by dedicated code
+	Custom    bool     // the user configured this language's server commands: no dedicated adapter (see serverFor)
 
 	tests, gens []*regexp.Regexp
 	decls       []string
@@ -83,7 +83,7 @@ func sc(re string, top bool) scanRule { return scanRule{Re: re, Top: top} }
 
 func builtinLangs() []*langDef {
 	return []*langDef{
-		{ID: "go", Exts: []string{".go"}, Manifests: []string{"go.mod", "go.work"}, LangID: "go", Special: "gopls", Export: "upper", BraceEnd: true, Doc: []string{"//"},
+		{ID: "go", Exts: []string{".go"}, Manifests: []string{"go.mod", "go.work"}, LangID: "go", Export: "upper", BraceEnd: true, Doc: []string{"//"},
 			Scan: []scanRule{
 				{Re: `^func\s+\(\s*\w*\s*\*?\s*(?P<recv>[\w.]+)(?:\[[^\]]*\])?\s*\)\s*(?P<name>\w+)`, Kind: "method", Top: true},
 				{Re: `^func\s+(?P<name>\w+)`, Kind: "func", Top: true},
@@ -95,7 +95,7 @@ func builtinLangs() []*langDef {
 			Gen:   []string{`\.pb\.go$`, `_gen\.go$`, `\.gen\.go$`, `\.sql\.go$`, `_generated\.go$`},
 			Entry: []string{"main.go"},
 			Hint:  "go install golang.org/x/tools/gopls@latest"},
-		{ID: "typescript", Exts: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"}, Manifests: []string{"package.json", "tsconfig.json", "jsconfig.json", "pnpm-workspace.yaml", "deno.json", "deno.jsonc"}, LangID: "typescript", Special: "ts", Export: "keyword:export", BraceEnd: true, Doc: []string{"//", "/**", "*"},
+		{ID: "typescript", Exts: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"}, Manifests: []string{"package.json", "tsconfig.json", "jsconfig.json", "pnpm-workspace.yaml", "deno.json", "deno.jsonc"}, LangID: "typescript", Export: "keyword:export", BraceEnd: true, Doc: []string{"//", "/**", "*"},
 			Scan: []scanRule{
 				sc(`^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?P<kind>function|class|interface|type|enum)\*?\s+(?P<name>\w+)`, false),
 				sc(`^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?P<kind>const|let|var)\s+(?P<name>\w+)\s*[:=]`, true),
@@ -264,7 +264,7 @@ func applyCtxLangs(cfg []langCfg) {
 		}
 		if c.LSPBin != "" {
 			l.LSP = []lspCmd{{c.LSPBin, c.LSPArgs}}
-			l.Special = ""
+			l.Custom = true
 		}
 		for _, fb := range c.LSPFallbacks {
 			if f := strings.Fields(fb); len(f) > 0 {
@@ -868,11 +868,11 @@ func (e *ctxEnv) langStatuses() []langStatus {
 		st := langStatus{ID: lc.ID, Files: lc.N}
 		switch {
 		case l == nil:
-		case l.Special == "gopls":
+		case l.native() && l.ID == "go":
 			if p := which(e.Gopls); p != "" {
 				st.Server = p
 			}
-		case l.Special == "ts":
+		case l.native() && l.ID == "typescript":
 			p, why := tsServerChoice(e.Code)
 			if p != "" {
 				// tsServerChoice deliberately retains missing overrides for
