@@ -133,7 +133,7 @@ console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), out }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, cases)))
 	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off",
-		"ORCH_GUARD_BIN=" + guardBin(t), "ORCH_TOOL_GUARD_STATE_DIR=" + filepath.Join(dir, "state")}, env...))
+		"ORCH_GUARD_BIN=" + guardBin(t), "ORCH_TOOL_GUARD_STATE_DIR=" + filepath.Join(dir, "state"), "ORCH_TOOL_GUARD_SKIP=search-first"}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)

@@ -140,7 +140,7 @@ const added = {};
 const logged = [];
 const count = () => {
   const file = join(process.env.ORCH_TOOL_GUARD_STATE_DIR, "lookups.jsonl");
-  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).filter((l) => JSON.parse(l).tool !== "prompt").length : 0;
 };
 const turns = JSON.parse(process.argv[1]);
 const ctx = { sessionManager: { getSessionId: () => "pi-session" } };
@@ -167,11 +167,11 @@ for (let t = 0; t < turns.length; t += 1) {
   }
 }
 const file = join(process.env.ORCH_TOOL_GUARD_STATE_DIR, "lookups.jsonl");
-const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.tool !== "prompt") : [];
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), lines, added, logged, logFile: existsSync(file) }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, turns)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_GUARD_BIN=" + guardBin(t), "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD="}, env...))
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_GUARD_BIN=" + guardBin(t), "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD=", "ORCH_TOOL_GUARD_SKIP=search-first"}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)
