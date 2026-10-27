@@ -37,6 +37,7 @@ Orchestrator:
   orch test-changed [--base main] [--print] [--run-extra <regex>]   (build, vet and only the tests the branch changed)
   orch ctx status|refresh|watch|find|sym|text|batch|brief   (code facts for any git repo; see references/context.md)
   orch lookups report [--since 7d] [--repo PATH] [--json]   (what the lookup coach logged: tools, turns, reminders)
+  orch lsp def|refs|callers|impls <Name>... | symbols <file> | hover <path:line:col>   (symbols by name via the language servers; orch lsp --help)
   orch quick <id> --owns <file>[,<file>] <request...>
   orch models
   orch triage <id>... [--force] | orch triage report
@@ -103,6 +104,7 @@ var commands = map[string]func(*app, []string) error{
 	"bench":        cmdBench,
 	"ctx":          cmdCtx,
 	"lookups":      cmdLookups,
+	"lsp":          cmdLsp,
 	"test-changed": cmdTestChanged,
 	"models":       cmdModels,
 	"triage":       cmdTriage,

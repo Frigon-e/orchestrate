@@ -22,7 +22,7 @@ import (
 // of the language's list that completes the handshake and can answer
 // references is used; with none, the declaration tier answers alone.
 
-type lspCaps struct{ WS, Refs, Impl, Def bool }
+type lspCaps struct{ WS, Refs, Impl, Def, Calls, DocSym, Hover bool }
 
 func capOn(v json.RawMessage) bool {
 	s := strings.TrimSpace(string(v))
@@ -36,7 +36,8 @@ func parseCaps(raw json.RawMessage) lspCaps {
 	_ = json.Unmarshal(raw, &r)
 	c := r.Capabilities
 	return lspCaps{WS: capOn(c["workspaceSymbolProvider"]), Refs: capOn(c["referencesProvider"]),
-		Impl: capOn(c["implementationProvider"]), Def: capOn(c["definitionProvider"])}
+		Impl: capOn(c["implementationProvider"]), Def: capOn(c["definitionProvider"]),
+		Calls: capOn(c["callHierarchyProvider"]), DocSym: capOn(c["documentSymbolProvider"]), Hover: capOn(c["hoverProvider"])}
 }
 
 // lspSession is a started and initialized server for one project root.
@@ -44,6 +45,9 @@ type lspSession struct {
 	c    *lspClient
 	caps lspCaps
 	bin  string
+	// ts marks the TypeScript server, which answers empty until its project has
+	// loaded; ready is set by its first non-empty answer (see ask in lsp_cmd.go).
+	ts, ready bool
 }
 
 // openLSP starts the first server of l's list that is found, initializes it on

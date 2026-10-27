@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const ctxBudgetHint = "Prefer one `orch ctx batch` over several greps; read what it returns before searching again."
+const ctxBudgetHint = "Look up in this order: `jbcontext search` for an unknown location, `orch lsp def|refs|callers|impls` for a named symbol, `rg` for exact text, `fd` for file names, then read with offset and limit. Send independent lookups in one message."
 
 const gatePacketContract = ` For every unresolved decisive question, include packet from your own review: goal, known_facts (checked state and constraints), evidence_ids, unknown (the exact missing fact or decision), options [{id,text,gain,cost}], recommendation (an option id), rationale, authority (the spec's actual authority basis), and next_action. Do not invent project vocabulary, trade-offs, facts or delegated authority. Leave unavailable fields empty; incomplete packets are research work, not ready owner questions. No formatting pass will fill them.`
 const adversaryEvidenceScope = " Follow bounded relevant incoming AND outgoing references (at most two hops and eight additional files), registrations/configuration, and tests. Stop at the existing turn budget, not at forward imports. Include coverage_gaps (an array of strings) alongside findings in your JSON. Name failed/unrun checks explicitly; an empty findings list does not establish complete exploration."

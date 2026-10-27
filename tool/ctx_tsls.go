@@ -646,6 +646,7 @@ var tsClientCapabilities = map[string]any{
 		"definition":      map[string]any{"linkSupport": true},
 		"references":      map[string]any{},
 		"hover":           map[string]any{},
+		"callHierarchy":   map[string]any{},
 	},
 	"workspace": map[string]any{
 		"workspaceFolders": true, "configuration": true, "symbol": map[string]any{},

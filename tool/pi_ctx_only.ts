@@ -1,15 +1,61 @@
-// Read-only gate passes: the shell runs `orch ctx <find|sym|text|batch|refs> ...` and
-// nothing else. No pipes, redirects, command substitution, globs or other commands.
+// Read-only gate passes: the shell runs one `jbcontext search`, `orch lsp`, `rg`,
+// `fd`, `ls` or `wc` command per call and nothing else. No pipes, redirects,
+// command substitution, unquoted globs or other commands; rg and fd flags that
+// run another program are refused.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "node:fs";
 
-const allowed = /^orch ctx (find|sym|text|batch|refs)(\s|$)/;
+const allowed = /^(jbcontext search|orch lsp|rg|fd|ls|wc)(\s|$)/;
 
-// Why a command line is not one plain orch ctx call, or "" when it is.
+// The words of a command line that passed the quote checks, quotes removed.
+function words(cmd: string): string[] {
+	const out: string[] = [];
+	let cur = "";
+	let has = false;
+	let quote = "";
+	for (const ch of cmd) {
+		if (quote) {
+			if (ch === quote) quote = "";
+			else cur += ch;
+		} else if (ch === "'" || ch === '"') {
+			quote = ch;
+			has = true;
+		} else if (/\s/.test(ch)) {
+			if (has) out.push(cur);
+			cur = "";
+			has = false;
+		} else {
+			cur += ch;
+			has = true;
+		}
+	}
+	if (has) out.push(cur);
+	return out;
+}
+
+// Why the flags of an rg or fd call are refused: they run another program.
+function execFlag(cmd: string): string {
+	const w = words(cmd);
+	const dd = w.indexOf("--");
+	const flags = dd < 0 ? w.slice(1) : w.slice(1, dd);
+	if (w[0] === "rg") {
+		for (const f of flags) {
+			if (/^--(pre|pre-glob|hostname-bin)(=|$)/.test(f)) return `rg ${f.split("=")[0]} runs another program`;
+		}
+	}
+	if (w[0] === "fd") {
+		for (const f of flags) {
+			if (/^--(exec|exec-batch)(=|$)/.test(f) || /^-[A-Za-z]*[xX]/.test(f)) return `fd ${f.split("=")[0]} runs another program`;
+		}
+	}
+	return "";
+}
+
+// Why a command line is not one plain lookup call, or "" when it is.
 function refusal(command: string): string {
 	const cmd = command.trim();
 	if (!allowed.test(cmd)) {
-		return "only orch ctx find, sym, text, batch and refs run in this shell";
+		return "only jbcontext search, orch lsp, rg, fd, ls and wc run in this shell";
 	}
 	let quote = "";
 	for (const ch of cmd) {
@@ -25,7 +71,8 @@ function refusal(command: string): string {
 		if (ch === "'" || ch === '"') quote = ch;
 		else if (";&|<>(){}`$\\\n\r*?[]~!#".includes(ch)) return `no unquoted ${JSON.stringify(ch)}: no pipes, redirects, globs or substitutions`;
 	}
-	return quote ? "unterminated quote" : "";
+	if (quote) return "unterminated quote";
+	return execFlag(cmd);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -36,9 +83,9 @@ export default function (pi: ExtensionAPI) {
 		return {
 			block: true,
 			reason:
-				`Blocked: ${why}. This shell only runs one orch ctx call per command, with no pipes. ` +
-				`Put several lookups in ONE call: orch ctx batch -q "find:Code that ..." -q "symbol:Name refs=3" -q "text:pattern glob=dir/**". ` +
-				`Shorten output with --compact or --limit N. Read files with the read tool (offset and limit); there is no cd, ls, grep, head, tail, sed or cat.`,
+				`Blocked: ${why}. This shell runs one command per call: jbcontext search, orch lsp, rg, fd, ls or wc, with no pipes, redirects or unquoted globs. ` +
+				`Put independent lookups in separate calls in one message. ` +
+				`Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed or cat.`,
 		};
 	});
 	pi.on("session_start", () => {

@@ -29,7 +29,7 @@ func TestGateAgentPrefixAndTools(t *testing.T) {
 		}
 		if harness == "claude" {
 			args := claudePassArgs(profile{Harness: "claude", Model: "haiku"}, p)
-			if flagValue(args, "--tools") != "Read,Grep,Glob,Bash" || !strings.Contains(flagValue(args, "--allowedTools"), "Bash(orch ctx:*)") {
+			if flagValue(args, "--tools") != "Read,Grep,Glob,Bash" || !strings.Contains(flagValue(args, "--allowedTools"), "Bash(orch lsp:*)") {
 				t.Fatal(args)
 			}
 		}
@@ -92,7 +92,7 @@ func TestGateHeadlessArgumentsAndEnv(t *testing.T) {
 					if !strings.Contains(args, "claudeMdExcludes") {
 						t.Fatal(args)
 					}
-					if strings.Contains(args, "Bash(orch ctx:*)") != ctxOn {
+					if strings.Contains(args, "Bash(orch lsp:*)") != ctxOn {
 						t.Fatal(args)
 					}
 				}

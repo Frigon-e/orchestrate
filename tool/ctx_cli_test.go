@@ -22,7 +22,7 @@ func TestCtxCLIShimNoticeAndTools(t *testing.T) {
 		}
 		tools := []string{"bash"}
 		if h == "claude" {
-			tools = []string{"Bash(orch ctx:*)"}
+			tools = []string{"Bash(jbcontext search:*)", "Bash(orch lsp:*)", "Bash(rg:*)", "Bash(fd:*)"}
 		}
 		if !reflect.DeepEqual(cfg.Tools, tools) {
 			t.Fatalf("tools=%v", cfg.Tools)
@@ -46,12 +46,12 @@ func TestCtxCLIShimNoticeAndTools(t *testing.T) {
 		if len(lines) < 10 || len(lines) > 30 || !strings.HasPrefix(cfg.Notice, "READ ONLY.") {
 			t.Fatal(cfg.Notice)
 		}
-		for _, part := range []string{"edited, created, deleted, moved or formatted", "No network", "orch ctx find", "one behaviour per query", "orch ctx sym", "orch ctx text", "orch ctx batch", "DEFAULT TO BATCH", "in ONE call", "never cd", "native read tool with offset and limit", "issue all the reads in one turn", "Never use sed, cat, head or tail", "A violation fails the review"} {
+		for _, part := range []string{"edited, created, deleted, moved or formatted", "No network", "jbcontext search", "One concept per query", "not proof of absence", "orch lsp def|refs|callers|impls", "rg -n -w", "fd <name>", "independent lookups in one message", "never cd", "native read tool with offset and limit", "issue all the reads in one turn", "Never use sed, cat, head or tail", "A violation fails the review"} {
 			if !strings.Contains(cfg.Notice, part) {
 				t.Fatal(part)
 			}
 		}
-		if strings.Contains(cfg.Notice, "orch ctx read") || strings.Contains(cfg.Notice, "read:") {
+		if strings.Contains(cfg.Notice, "orch ctx") || strings.Contains(cfg.Notice, "read:") {
 			t.Fatal("notice recommends a script-only read command")
 		}
 		cmd := exec.Command("/bin/sh", "-c", "orch")

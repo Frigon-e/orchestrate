@@ -11,7 +11,7 @@ import (
 
 // The extension decides in pi, so the decision table runs the real file in node
 // (which strips its types) against a stand-in for pi's extension API.
-func TestCtxOnlyExtensionAllowsOnlyOneOrchCtxCall(t *testing.T) {
+func TestCtxOnlyExtensionAllowsOnlyOneLookupCall(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not installed")
@@ -22,26 +22,49 @@ func TestCtxOnlyExtensionAllowsOnlyOneOrchCtxCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []string{
-		`orch ctx batch -q "find:Code that saves a payment method" -q "symbol:Gateway refs=3" -q "text:foo glob=internal/**"`,
-		`orch ctx text 'a|b(c)$' --compact --limit 3`,
-		`orch ctx sym Service.saveMethod --refs 2`,
-		`orch ctx refs Service.saveMethod --refs 2`,
-		`orch ctx find "Code that lists payment gateways"`,
+		`jbcontext search "Code that saves a payment method"`,
+		`jbcontext search "Code that verifies a webhook signature" --limit 5`,
+		`orch lsp def Stripe.StartCheckout Gateway`,
+		`orch lsp refs StartCheckout --limit 10`,
+		`orch lsp hover pay/pay.go:7:18`,
+		`rg -n -w StartCheckout internal`,
+		`rg -n 'a|b(c)$' -g '*.go'`,
+		`rg -n "needle" -g "!vendor/**" -t go`,
+		`fd pay internal`,
+		`fd -e go -E '*_test.go' pay`,
+		`ls internal`,
+		`wc -l internal/pay.go`,
 	}
 	blocked := []string{
 		`grep -rn Gateway internal`,
-		`ls internal`,
-		`cd internal && orch ctx text x`,
-		`orch ctx text x | head -3`,
-		`orch ctx text x; ls`,
-		`orch ctx text x > out.txt`,
-		`orch ctx text x && rm -r .`,
-		`orch ctx find "$(id)"`,
-		"orch ctx find \"`id`\"",
-		`orch ctx text *.go`,
-		`orch ctx read a.go`,
-		`orch ctx text "unterminated`,
-		`orch ctxfoo`,
+		`cat internal/pay.go`,
+		`cd internal && rg x`,
+		`rg x | head -3`,
+		`rg x; ls`,
+		`rg x > out.txt`,
+		`rg x && rm -r .`,
+		`rg "$(id)"`,
+		"rg \"`id`\"",
+		`rg x *.go`,
+		`ls *.go`,
+		`fd pay [a-z]*`,
+		`rg --pre cat x`,
+		`rg --pre=cat x`,
+		`rg --pre-glob '*.gz' x`,
+		`rg --pre-glob='*.gz' x`,
+		`rg --hostname-bin=hostname x`,
+		`fd -x rm`,
+		`fd pay -X rm`,
+		`fd --exec rm pay`,
+		`fd --exec=rm pay`,
+		`fd --exec-batch rm pay`,
+		`fd -Hx echo`,
+		`orch ctx text x`,
+		"orch lsp def X\nls",
+		`jbcontext index`,
+		`jbcontext searchx`,
+		`rg "unterminated`,
+		`rgx foo`,
 	}
 	script := `
 import ext from ` + string(mustJSON(t, ext)) + `;
@@ -87,7 +110,7 @@ console.log(JSON.stringify(out));
 		}
 	}
 	for _, c := range blocked {
-		if !strings.Contains(got[c], "orch ctx batch") {
+		if !strings.Contains(got[c], "separate calls in one message") || !strings.Contains(got[c], "jbcontext search, orch lsp, rg, fd, ls or wc") {
 			t.Errorf("did not block %q (reason %q)", c, got[c])
 		}
 	}
