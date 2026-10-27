@@ -6,6 +6,8 @@ package guard
 import (
 	"regexp"
 	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // A word records whether it came from a quote, so a quoted word is never a command.
@@ -33,10 +35,150 @@ var (
 	sedFlagN  = regexp.MustCompile(`^-[A-Za-z]*n$`)
 )
 
-// segments splits a command line on unquoted separators, keeping quote
-// awareness. With dqRaw a backslash inside double quotes stays unless it
-// escapes a quote, a backslash, a dollar or a backtick, as bash does.
+// shellDepth caps how many bash -c scripts nest inside each other.
+const shellDepth = 3
+
+var shellFlagC = regexp.MustCompile(`^-[A-Za-z]*c[A-Za-z]*$`)
+
+// segments parses a command line as bash and returns every call in source
+// order: top level, both sides of && || ; and pipes, subshells, blocks, loops,
+// branches, function bodies, command and process substitutions, and the script
+// of bash -c. Heredoc bodies are data. With dqRaw a backslash inside double
+// quotes stays unless it escapes a quote, a backslash, a dollar or a backtick,
+// as bash does. A line the parser rejects falls back to tokenSegments, so the
+// guard never fails closed.
 func segments(command string, dqRaw bool) []segment {
+	return parseSegments(command, dqRaw, 0)
+}
+
+type pipeFlags struct{ stdin, stdout, redirect bool }
+
+func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
+	defer func() {
+		if recover() != nil {
+			out = tokenSegments(command, dqRaw)
+		}
+	}()
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil {
+		return tokenSegments(command, dqRaw)
+	}
+	flags := map[syntax.Node]pipeFlags{}
+	syntax.Walk(file, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.Stmt:
+			f := flags[n]
+			for _, r := range n.Redirs {
+				if r.Op != syntax.DplOut && r.Op != syntax.DplIn {
+					f.redirect = true
+				}
+			}
+			if b, ok := n.Cmd.(*syntax.BinaryCmd); ok {
+				if b.Op == syntax.Pipe || b.Op == syntax.PipeAll {
+					flags[b.X] = pipeFlags{stdin: f.stdin, stdout: true}
+					flags[b.Y] = pipeFlags{stdin: true, stdout: f.stdout}
+				} else {
+					flags[b.X] = pipeFlags{stdin: f.stdin}
+					flags[b.Y] = pipeFlags{stdout: f.stdout}
+				}
+			} else if n.Cmd != nil {
+				flags[n.Cmd] = f
+			}
+		case *syntax.CallExpr:
+			var words []word
+			for _, a := range n.Assigns {
+				words = append(words, word{command[a.Pos().Offset():a.End().Offset()], false})
+			}
+			for _, a := range n.Args {
+				words = append(words, wordOf(a, command, dqRaw))
+			}
+			if len(words) == 0 {
+				return true
+			}
+			f := flags[n]
+			seg := segment{words, f.stdin, f.stdout, f.redirect}
+			out = append(out, seg)
+			if depth < shellDepth {
+				if script, ok := shellScript(seg); ok {
+					out = append(out, parseSegments(script, dqRaw, depth+1)...)
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// shellScript is the script of a bash|sh|zsh|dash -c call, when it is literal.
+func shellScript(s segment) (string, bool) {
+	name, args := command(s)
+	switch name {
+	case "bash", "sh", "zsh", "dash":
+	default:
+		return "", false
+	}
+	for i, a := range args {
+		if shellFlagC.MatchString(a) && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+// wordOf is the text of one shell word: the value of literal and quoted parts,
+// the source text of expansions. It is quoted when every part is quoted.
+func wordOf(w *syntax.Word, src string, dqRaw bool) word {
+	var text strings.Builder
+	quoted := len(w.Parts) > 0
+	for _, p := range w.Parts {
+		switch p := p.(type) {
+		case *syntax.Lit:
+			text.WriteString(p.Value)
+			quoted = false
+		case *syntax.SglQuoted:
+			text.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, q := range p.Parts {
+				if l, ok := q.(*syntax.Lit); ok {
+					text.WriteString(dqUnescape(l.Value, dqRaw))
+				} else {
+					text.WriteString(src[q.Pos().Offset():q.End().Offset()])
+				}
+			}
+		default:
+			text.WriteString(src[p.Pos().Offset():p.End().Offset()])
+			quoted = false
+		}
+	}
+	return word{text.String(), quoted}
+}
+
+// dqUnescape resolves backslashes in the literal text of a double-quoted part.
+func dqUnescape(v string, dqRaw bool) string {
+	if !strings.Contains(v, "\\") {
+		return v
+	}
+	var b strings.Builder
+	escaped := false
+	for _, ch := range v {
+		if escaped {
+			escaped = false
+			if dqRaw && !strings.ContainsRune("\"\\$`", ch) {
+				b.WriteByte('\\')
+			}
+			b.WriteRune(ch)
+		} else if ch == '\\' {
+			escaped = true
+		} else {
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
+}
+
+// tokenSegments is the fallback tokenizer for lines the bash parser rejects. It
+// splits a command line on unquoted separators, keeping quote awareness.
+func tokenSegments(command string, dqRaw bool) []segment {
 	var out []segment
 	var words []word
 	var text strings.Builder

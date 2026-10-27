@@ -164,6 +164,14 @@
     { "name": "fd-only git grep", "situation": "fd", "rule": "", "command": "git grep -n foo" },
     { "name": "fd-only find by name", "situation": "fd", "rule": "find", "command": "find . -name '*.ts'" },
     { "name": "fd-only find -exec", "situation": "fd", "rule": "find-chains", "command": "find . -name x -exec ls {} \\;" },
-    { "name": "fd-only fd alone", "situation": "fd", "rule": "", "command": "fd gateway" }
+    { "name": "fd-only fd alone", "situation": "fd", "rule": "", "command": "fd gateway" },
+    { "name": "heredoc body is data", "situation": "fd-rg", "rule": "", "command": "cat > notes.md <<EOF\nRun:\ngrep -rn foo src\nEOF" },
+    { "name": "gh pr create body heredoc", "situation": "fd-rg", "rule": "", "command": "gh pr create --body \"$(cat <<'EOF'\nfind . -name x -delete\nEOF\n)\"" },
+    { "name": "bash -c grep", "situation": "fd-rg", "rule": "grep-rg", "command": "bash -c \"grep -rn foo src\"" },
+    { "name": "sh -lc cat", "situation": "fd-rg", "rule": "cat-head-tail", "command": "sh -lc 'cat src/a.go'" },
+    { "name": "grep in command substitution", "situation": "fd-rg", "rule": "grep-rg", "command": "echo $(grep -rn foo src)" },
+    { "name": "rg with 2>&1 into head", "situation": "fd-rg", "rule": "", "command": "rg -n foo src 2>&1 | head -5" },
+    { "name": "grep inside if body", "situation": "fd-rg", "rule": "grep-rg", "command": "if true; then grep -rn foo src; fi" },
+    { "name": "unterminated quote falls back", "situation": "fd-rg", "rule": "", "command": "rg \"foo" }
   ]
 }
