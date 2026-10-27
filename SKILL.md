@@ -102,13 +102,25 @@ the reuse checklist: `references/gate.md`. Model roles and connector health:
 `references/bench.md` (no imports or paid experiments without approval). The
 `#### Builds` and `search:` format: `references/spec-format.md`.
 
-**Code facts for any repo: `orch ctx`** (`references/context.md`): `find`
-(semantic candidates), `sym`, `text`, `batch` (independent lookups in one call)
-and `brief`. Use one `orch ctx batch` for independent lookups, then native
-Read with offset and limit to inspect source. Check `status`
-(`ok|empty|partial|failed`), `count_kind`, scope and cuts: semantic candidates
-never establish absence, and a missing server is not zero callers. Repo-local
-servers need `ctx_trust = ["/absolute/repo"]` in user config; `ctx_deny` wins.
+**Finding code, in this order** (`references/context.md`):
+1. Location unknown: `jbcontext search "<one behavior>"`. One concept per
+   query, several queries in one message. Results are candidates, not proof of
+   absence; a fresh worktree branch searches the default branch's snapshot, so
+   read before citing a line.
+2. Known symbol: `orch lsp def|refs|callers|impls <Name>`, `orch lsp symbols
+   <file>` and `orch lsp hover <path:line:col>` (exit 1 not found, 2 no language
+   server; `orch lsp --help`).
+3. Exact text: `rg`. 4. File names: `fd`. 5. Inspect source with native Read,
+   offset and limit.
+
+Send independent lookups as parallel calls in one message. `grep`, `cat`,
+`head`, `tail` and `sed -n` stay blocked; plain `rg` is allowed, and plain
+`find` only when `fd` is not installed. `orch ctx find|sym|text|batch` remain
+for scripts and the gate planner but are not what agents are taught; `orch ctx
+brief` still writes task briefs. Check `status` (`ok|empty|partial|failed`),
+`count_kind`, scope and cuts on ctx output: a missing server is not zero
+callers. Repo-local servers need `ctx_trust = ["/absolute/repo"]` in user
+config; `ctx_deny` wins.
 `orch ctx status` shows the index and `orch ctx refresh` updates it; `orch
 plan` writes facts into briefs (`--no-ctx` skips them); `orch doctor` reports
 readiness.

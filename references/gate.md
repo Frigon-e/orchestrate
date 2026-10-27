@@ -69,17 +69,19 @@ contract.
 
 ## Context tools for passes
 
-Gate agents use the plain `orch ctx` CLI, not a server or generated adapter.
+Gate agents use plain shell lookups, not a server or generated adapter: `jbcontext
+search`, `orch lsp`, `rg` and `fd`.
 `--ctx-tool on|off` defaults to on: a read-only notice is first in the shared
 prompt prefix, `ORCH_CTX_ROOT` pins lookups to the code checkout, and a PATH
 shim resolves `orch` to this binary. `--ctx-shell ctx-only` is the default for
-Pi: native `read` plus a shell limited to one `orch ctx` call. Pi starts with
+Pi: native `read` plus a shell limited to one lookup command per call. Pi starts with
 read alone; the loaded guard enables bash and acknowledges activation. If the
 extension cannot be written or loaded, the pass is an execution failure, never
 an open-shell fallback. `--ctx-shell open` restores Pi's native read/search
 tools and unrestricted bash. Claude ignores this setting and adds Bash with the
-`Bash(orch ctx:*)` permission. Prefer one `orch ctx batch` over several greps;
-read what it returns before searching again. With ctx off, the original read
+`Bash(jbcontext search:*)`, `Bash(orch lsp:*)`, `Bash(rg:*)` and `Bash(fd:*)`
+permissions. Send independent lookups as parallel calls in one message; read
+what they return before searching again. With ctx off, the original read
 and search tools remain and the ctx notice/env are absent.
 
 Repository context files are never loaded: pi gets `--no-context-files`;

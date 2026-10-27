@@ -353,7 +353,8 @@ message. Triage shadow also records unavailable skips rather than fake ratings.
 
 ## Claude execution boundary
 
-Claude passes run `claude -p` with Read/Grep/Glob, non-interactive `dontAsk`
+Claude passes run `claude -p` with Read/Grep/Glob and Bash limited to
+`jbcontext search`, `orch lsp`, `rg` and `fd`, non-interactive `dontAsk`
 permissions and disabled slash commands. The strict empty server configuration
 excludes ambient servers, and the gate runs no ctx server. Tool-less tasks stay
 tool-less even with ctx enabled. The ctx tool, shell modes, repository-context

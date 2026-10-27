@@ -1,18 +1,29 @@
-# Code facts with `orch ctx`
+# Finding code facts
 
-`orch ctx` answers questions about a repository from tools, with no model and
-no run state. It works in any git repo, subject to backend availability and
-trust. Use one `orch ctx batch` for independent lookups, then inspect source
-with native Read/read. Use a single lookup when only one question is ready.
-There is no blanket speed advantage over native tools. Never re-read what you
-already read.
-Agents read files with their native read tool (Pi `read`, Claude `Read`), using
-offset and limit for part of a file. orch ctx is for finding things, not for
-reading files; agents never use sed, cat, head or tail, the ctx read command,
-or the batch read kind.
-Here `orch` means `~/.agents/skills/orchestrate/scripts/orch`, called from the
-repository root. When files are unknown, start with `ctx find`: it wraps
-jbcontext, so jbcontext remains the first discovery step.
+Agents look code up in this order, most specific tool first:
+
+1. Location unknown: `jbcontext search "<one behavior>"`. One concept per query,
+   several queries in one message. Results are candidates, not proof of absence.
+   A fresh worktree branch searches the default branch's snapshot, so read
+   before citing a line.
+2. Known symbol: `orch lsp def|refs|callers|impls <Name>` (`Name`, `pkg.Name` or
+   `Type.Method`), `orch lsp symbols <file>` for an outline and `orch lsp hover
+   <path:line:col>` for a type. Exit 1 means not found and 2 means no language
+   server for that language; `orch lsp --help` lists the flags.
+3. Exact text: `rg` (`rg -n -w`, `-F`, `-g 'GLOB'`).
+4. File names: `fd`.
+5. Read with the native read tool (Pi `read`, Claude `Read`), using offset and
+   limit for part of a file.
+
+Independent lookups go as parallel calls in one message. `grep`, a plain `find`
+while `fd` is installed, `cat`, `head`, `tail` and `sed -n` are blocked by the
+tool guard; plain `rg` is allowed. Never re-read what you already read.
+
+`orch ctx find|sym|text|batch` remain available for scripts and the gate
+planner, and `orch ctx brief` writes task briefs, but agents are no longer
+taught them for lookups. The rest of this file describes their output, which
+scripts and `orch plan` depend on. Here `orch` means
+`~/.agents/skills/orchestrate/scripts/orch`, called from the repository root.
 `orch ctx` alone shows the live state (index against HEAD, tools ready) and
 the commands; `orch ctx <subcommand> --help` shows flags and examples.
 `orch version`, `orch --version`, `-v` and `-V` print the bare build fingerprint
@@ -20,30 +31,21 @@ without repo/config/backend initialization. Direct Go builds print `devel`.
 The launcher uses Go and `shasum` to check source, embedded-asset and toolchain
 content on each invocation; unchanged content reuses its worktree-scoped binary.
 
-## Pick the cheapest lookup
+## The orch ctx commands
 
-Start with the cheapest tool that can answer, and move up only when it cannot:
+Scripts pick the cheapest command that can answer, and move up only when it
+cannot:
 
-1. `text` when you know a string, a name, a route, a message: regex or literal
-   matches in the reported scope, with status and exclusions. Narrow it with
-   `--glob`,
+1. `text` for a string, a name, a route, a message: regex or literal matches in
+   the reported scope, with status and exclusions. Narrow it with `--glob`,
    `--word`, `--type` before you widen it.
-2. `sym` when you know the name of a function, type or method and want its
-   definition, callers and implementers.
-3. `find` (concept) only when you do not know any name to search for.
-4. `batch` whenever you have two or more independent lookups.
+2. `sym` for a function, type or method name: its definition, callers and
+   implementers.
+3. `find` (concept) only when no name is known.
+4. `batch` for two or more independent lookups.
 
-The guard names `orch ctx` only when `orch --version` answers (exit 0 within
-three seconds). When `orch` is on PATH and fails that probe, for example a
-wrapper that cannot find the `tool` directory next to it, the guard treats it
-as not installed: it names `fd`, `rg` or the built-in tools instead, does not
-block a plain `rg`, and ends each search block with
-`orch ctx is installed but broken here (<first line of the probe error>); use
-the tools above and tell the user.` Pi probes once at startup; each Claude hook
-probes at most once a minute through
-`~/.local/state/orchestrate/toolguard-health.json`, which
-`ORCH_TOOL_GUARD_STATE_DIR` moves. If you see that line, do not look for another
-search tool: say the tool is broken and use the replacement the block names.
+The tool guard no longer probes `orch` and never names `orch ctx` as a
+replacement, so a broken `orch` does not change what a block says.
 
 | You need | Command | Why this one |
 |---|---|---|
@@ -454,8 +456,9 @@ ORCH_CTX_ROOT=/absolute/repo orch ctx --readonly sym StartCheckout
 ```
 
 `ORCH_CTX_ROOT` itself implies read-only. The flag and `ORCH_CTX_READONLY=1`
-require it. The caller's working directory cannot change the root. Agent
-lookups are `find`, `sym`, `text`, `refs` (an alias of `sym`) and `batch`.
+require it. The caller's working directory cannot change the root. Scripts and
+the gate planner use `find`, `sym`, `text`, `refs` (an alias of `sym`) and `batch`;
+agents are taught `jbcontext search` and `orch lsp` instead.
 The CLI also permits `read` for scripts; agents use their native read tool.
 `refresh`, `status`, `watch` and `brief` are refused. Index builds
 and refreshes are disabled, including automatic ones on `find`. An existing
@@ -495,7 +498,8 @@ at its prompt while its extensions load, and that idle is not the end of the
 pass.
 
 Keep Claude's native `Read,Grep,Glob` in both the tool and allowed-tool lists,
-add `Bash` to the tool list, and add `Bash(orch ctx:*)` to `--allowedTools` with
+add `Bash` to the tool list, and add `Bash(jbcontext search:*)`,
+`Bash(orch lsp:*)`, `Bash(rg:*)` and `Bash(fd:*)` to `--allowedTools` with
 `dontAsk` permission handling. Pi defaults to `--ctx-shell ctx-only` with ctx on:
 only native `read` and guarded bash. It starts with
 `--no-builtin-tools --tools +read`: read is active, while bash stays registered
@@ -505,13 +509,15 @@ from the registry and prevent activation.
 A missing acknowledgement or extension-write error fails the pass, without an
 open-shell fallback. `--ctx-shell open` keeps Pi's native `read,grep,find,ls`
 and appends unrestricted `bash`. Claude ignores `--ctx-shell`; ctx off keeps the
-original native tools. `CtxCLI.Tools` contains only the extra shell entry.
-`Bash(orch ctx:*)` is not an exclusive shell-command allowlist, and a Claude
+original native tools. `CtxCLI.Tools` contains only the extra shell entries.
+The Claude `Bash(...)` permissions are not an exclusive shell-command allowlist, and a Claude
 pass can read outside the checkout through native Read. `ORCH_CTX_ROOT`
 constrains orch, not native Read; it is not a file-confidentiality boundary.
 
-Pi's default ctx-only shell accepts only one `orch ctx find|sym|text|batch|refs`
-call, without pipes, redirects or unrelated commands. `--ctx-shell open` opts
+Pi's default ctx-only shell accepts only one `jbcontext search`, `orch lsp`,
+`rg`, `fd`, `ls` or `wc` call, without pipes, redirects, command substitution,
+unquoted globs or other commands; `rg` and `fd` flags that run another program
+are refused. `--ctx-shell open` opts
 out and permits arbitrary shell programs, including writes and network access.
 Native read is not root-confined in either mode. The prompt and post-pass
 unchanged check remain separate layers, not an operating-system sandbox;
@@ -524,45 +530,55 @@ rely on that copy: a pi pass with `--ctx-tool on --ctx-shell open` starts with `
 embedded in the binary and written next to the ctx shim, so a guarded gate run
 tests the code in the checkout. Ctx-only and ctx off do not load it. The
 `ORCH_TOOL_GUARD`, `ORCH_TOOL_GUARD_SKIP` and `ORCH_TOOL_GUARD_STATE_DIR` settings in orch's environment reach the pane's pi through the pane shell exports. `ORCH_TSLS`, when
-set in orch's environment, reaches the pane's `orch ctx` the same way in any
-ctx-tool pass. The guard carries five
+set in orch's environment, reaches the pane's `orch ctx` and `orch lsp` the same way in any
+ctx-tool pass. The Claude hooks in `hooks/claude/` port the same rules, and
+`hooks/claude/README.md` is the reference for them. The guard carries five
 small deny rules over shell commands, each a table entry with a name, a matcher
 and a reason, plus two more for pi's own `grep` and `find` tools:
 `deny-find-chains` (find `-exec`/`-delete`, and a search tool feeding a grep),
-`deny-find` (a plain `find` over a tree), `deny-sed-inplace` (`sed -i`,
-`perl -pi`), `deny-cat-head-tail` (one bare `cat`, `head`, `tail` or `sed -n`
-on a file) and `deny-grep-rg` (a plain `grep`, `egrep`, `fgrep`, `ag` or
-`git grep` over files or a directory, and `rg` too while `orch` is installed).
-`deny-builtin-grep` and `deny-builtin-find` refuse pi's own `grep` and `find`
-tools while `orch` answers, because they reach the tree without a shell: with
-`orch` absent or broken they are the fallback the shell blocks name, so they
-are allowed then, and `ls` only lists a directory, so it never blocks.
-A `tool_call` block names the replacement in order: one `orch ctx` call when
-`orch` is on PATH, otherwise `fd` for a file search and `rg` for a content
-search, and the built-in `edit`, `read`, `grep` or `find` when those are
-missing too; the reason is two or three lines. `orch ctx` is pinned to a git
-repository root, so a built-in search that names an absolute path outside the
-session's repository has no replacement: it is allowed, with no note, and a
-relative or missing path counts as inside. The same boundary applies in the
-Claude hooks, to `Grep` and `Glob`. Reading a file is the
-exception: `deny-cat-head-tail` always names the built-in `read` with offset
-and limit (a section or the whole file), never `orch ctx`, whether or not
-`orch` is installed. Allowed: a grep or rg filtering another command's
-output, a read that feeds a pipe or a redirect, `tail -f`, several files to
-`cat`, a `find` reading a pipe, and plain `fd`. Plain `fd`
-and pi's built-in `ls` keep the appended reminder that names one
-`orch ctx batch` call, and a built-in `grep` or `find` that runs does too (it
-is blocked while `orch` answers, so it runs only when that rule is skipped or
-the guard is off). A blocked command line is blocked every time and does not
-run on a retry; from the third block in a row the reason adds `Blocked 3 times:
-use the replacement above; this guard does not give way.` `ORCH_TOOL_GUARD=off`
-turns the guard off and
+`deny-find` (a plain `find` over a tree while `fd` is installed),
+`deny-sed-inplace` (`sed -i`, `perl -pi`), `deny-cat-head-tail` (one bare
+`cat`, `head`, `tail` or `sed -n` on a file) and `deny-grep-rg` (a plain
+`grep`, `egrep`, `fgrep`, `ag` or `git grep` over files or a directory, while
+`rg` is installed; `rg` itself is never blocked). `deny-builtin-grep` and
+`deny-builtin-find` refuse pi's own `grep` and `find` tools while `rg` (for
+grep) or `fd` (for find) is installed, because they reach the tree without a
+shell; with the replacement absent they are the fallback and are allowed. On
+Claude there are no rules for the built-in `Grep` and `Glob` tools, and no
+health probe of `orch`: a block does not depend on it. `ls` only lists a
+directory, so it never blocks.
+A search block is two lines: what is blocked with the replacement (`rg` for
+content, `fd` for file names), then the lookup order: `jbcontext search "<one
+behavior>"` if the location is unknown, `orch lsp def|refs|callers <Name>` for a
+known symbol, `rg` for exact text, `fd` for file names, with independent lookups
+sent in one message. A plain `find` is allowed when `fd` is not installed and a
+`grep` when `rg` is not installed, because there is no replacement to name.
+Reading a file is the exception: `deny-cat-head-tail` always names the
+built-in `read` with offset and limit (a section or the whole file).
+`orch ctx` is never the named replacement. Allowed: a grep filtering another
+command's output, a read that feeds a pipe or a redirect, `tail -f`, several
+files to `cat`, a `find` reading a pipe, `rg`, and `fd`. A built-in search
+that names an absolute path outside the session's repository has no
+replacement and is allowed. A blocked command line is blocked every time and
+does not run on a retry; from the third block in a row the reason adds `Blocked
+3 times: use the replacement above; this guard does not give way.`
+`ORCH_TOOL_GUARD=off` turns the guard off and
 `ORCH_TOOL_GUARD_SKIP=find-chains,find,sed-inplace,cat-head-tail,grep-rg`
 disables rules by name; the group name `builtin-search` disables both built-in
-search rules, and the reminder stays either way. A pi build without the
-`tool_result` hook blocks the first search of the session once instead. It
-stays silent inside the ctx-only gate shell. Its decision tables run in node:
-`go test -run 'CtxReminder' .` in `tool`.
+search rules. The guard stays silent inside the ctx-only gate shell. Its
+decision tables run in node: `go test -run 'CtxReminder' .` in `tool`.
+
+The lookup coach is a non-blocking part of the same extension and of the Claude
+`lookup-coach.sh` hook. It logs every lookup (`jbcontext search`, `orch lsp`,
+`orch ctx`, `rg`, `fd`, reads) to `~/.local/state/orchestrate/lookups.jsonl`
+and reminds the worker, at most once per kind per session, when its first `rg`
+or `fd` comes before any `jbcontext` or `orch lsp` call, when an `rg` pattern is
+a symbol that `orch lsp` should answer, or when it spends one turn per lookup
+instead of batching. `ORCH_LOOKUP_COACH=off` disables the reminders and
+`ORCH_LOOKUP_LOG=off` the log. `orch lookups report [--since 7d] [--repo PATH]
+[--json]` summarizes it: lookups per turn, how often the first search was
+`jbcontext` or `orch lsp`, empty and error rates, reminders fired and followed.
+The details are in the Lookup coach section of `hooks/claude/README.md`.
 
 ## Language-server trust
 

@@ -24,8 +24,8 @@ Your task.md is the contract. Its Report-back section gives the exact
 - Implementers run `sonnet`, or `haiku` for mechanical work; never pass
   `opus` down by default, even on an Opus lead (`route-work`, "Model rule").
 - Batch: independent edits and calls go in one turn as parallel calls; one
-  Write for a new file; one `orch ctx batch` for independent lookups. Run
-  the check once per batch of edits, the full staged check once per wave.
+  Write for a new file; independent lookups as parallel calls in one message.
+  Run the check once per batch of edits, the full staged check once per wave.
 - Verify once: one `ui-verifier` pass with a written checklist after the
   automated check is green (about 60 turns max); a second pass covers only
   the fixed defects.
@@ -58,7 +58,7 @@ branch changed compared to `main`: tests in changed test files, tests in
 a declaration the diff added or changed. `--print` shows the pattern and count
 without running; `--run-extra <regex>` adds tests; `--base` changes the
 comparison branch. When your change alters a default or a mode, search the
-tests for the old default (`orch ctx text`) and run the neighbouring test
+tests for the old default (`rg`) and run the neighbouring test
 files by hand: it selects only tests that reference changed code. Do not run
 the full suite; `--all` exists but needs the
 user's say-so.
@@ -76,13 +76,14 @@ crowds out what matters. Route by context as well as by model (`route-work`,
   sites and a size guess (the sizing prompt in `route-work`) instead of
   reading code to find out.
 - **Delegate single-use output:** wide reads, log digging, searches.
-- **Search with `orch ctx` first** (`references/context.md`), cheapest option
-  first: `text` with `--glob` and `--word` for scoped pattern matches,
-  `sym` for exact or candidate-labelled definitions and available references,
-  `find` for a concept only when you have no name to search (write it as one behavior, `Code that <action> <entity>, when <trigger>, producing <result>`; see "Writing a concept query" in `references/context.md`). Put two or more independent
-  lookups in one `batch` (`-q "kind:query key=value"`). Tests are hidden and
-  counted; add `--tests include|only` when you need them. Inspect source with
-  native Read/read after locating it; read files over about 30 KB by
+- **Look up in this order** (`references/context.md`): `jbcontext search
+  "<one behavior>"` when the location is unknown (one concept per query,
+  several queries in one message; candidates, not proof of absence; a fresh
+  worktree branch searches the default branch's snapshot, so read before citing
+  a line), `orch lsp def|refs|callers|impls <Name>` for a known symbol (`orch lsp
+  symbols <file>`, `orch lsp hover <path:line:col>`), `rg` for exact text, `fd`
+  for file names. Send independent lookups as parallel calls in one message.
+  Inspect source with native Read/read after locating it; read files over about 30 KB by
   offset/limit, only the part needed. Give subagents the excerpt or the
   exact `path:line-range`, not "read task.md". No blanket speed or
   absence guarantee: check `status`, `count_kind`, scope, exclusions, errors,
