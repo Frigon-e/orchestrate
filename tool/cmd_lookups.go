@@ -12,28 +12,17 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"orchestrate/orch/guard"
 )
 
 // `orch lookups report` reads the lookup log the lookup coach writes
-// (hooks/claude/toolguard.py coach for Claude, tool/pi_ctx_reminder.ts for pi):
+// (orch-guard coach for Claude, tool/pi_ctx_reminder.ts for pi):
 // one JSON line per lookup in $ORCH_TOOL_GUARD_STATE_DIR/lookups.jsonl. It
 // answers whether workers picked the right tool, in the right order, in few turns.
 
-type lookupLine struct {
-	TS         string  `json:"ts"`
-	Harness    string  `json:"harness"`
-	Session    string  `json:"session"`
-	Repo       string  `json:"repo"`
-	Turn       any     `json:"turn"`
-	Tool       string  `json:"tool"`
-	Query      string  `json:"query"`
-	OK         bool    `json:"ok"`
-	Empty      bool    `json:"empty"`
-	Bytes      int     `json:"bytes"`
-	DurationMS *int    `json:"duration_ms"`
-	Reminder   *string `json:"reminder"`
-	Followed   *bool   `json:"followed"`
-}
+// lookupLine is a row of the log; orch-guard writes it, so the type lives in guard.
+type lookupLine = guard.LookupLine
 
 type lookupToolStats struct {
 	Lookups int     `json:"lookups"`
@@ -82,15 +71,6 @@ type lookupReport struct {
 	Harnesses []lookupHarnessReport `json:"harnesses"`
 }
 
-func lookupLogPath() string {
-	dir := os.Getenv("ORCH_TOOL_GUARD_STATE_DIR")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state", "orchestrate")
-	}
-	return filepath.Join(dir, "lookups.jsonl")
-}
-
 // parseSince reads 90m, 36h or 7d.
 func parseSince(s string) (time.Duration, error) {
 	if days, ok := strings.CutSuffix(s, "d"); ok {
@@ -136,7 +116,7 @@ func cmdLookups(a *app, args []string) error {
 			return fail("--repo: %v", err)
 		}
 	}
-	path := lookupLogPath()
+	path := guard.LogPath()
 	lines, err := readLookupLog(path, cutoff, repoPath)
 	if err != nil {
 		return err

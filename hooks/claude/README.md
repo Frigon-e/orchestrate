@@ -18,6 +18,14 @@ python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py --apply --
 - The hook reads its event as JSON on stdin. Exit 0 to allow, exit 2 to block (stderr goes back to Claude).
 - Event names, matchers and the JSON shape: https://docs.claude.com/en/docs/claude-code/hooks
 
+## orch-guard binary
+
+The registered hooks run one Go binary, `hooks/bin/orch-guard` (source: `tool/guard` and `tool/cmd/orch-guard`), not the shell scripts below: `orch-guard pre` is every PreToolUse rule (the four Bash rule groups for Bash, `deny-big-read` for Read; the first hit blocks, exit 2 with the reason on stderr), and `orch-guard coach` is the lookup coach for PostToolUse, PostToolUseFailure and UserPromptSubmit. Same switches, state files and log as the Python hooks, so a session can change from one to the other mid-way. The scripts and `toolguard.py` stay until pi moves onto the binary.
+
+- `scripts/build-guard` builds it (needs Go) and is a no-op when `orch-guard --version` already equals the fingerprint of the sources; `build-guard --print-fingerprint` prints that fingerprint. `scripts/orch` runs it when it rebuilds orch or the binary is missing, and `install_settings.py --apply` runs it first. The binary is git-ignored.
+- On every call the binary re-hashes its sources under the repository it was built from. If they changed it still answers with its own logic, and starts a detached `scripts/build-guard` (one at a time, a lock in the state dir; output in `guard-build.log` there). `orch doctor` warns when the binary is missing, not executable or stale.
+- Tests: `cd tool && go test ./guard/...` (`-short` skips the parity run against `toolguard.py`, which takes about a minute).
+
 ## Tool guard
 
 These are the Claude side of the pi guard in `tool/pi_ctx_reminder.ts`, which stays the source of truth. `toolguard.py` is a line for line port of its five shell rules; each shell script below is a thin wrapper that names the rule group it enforces, so a script is one file to read and one block list to change. `deny-grep-rg` keeps its id and script name for compatibility: it now blocks `grep`, `egrep`, `fgrep`, `ag` and `git grep`, and never `rg`.

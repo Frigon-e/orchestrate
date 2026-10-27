@@ -31,8 +31,18 @@ def deep(value):
     return json.loads(json.dumps(value))
 
 
-def run(*args, stdin=None):
-    return subprocess.run([sys.executable, str(SCRIPT), *args], input=stdin, capture_output=True, text=True)
+GUARD_PRE = '"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard" pre'
+GUARD_COACH = '"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard" coach'
+# What an install of the shell-script era left in settings.json: all of it retired.
+OLD_SCRIPTS = ["deny-find-chains", "deny-sed-inplace", "deny-cat-head-tail", "deny-grep-rg", "deny-big-read", "lookup-coach"]
+
+
+def old_command(name):
+    return f'"$HOME/.agents/skills/orchestrate/hooks/claude/{name}.sh"'
+
+
+def run(*args, stdin=None, env=None):
+    return subprocess.run([sys.executable, str(SCRIPT), *args], input=stdin, capture_output=True, text=True, env=env)
 
 
 class MergeTests(unittest.TestCase):
@@ -78,7 +88,7 @@ class MergeTests(unittest.TestCase):
         for event in ("PostToolUse", "PostToolUseFailure"):
             groups = settings["hooks"][event]
             self.assertEqual([g["matcher"] for g in groups], ["Bash|Read|LSP|mcp__jbcontext__.*"])
-            self.assertTrue(groups[0]["hooks"][0]["command"].endswith('/hooks/claude/lookup-coach.sh"'))
+            self.assertEqual(groups[0]["hooks"][0]["command"], GUARD_COACH)
 
     def test_lookup_coach_is_registered_on_user_prompt_submit_without_a_matcher(self):
         settings = deep(FOREIGN)
@@ -86,7 +96,7 @@ class MergeTests(unittest.TestCase):
         inst.merge(settings, FRAGMENT)
         commands = inst.commands(settings, "UserPromptSubmit")
         self.assertEqual(commands[0], "echo mine")
-        self.assertEqual(len([c for c in commands if c.endswith('/hooks/claude/lookup-coach.sh"')]), 1)
+        self.assertEqual(commands.count(GUARD_COACH), 1)
         self.assertEqual(inst.merge(settings, FRAGMENT), [])
 
     def test_timeout_is_kept(self):
@@ -247,11 +257,85 @@ class CliTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
 
-    def test_every_fragment_command_points_at_an_existing_executable_script(self):
-        for command in FRAGMENT_COMMANDS:
-            path = HERE / Path(command.strip('"')).name
-            self.assertTrue(path.exists(), f"{path.name} listed in the fragment does not exist")
-            self.assertTrue(os.access(path, os.X_OK), f"{path.name} is not executable")
+    def test_every_fragment_command_runs_the_guard_binary_the_build_script_makes(self):
+        """The binary is built, not checked in: the script that builds it must exist, and each
+        event must pass the mode (pre or coach) the binary's command line knows."""
+        build = HERE.parent.parent / "scripts" / "build-guard"
+        self.assertTrue(os.access(build, os.X_OK), "scripts/build-guard is missing or not executable")
+        for event, groups in FRAGMENT["hooks"].items():
+            for group in groups:
+                for hook in group["hooks"]:
+                    want = GUARD_PRE if event == "PreToolUse" else GUARD_COACH
+                    self.assertEqual(hook["command"], want, event)
+                    self.assertEqual(hook["timeout"], 5, event)
+
+    def test_pre_tool_use_registers_one_command_for_bash_and_one_for_read(self):
+        groups = FRAGMENT["hooks"]["PreToolUse"]
+        self.assertEqual([(g["matcher"], [h["command"] for h in g["hooks"]]) for g in groups],
+                         [("Bash", [GUARD_PRE]), ("Read", [GUARD_PRE])])
+
+    def test_apply_builds_the_guard_first_and_the_binary_runs(self):
+        self.write(FOREIGN)
+        result = run("--settings", str(self.settings), "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binary = HERE.parent / "bin" / "orch-guard"
+        self.assertTrue(os.access(binary, os.X_OK))
+        self.assertEqual(subprocess.run([str(binary), "--version"], capture_output=True, text=True).returncode, 0)
+
+    def test_apply_without_go_fails_clearly_and_changes_nothing(self):
+        self.write(FOREIGN)
+        before = self.settings.read_text()
+        result = run("--settings", str(self.settings), "--apply", env={"PATH": str(self.tmp), "HOME": str(self.tmp)})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("go is not on PATH", result.stderr)
+        self.assertEqual(self.settings.read_text(), before)
+        self.assertEqual(list(self.tmp.glob("*.bak-*")), [])
+
+    def test_dry_run_and_check_do_not_need_go(self):
+        self.write(FOREIGN)
+        env = {"PATH": str(self.tmp), "HOME": str(self.tmp)}
+        self.assertEqual(run("--settings", str(self.settings), env=env).returncode, 0)
+        self.assertEqual(run("--settings", str(self.settings), "--check", env=env).returncode, 1)
+
+
+class MigrationTests(unittest.TestCase):
+    """An install of the shell-script hooks is replaced by the binary's hooks."""
+
+    def old_settings(self):
+        settings = deep(FOREIGN)
+        settings["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [
+            {"type": "command", "command": old_command(n)} for n in OLD_SCRIPTS[:4]]})
+        settings["hooks"]["PreToolUse"].append({"matcher": "Read", "hooks": [
+            {"type": "command", "command": old_command("deny-big-read"), "timeout": 5}]})
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            settings["hooks"][event] = [{"matcher": "Bash|Read|LSP|mcp__jbcontext__.*", "hooks": [
+                {"type": "command", "command": old_command("lookup-coach"), "timeout": 5}]}]
+        settings["hooks"]["UserPromptSubmit"] = [{"hooks": [
+            {"type": "command", "command": old_command("lookup-coach"), "timeout": 5}]}]
+        return settings
+
+    def test_old_script_hooks_are_owned_and_the_binary_hooks_too(self):
+        for name in OLD_SCRIPTS:
+            self.assertTrue(inst.is_owned({"command": old_command(name)}))
+        self.assertTrue(inst.is_owned({"command": GUARD_PRE}))
+        self.assertFalse(inst.is_owned({"command": "jq -r .x"}))
+
+    def test_prune_and_merge_leave_only_the_binary_hooks_and_foreign_ones(self):
+        settings = self.old_settings()
+        removed = inst.prune(settings, FRAGMENT)
+        self.assertEqual(len(removed), 4 + 1 + 3)
+        inst.merge(settings, FRAGMENT)
+        owned = [h["command"] for gs in settings["hooks"].values() for g in gs for h in g["hooks"] if inst.is_owned(h)]
+        self.assertEqual(sorted(owned), sorted(FRAGMENT_COMMANDS))
+        self.assertEqual(inst.missing(settings, FRAGMENT), [])
+        self.assertEqual(settings["hooks"]["SessionStart"], FOREIGN["hooks"]["SessionStart"])
+        self.assertEqual(settings["hooks"]["PreToolUse"][0], FOREIGN["hooks"]["PreToolUse"][0])
+
+    def test_one_command_for_two_matchers_is_registered_for_each(self):
+        settings = {"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": GUARD_PRE, "timeout": 5}]}]}}
+        added = inst.merge(settings, FRAGMENT)
+        self.assertEqual(added.count(GUARD_PRE), 1)
+        self.assertEqual(sorted(g["matcher"] for g in settings["hooks"]["PreToolUse"]), ["Bash", "Read"])
 
 
 if __name__ == "__main__":

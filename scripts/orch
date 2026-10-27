@@ -50,12 +50,21 @@ fingerprint="${fingerprint%% *}"
 # each other's binary. The binary carries its fingerprint: no sidecar can drift.
 source_key="$(printf '%s' "$src" | shasum -a 256)"
 bin="${XDG_CACHE_HOME:-$HOME/.cache}/orchestrate/${source_key%% *}/orch"
+rebuilt=0
 if [ ! -x "$bin" ] || [ "$("$bin" --version 2>/dev/null || true)" != "$fingerprint" ]; then
+  rebuilt=1
   mkdir -p "$(dirname "$bin")"
   tmp="$bin.$$"
   trap 'rm -f "$tmp"' EXIT
   (cd "$src" && go build -trimpath -ldflags "-X main.orchVersion=$fingerprint" -o "$tmp" .) >&2
   mv -f "$tmp" "$bin"
+fi
+# hooks/bin/orch-guard is built from tool/guard and tool/cmd/orch-guard, which the
+# fingerprint above also covers, so the guard can only be stale when orch just
+# rebuilt. Check it then, or when it is missing, and leave the common path (orch
+# and guard both fresh) at one stat. build-guard is itself a no-op when fresh.
+if [ "$rebuilt" = 1 ] || [ ! -x "$skill/hooks/bin/orch-guard" ]; then
+  "$here/build-guard" >&2 || echo "orch: building hooks/bin/orch-guard failed; the Claude tool guards stay as they were" >&2
 fi
 export ORCH_SELF="$here/orch" ORCH_SKILL_DIR="$skill"
 exec "$bin" "$@"

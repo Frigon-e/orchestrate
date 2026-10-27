@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -63,6 +64,10 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 						script := hookScript(h.Command, home)
 						if fi, err := os.Stat(script); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
 							add("error", "setup", "hook script missing or not executable: "+script, hookFix)
+						} else if filepath.Base(script) == "orch-guard" {
+							if msg := staleGuard(script); msg != "" {
+								add("warn", "setup", msg, filepath.Join(filepath.Dir(script), "..", "..", "scripts", "build-guard"))
+							}
 						}
 					}
 				}
@@ -136,6 +141,25 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 		}
 	}
 	return fs
+}
+
+// staleGuard says why hooks/bin/orch-guard is out of date, or "" when it is current
+// or cannot be compared. The binary reports the fingerprint of the sources it was
+// built from; scripts/build-guard prints the fingerprint of the sources now.
+func staleGuard(bin string) string {
+	build := filepath.Join(filepath.Dir(bin), "..", "..", "scripts", "build-guard")
+	want, err := exec.Command(build, "--print-fingerprint").Output()
+	if err != nil {
+		return ""
+	}
+	got, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		return "hook binary does not run: " + bin
+	}
+	if strings.TrimSpace(string(got)) != strings.TrimSpace(string(want)) {
+		return "hook binary is stale, built from older sources: " + bin
+	}
+	return ""
 }
 
 // hookScript extracts the script path from a hook command.

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Build hooks/bin/orch-guard, the Claude Code tool guard (tool/guard and
+# tool/cmd/orch-guard). The binary carries the fingerprint of its sources and the
+# repository path, so it can notice a stale build on its own (guard.CheckStale).
+#
+#   build-guard                     build when missing or stale; a no-op when fresh
+#   build-guard --print-fingerprint print the fingerprint of the current sources
+#
+# The fingerprint is guard.Fingerprint in Go: sha256 over one "<sha256>  <path>"
+# line per file (paths relative to tool/, C-locale order) of the non-test files of
+# guard/ and cmd/orch-guard/, then go.mod and go.sum. Keep the two in step.
+set -eo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo="$(dirname "$here")"
+tool="$repo/tool"
+bin="$repo/hooks/bin/orch-guard"
+command -v shasum >/dev/null || { echo "build-guard: needs shasum (SHA-256)" >&2; exit 1; }
+
+fingerprint() {
+  local files=() f
+  cd "$tool"
+  for f in guard/*.go cmd/orch-guard/*.go go.mod go.sum; do
+    [ -f "$f" ] || continue
+    case "$f" in *_test.go) continue ;; esac
+    files+=("$f")
+  done
+  local sorted=()
+  while IFS= read -r f; do sorted+=("$f"); done < <(printf '%s\n' "${files[@]}" | LC_ALL=C sort)
+  local sums
+  sums="$(shasum -a 256 -- "${sorted[@]}")"
+  printf '%s\n' "$sums" | shasum -a 256 | { read -r hash _; printf '%s\n' "$hash"; }
+}
+
+fp="$(fingerprint)"
+if [ "${1:-}" = "--print-fingerprint" ]; then
+  printf '%s\n' "$fp"
+  exit 0
+fi
+if [ -x "$bin" ] && [ "$("$bin" --version 2>/dev/null || true)" = "$fp" ]; then
+  exit 0
+fi
+command -v go >/dev/null || { echo "build-guard: building orch-guard needs Go (https://go.dev/dl/)" >&2; exit 1; }
+mkdir -p "$(dirname "$bin")"
+tmp="$bin.$$"
+trap 'rm -f "$tmp"' EXIT
+(cd "$tool" && go build -trimpath -ldflags "-X main.fingerprint=$fp -X main.sourceDir=$repo" -o "$tmp" ./cmd/orch-guard)
+mv -f "$tmp" "$bin"

@@ -4,23 +4,20 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-find-chains.sh\"" },
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-sed-inplace.sh\"" },
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-cat-head-tail.sh\"" },
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-grep-rg.sh\"" }
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" pre", "timeout": 5 }
         ]
       },
       {
         "matcher": "Read",
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-big-read.sh\"", "timeout": 5 }
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" pre", "timeout": 5 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
         ]
       }
     ],
@@ -28,7 +25,7 @@
       {
         "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
         ]
       }
     ],
@@ -36,7 +33,7 @@
       {
         "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
         "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
         ]
       }
     ]

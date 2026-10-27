@@ -2,8 +2,10 @@
 """Register the tool-guard hooks in a Claude Code settings.json.
 
 The hooks to register are listed in settings-fragment.json next to this file.
-Every hook whose command points into hooks/claude of this skill is owned by this
-script; every other key and hook in the settings file is left exactly as found.
+Every hook whose command points into hooks/claude or hooks/bin of this skill is
+owned by this script; every other key and hook in the settings file is left
+exactly as found. The hooks run hooks/bin/orch-guard, which --apply builds first
+with scripts/build-guard (needs Go).
 
     install_settings.py                  show what would change (default, writes nothing)
     install_settings.py --apply          merge the fragment into the settings file and
@@ -19,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,16 +29,36 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FRAGMENT = HERE / "settings-fragment.json"
-OWNED_MARK = "/skills/orchestrate/hooks/claude/"
+# Hooks that point into the old script folder (retired, pruned on --apply) or at the guard binary.
+OWNED_MARKS = ("/skills/orchestrate/hooks/claude/", "/skills/orchestrate/hooks/bin/")
+BUILD_GUARD = HERE.parent.parent / "scripts" / "build-guard"
 DEFAULT_SETTINGS = "~/.claude/settings.json"
 
 
 def is_owned(hook):
-    return OWNED_MARK in hook.get("command", "")
+    return any(mark in hook.get("command", "") for mark in OWNED_MARKS)
+
+
+def build_guard():
+    """Build hooks/bin/orch-guard, which every registered hook runs."""
+    if shutil.which("go") is None:
+        sys.exit("install_settings: hooks/bin/orch-guard is built with Go and go is not on PATH "
+                 "(https://go.dev/dl/); nothing was changed")
+    if subprocess.run([str(BUILD_GUARD)]).returncode != 0:
+        sys.exit("install_settings: scripts/build-guard failed; nothing was changed")
 
 
 def commands(settings, event):
     return [h.get("command") for g in settings.get("hooks", {}).get(event, []) for h in g.get("hooks", [])]
+
+
+def registered(settings, event):
+    """The (matcher, command) pairs of an event: one command may serve several matchers."""
+    return {
+        (g.get("matcher"), h.get("command"))
+        for g in settings.get("hooks", {}).get(event, [])
+        for h in g.get("hooks", [])
+    }
 
 
 def merge(settings, fragment):
@@ -43,10 +66,10 @@ def merge(settings, fragment):
     added = []
     hooks = settings.setdefault("hooks", {})
     for event, groups in fragment["hooks"].items():
-        have = set(commands(settings, event))
+        have = registered(settings, event)
         for group in groups:
             for hook in group["hooks"]:
-                if hook["command"] in have:
+                if (group.get("matcher"), hook["command"]) in have:
                     continue
                 event_groups = hooks.setdefault(event, [])
                 target = next(
@@ -59,7 +82,7 @@ def merge(settings, fragment):
                     target["hooks"] = []
                     event_groups.append(target)
                 target["hooks"].append(dict(hook))
-                have.add(hook["command"])
+                have.add((group.get("matcher"), hook["command"]))
                 added.append(hook["command"])
     return added
 
@@ -103,7 +126,7 @@ def missing(settings, fragment):
         for event, groups in fragment["hooks"].items()
         for g in groups
         for h in g["hooks"]
-        if h["command"] not in commands(settings, event)
+        if (g.get("matcher"), h["command"]) not in registered(settings, event)
     ]
 
 
@@ -168,6 +191,9 @@ def main(argv=None):
     path = Path(args.settings).expanduser()
     text = path.read_text() if path.exists() else ""
     settings = parse(text, str(path))
+
+    if args.apply and not args.remove and not args.check:
+        build_guard()
 
     if args.check:
         gone = missing(settings, fragment)

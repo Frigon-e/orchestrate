@@ -195,3 +195,30 @@ func TestSetupFindingsPrunableWorktree(t *testing.T) {
 		t.Fatal("want prunable warn")
 	}
 }
+
+func TestSetupFindingsGuardBinary(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
+	home := t.TempDir()
+	root := filepath.Join(home, "r")
+	skill := filepath.Join(home, ".agents", "skills", "orchestrate")
+	cfg := `{"hooks":{"PreToolUse":[{"hooks":[{"command":"\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" pre"}]}]}}`
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"), cfg, 0o644)
+	bin := filepath.Join(skill, "hooks", "bin", "orch-guard")
+	if !hasMsg(setupFindings(home, home, root, okLook), "error", "orch-guard") {
+		t.Fatal("want a missing binary error")
+	}
+	mustWrite(t, bin, "#!/bin/sh\necho built-from-old-sources\n", 0o644)
+	if !hasMsg(setupFindings(home, home, root, okLook), "error", "orch-guard") {
+		t.Fatal("want a not executable error")
+	}
+	os.Chmod(bin, 0o755)
+	mustWrite(t, filepath.Join(skill, "scripts", "build-guard"), "#!/bin/sh\necho sources-now\n", 0o755)
+	if !hasMsg(setupFindings(home, home, root, okLook), "warn", "stale") {
+		t.Fatal("want a stale binary warning")
+	}
+	mustWrite(t, bin, "#!/bin/sh\necho sources-now\n", 0o755)
+	fs := setupFindings(home, home, root, okLook)
+	if hasMsg(fs, "warn", "stale") || hasMsg(fs, "error", "orch-guard") {
+		t.Fatalf("unexpected: %v", fs)
+	}
+}
