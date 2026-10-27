@@ -1,6 +1,6 @@
 # Claude Code hooks
 
-Scripts here run only once registered in `~/.claude/settings.json`. `settings-fragment.json` lists exactly which hooks to register, and `install_settings.py` merges it in. The commands point straight at this folder, no symlink, so the skill must be installed at `~/.agents/skills/orchestrate`.
+Scripts here run only once registered in `~/.claude/settings.json`. `settings-fragment.json` lists exactly which hooks to register, and `install_settings.py` merges it in. The commands point straight at this folder, with no symlink in between. The skill is reached at `~/.agents/skills/orchestrate`, which may itself be a symlink to a checkout (for example `~/Development/orchestrate`).
 
 ```sh
 python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py           # show what would change, write nothing
