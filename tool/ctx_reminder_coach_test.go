@@ -23,7 +23,7 @@ var coachTexts = map[string]string{
 	"symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
 	"batch-lookups":  "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
 	"read-batch":     "Read the ranges you already know as parallel reads in one message.",
-	"lookup-ladder":  `Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message.`,
+	"lookup-ladder":  `Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message. Read known files or ranges with Read, not cat or sed -n.`,
 }
 
 type coachCall struct {

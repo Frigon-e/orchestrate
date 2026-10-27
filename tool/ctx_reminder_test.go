@@ -380,12 +380,12 @@ func TestCtxReminderGuardDenySedInplace(t *testing.T) {
 
 // deny-cat-head-tail: one bare file read belongs to the read tool.
 func TestCtxReminderGuardDenyCatHeadTail(t *testing.T) {
-	read := []string{"read", "offset and limit"}
+	read := []string{"read path=", "parallel"}
 	cases := []reminderCase{
 		{Name: "cat one file", Tool: "bash", Input: bash(`cat notes.txt`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "head -n 20", Tool: "bash", Input: bash(`head -n 20 notes.txt`)},
 		{Name: "tail -c 100", Tool: "bash", Input: bash(`tail -c 100 notes.txt`)},
-		{Name: "sed -n range", Tool: "bash", Input: bash(`sed -n '10,20p' notes.txt`), Blocks: "cat-head-tail", Needs: read},
+		{Name: "sed -n range", Tool: "bash", Input: bash(`sed -n '10,20p' notes.txt`), Blocks: "cat-head-tail", Needs: []string{"read path=notes.txt offset=10 limit=11", "parallel"}},
 		{Name: "sudo cat", Tool: "bash", Input: bash(`sudo cat /etc/hosts`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "cat -n one file", Tool: "bash", Input: bash(`cat -n notes.txt`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "absolute cat", Tool: "bash", Input: bash(`/bin/cat notes.txt`), Blocks: "cat-head-tail", Needs: read},
@@ -797,6 +797,11 @@ type sharedToolguardFile struct {
 		Situation string `json:"situation"`
 		Rule      string `json:"rule"`
 		Command   string `json:"command"`
+		// ReasonHas and ReasonLacks list substrings the block reason must and
+		// must not carry, by harness (claude, pi): the tool and parameter names
+		// differ, the structure does not.
+		ReasonHas   map[string][]string `json:"reasonHas"`
+		ReasonLacks map[string][]string `json:"reasonLacks"`
 	} `json:"cases"`
 	// BuiltinCases is the third table: the built-in search tools, where the tool
 	// name and the rule id differ by harness. Tool is harness-neutral, and Rule
@@ -922,11 +927,21 @@ func TestCtxReminderSharedToolguardCases(t *testing.T) {
 				if strings.Contains(reason, "orch ctx") {
 					t.Errorf("%q: the reason names orch ctx: %s", c.Name, reason)
 				}
-				// Reading a file points at the built-in read, never orch ctx,
+				// Reading a file points at pi's read call, never orch ctx,
 				// whatever is installed.
 				if c.Rule == "cat-head-tail" {
-					if !strings.Contains(reason, "built-in read") || strings.Contains(reason, "orch ctx") {
-						t.Errorf("%q must name the built-in read only: %s", c.Name, reason)
+					if !strings.Contains(reason, "read path=") || strings.Contains(reason, "orch ctx") {
+						t.Errorf("%q must name pi's read call only: %s", c.Name, reason)
+					}
+				}
+				for _, want := range c.ReasonHas["pi"] {
+					if !strings.Contains(reason, want) {
+						t.Errorf("%q: the pi reason must carry %q: %s", c.Name, want, reason)
+					}
+				}
+				for _, bad := range c.ReasonLacks["pi"] {
+					if strings.Contains(reason, bad) {
+						t.Errorf("%q: the pi reason must not carry %q: %s", c.Name, bad, reason)
 					}
 				}
 			}

@@ -358,21 +358,70 @@ def deny_grep_rg(line, tools):
     return any(grep_searches(segment, tools) for segment in segments(line))
 
 
-def deny_cat_head_tail(line):
+def cat_head_tail_hit(line):
+    """The (name, args) of the first segment deny-cat-head-tail blocks, or None."""
     for segment in segments(line):
         if segment["stdin"] or segment["stdout"] or segment["redirect"]:
             continue
         name, args = command(segment)
         if name == "cat":
             if len(plain_files(args)) == 1:
-                return True
+                return name, args
             continue
         if name == "sed":
             if in_place_edit(args):
                 continue
             if sed_prints(args) and len(sed_files(args)) == 1:
-                return True
-    return False
+                return name, args
+    return None
+
+
+def deny_cat_head_tail(line):
+    return cat_head_tail_hit(line) is not None
+
+
+def sed_script(args):
+    """The script word of a sed: the value of -e, else the first word that is not a flag."""
+    at = 0
+    while at < len(args):
+        arg = args[at]
+        if arg in ("-e", "--expression"):
+            return args[at + 1] if at + 1 < len(args) else ""
+        if arg in ("-f", "--file"):
+            return ""
+        if not (arg.startswith("-") and arg != "-"):
+            return arg
+        at += 1
+    return ""
+
+
+SED_RANGE = re.compile(r"^\s*(\d+)(?:\s*,\s*(\d+))?\s*p\s*$")
+READ_TAIL = "as a parallel call in the same message as your other commands."
+
+
+def cat_head_tail_reason(line):
+    """The block text: what the output is not, then the exact Read call to send."""
+    head = (
+        f"{GUARD_MARKER} (deny-cat-head-tail): cat and sed -n output is not a Read, "
+        "so a later Edit of the file fails.\n"
+    )
+    hit = cat_head_tail_hit(line)
+    if hit is None:
+        return head + f"Send Read with offset and limit instead, {READ_TAIL}"
+    name, args = hit
+    files = plain_files(args) if name == "cat" else sed_files(args)
+    path = files[0]
+    call = f"Read file_path={path}"
+    found = SED_RANGE.match(sed_script(args)) if name == "sed" else None
+    if found and int(found.group(2) or found.group(1)) >= int(found.group(1)):
+        start = int(found.group(1))
+        count = int(found.group(2) or start) - start + 1
+        text = f"Send {call} offset={start} limit={count} instead, {READ_TAIL}"
+    else:
+        text = f"Send {call} instead (add offset and limit for a section), {READ_TAIL}"
+    if not path.startswith("/"):
+        text += " Read needs an absolute path."
+    return head + text
 
 
 def find_reason(tools, name, first, fallback):
@@ -389,7 +438,7 @@ def rules():
             "name": "deny-find-chains",
             "id": "find-chains",
             "match": lambda line, tools: deny_find_chains(line),
-            "reason": lambda tools: find_reason(
+            "reason": lambda tools, line: find_reason(
                 tools,
                 "deny-find-chains",
                 "find -exec, -delete and find | grep chains are blocked; use fd, or rg -g 'GLOB' PATTERN for content.",
@@ -401,7 +450,7 @@ def rules():
             "name": "deny-find",
             "id": "find",
             "match": lambda line, tools: tools["fd"] and deny_find(line),
-            "reason": lambda tools: find_reason(
+            "reason": lambda tools, line: find_reason(
                 tools,
                 "deny-find",
                 "find over a tree is blocked; use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').",
@@ -413,7 +462,7 @@ def rules():
             "name": "deny-sed-inplace",
             "id": "sed-inplace",
             "match": lambda line, tools: deny_sed_inplace(line),
-            "reason": lambda tools: (
+            "reason": lambda tools, line: (
                 f"{GUARD_MARKER} (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n"
                 "Use the built-in Edit tool. If the mtime must stay the same, run touch -r FILE REF "
                 "before the Edit and touch -r REF FILE after. "
@@ -425,7 +474,7 @@ def rules():
             "name": "deny-grep-rg",
             "id": "grep-rg",
             "match": deny_grep_rg,
-            "reason": lambda tools: (
+            "reason": lambda tools, line: (
                 f"{GUARD_MARKER} (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; "
                 "use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n" + LADDER
             ),
@@ -435,10 +484,7 @@ def rules():
             "name": "deny-cat-head-tail",
             "id": "cat-head-tail",
             "match": lambda line, tools: deny_cat_head_tail(line),
-            "reason": lambda tools: (
-                f"{GUARD_MARKER} (deny-cat-head-tail): a bare cat or sed -n over one file floods the context.\n"
-                "Use the built-in Read tool with offset and limit (a section or the whole file)."
-            ),
+            "reason": lambda tools, line: cat_head_tail_reason(line),
         },
     ]
 
@@ -508,7 +554,8 @@ COACH_TEXT = {
     "lookup-ladder": (
         'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> '
         "orch lsp def|refs|callers|impls <Name>; exact text -> rg. "
-        "Send independent lookups as parallel calls in one message."
+        "Send independent lookups as parallel calls in one message. "
+        "Read known files or ranges with Read, not cat or sed -n."
     ),
 }
 # Kinds that fire at most once per prompt window; the others once per session.
@@ -962,7 +1009,7 @@ def main(argv):
     tools = installed()
     for rule in active:
         if rule["match"](line, tools):
-            sys.stderr.write(rule["reason"](tools) + "\n")
+            sys.stderr.write(rule["reason"](tools, line) + "\n")
             return 2
     return 0
 

@@ -55,7 +55,7 @@ type rule = {
 	name: string;
 	id: string;
 	match: (line: string, tools: tools) => boolean;
-	reason: (tools: tools) => string;
+	reason: (tools: tools, line: string) => string;
 };
 
 // A built-in tool call: pi's own tools reach the tree without a shell, so a
@@ -416,19 +416,52 @@ function denyGrepRg(line: string, tools: tools): boolean {
 	return segments(line).some((segment) => grepSearches(segment, tools));
 }
 
-function denyCatHeadTail(line: string): boolean {
-	return segments(line).some((segment) => {
+// The name and args of the first segment deny-cat-head-tail blocks, or undefined.
+function catHeadTailHit(line: string): { name: string; args: string[] } | undefined {
+	for (const segment of segments(line)) {
 		// A pipeline formats or takes its input elsewhere, and a redirect
 		// writes a file, so neither is a bare read of one file.
-		if (segment.stdinPipe || segment.stdoutPipe || segment.redirect) return false;
+		if (segment.stdinPipe || segment.stdoutPipe || segment.redirect) continue;
 		const { name, args } = command(segment);
-		if (name === "cat") return plainFiles(args).length === 1;
-		if (name === "sed") {
-			if (inPlaceEdit(args)) return false;
-			return sedPrints(args) && sedFiles(args).length === 1;
-		}
-		return false;
-	});
+		if (name === "cat" && plainFiles(args).length === 1) return { name, args };
+		if (name === "sed" && !inPlaceEdit(args) && sedPrints(args) && sedFiles(args).length === 1) return { name, args };
+	}
+	return undefined;
+}
+
+function denyCatHeadTail(line: string): boolean {
+	return catHeadTailHit(line) !== undefined;
+}
+
+// The script word of a sed: the value of -e, else the first word that is not a flag.
+function sedScript(args: string[]): string {
+	for (let at = 0; at < args.length; at += 1) {
+		const arg = args[at];
+		if (arg === "-e" || arg === "--expression") return args[at + 1] ?? "";
+		if (arg === "-f" || arg === "--file") return "";
+		if (!(arg.startsWith("-") && arg !== "-")) return arg;
+	}
+	return "";
+}
+
+const readTail = "as a parallel call in the same message as your other commands.";
+
+// The block text: what the output is not, then the exact read call to send. pi's
+// read tool takes path, offset and limit and accepts a relative path.
+function catHeadTailReason(line: string): string {
+	const head =
+		`${guardMarker} (deny-cat-head-tail): cat and sed -n output is not a Read, so a later Edit of the file fails.\n`;
+	const hit = catHeadTailHit(line);
+	if (!hit) return head + `Send read with offset and limit instead, ${readTail}`;
+	const path = (hit.name === "cat" ? plainFiles(hit.args) : sedFiles(hit.args))[0];
+	const call = `read path=${path}`;
+	const found = hit.name === "sed" ? /^\s*(\d+)(?:\s*,\s*(\d+))?\s*p\s*$/.exec(sedScript(hit.args)) : null;
+	if (found) {
+		const start = Number(found[1]);
+		const end = Number(found[2] ?? found[1]);
+		if (end >= start) return head + `Send ${call} offset=${start} limit=${end - start + 1} instead, ${readTail}`;
+	}
+	return head + `Send ${call} instead (add offset and limit for a section), ${readTail}`;
 }
 
 // Two or three short lines: what is blocked, and the tool that replaces it. The
@@ -486,9 +519,7 @@ const rules: rule[] = [
 		name: "deny-cat-head-tail",
 		id: "cat-head-tail",
 		match: denyCatHeadTail,
-		reason: () =>
-			`${guardMarker} (deny-cat-head-tail): a bare cat or sed -n over one file floods the context.\n` +
-			`Use the built-in read tool with offset and limit (a section or the whole file).`,
+		reason: (_tools, line) => catHeadTailReason(line),
 	},
 ];
 
@@ -587,7 +618,7 @@ const coachText: Record<string, string> = {
 	"batch-lookups": "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
 	"read-batch": "Read the ranges you already know as parallel reads in one message.",
 	"lookup-ladder":
-		'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message.',
+		'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message. Read known files or ranges with Read, not cat or sed -n.',
 };
 // Kinds that fire at most once per prompt window; the others once per session.
 const perPrompt = new Set(["concept-first", "symbol-via-lsp"]);
@@ -982,7 +1013,7 @@ export default function (pi: ExtensionAPI) {
 		for (const rule of active) {
 			if (!rule.match(line, ready)) continue;
 			blocksInRow += 1;
-			return { block: true, reason: blockReason(rule.reason(ready)) };
+			return { block: true, reason: blockReason(rule.reason(ready, line)) };
 		}
 		blocksInRow = 0;
 		if (!ready.orch || !guard || remindersByResult || fallbackReminded) return undefined;

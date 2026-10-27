@@ -41,7 +41,7 @@ orch tool guard (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files a
 Lookup order: jbcontext search "<one behavior>" if the location is unknown, orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, fd for file names; send independent lookups in one message.
 ```
 
-`deny-find` and `deny-find-chains` name `fd` the same way (`fd PATTERN dir`, `fd -e go`, `fd -g '*.ts'`; a chain says "use fd, or rg -g 'GLOB' PATTERN for content"). With no `fd` on PATH a plain `find` is allowed (Claude Code does not load `Glob` by default on macOS, so there is nothing else to name), and a chain names a plain `find` or `rg` and skips the ladder. `deny-sed-inplace` always names `Edit` and `deny-cat-head-tail` always names `Read` with offset and limit (a section or the whole file).
+`deny-find` and `deny-find-chains` name `fd` the same way (`fd PATTERN dir`, `fd -e go`, `fd -g '*.ts'`; a chain says "use fd, or rg -g 'GLOB' PATTERN for content"). With no `fd` on PATH a plain `find` is allowed (Claude Code does not load `Glob` by default on macOS, so there is nothing else to name), and a chain names a plain `find` or `rg` and skips the ladder. `deny-sed-inplace` always names `Edit` and `deny-cat-head-tail` always names the exact `Read` call for the blocked line (`Read file_path=FILE offset=N limit=K` for a `sed -n N,Mp`, `Read file_path=FILE` for a `cat`), to send as a parallel call, and says cat and sed output is not a Read so a later Edit fails. pi names its own tool (`read path=FILE ...`) and, since pi accepts relative paths, adds no absolute-path note.
 
 ### Big whole-file reads
 
@@ -66,7 +66,7 @@ What counts as a lookup is decided by `coach_cases.json`, shared by both impleme
 
 | Kind | Fires when |
 |---|---|
-| `lookup-ladder` | on a user prompt (UserPromptSubmit; pi `before_agent_start`), before any search: the session's first prompt, and afterwards only a prompt that follows a window whose first search (`rg` or `fd`) came before any `jbcontext` or `orch lsp` call. It reads `Before searching: location unknown -> jbcontext search ...; known symbol -> orch lsp ...; exact text -> rg.` and writes no lookup row |
+| `lookup-ladder` | on a user prompt (UserPromptSubmit; pi `before_agent_start`), before any search: the session's first prompt, and afterwards only a prompt that follows a window whose first search (`rg` or `fd`) came before any `jbcontext` or `orch lsp` call. It reads `Before searching: location unknown -> jbcontext search ...; known symbol -> orch lsp ...; exact text -> rg. ... Read known files or ranges with Read, not cat or sed -n.` and writes no lookup row |
 | `concept-first` | the window's first `rg` or `fd` comes before any `jbcontext` or `orch lsp` call in that window |
 | `symbol-via-lsp` | an `rg` pattern is a symbol (CamelCase, snake_case, `pkg.Name`, or any identifier with `-w`, after stripping `\b`, `\<`, `\>`, a leading `func `/`def `/`class `/`type `/`interface ` and a trailing `(`), unless every `-g`/`-t`/path targets md, txt, json, yaml, yml or toml |
 | `batch-lookups` | on the first lookup of a new turn, the previous two consecutive turns each held exactly one non-read lookup |

@@ -5,8 +5,9 @@
 # head and tail are allowed. Does not touch: several files at once, a pipe on either
 # side (cat f | grep TODO), a redirect (cat f > copy) and
 # cat reading stdin.
-# Replacement: the built-in Read tool with offset and limit (a section or the
-# whole file), whether or not orch is installed.
+# Replacement: the block text names the exact Read call (file_path, and offset and
+# limit for a sed -n range) to send as a parallel call, whether or not orch is
+# installed.
 set -u
 unset CDPATH
 dir=$(cd -- "$(dirname -- "$0")" && pwd) || exit 0

@@ -48,26 +48,26 @@ REPLACEMENT = {
         "find-chains": "use fd",
         "find": "use fd",
         "sed-inplace": "built-in Edit",
-        "cat-head-tail": "built-in Read",
+        "cat-head-tail": "Read file_path=",
         "grep-rg": "use rg",
     },
     "rg": {
         "find-chains": "run a plain find",
         "sed-inplace": "built-in Edit",
-        "cat-head-tail": "built-in Read",
+        "cat-head-tail": "Read file_path=",
         "grep-rg": "use rg",
     },
     "fd": {
         "find-chains": "use fd",
         "find": "use fd",
         "sed-inplace": "built-in Edit",
-        "cat-head-tail": "built-in Read",
+        "cat-head-tail": "Read file_path=",
         "grep-rg": "use rg",
     },
     "none": {
         "find-chains": "run a plain find",
         "sed-inplace": "built-in Edit",
-        "cat-head-tail": "built-in Read",
+        "cat-head-tail": "Read file_path=",
         "grep-rg": "use rg",
     },
 }
@@ -341,6 +341,12 @@ class Checker:
             want = REPLACEMENT[case["situation"]][rule]
             if want not in reason:
                 self.fail(label, f"reason must name {want!r}: {reason}")
+            for need in case.get("reasonHas", {}).get("claude", []):
+                if need not in reason:
+                    self.fail(label, f"reason must carry {need!r}: {reason}")
+            for bad in case.get("reasonLacks", {}).get("claude", []):
+                if bad in reason:
+                    self.fail(label, f"reason must not carry {bad!r}: {reason}")
             if attempt.stdout:
                 self.fail(label, f"block wrote to stdout: {attempt.stdout.strip()}")
 

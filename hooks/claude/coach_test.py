@@ -25,7 +25,8 @@ PREFIX = "orch lookup coach: "
 LADDER = (
     'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> '
     "orch lsp def|refs|callers|impls <Name>; exact text -> rg. "
-    "Send independent lookups as parallel calls in one message."
+    "Send independent lookups as parallel calls in one message. "
+    "Read known files or ranges with Read, not cat or sed -n."
 )
 
 
