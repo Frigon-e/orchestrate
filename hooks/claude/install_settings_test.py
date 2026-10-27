@@ -80,6 +80,15 @@ class MergeTests(unittest.TestCase):
             self.assertEqual([g["matcher"] for g in groups], ["Bash|Read|LSP|mcp__jbcontext__.*"])
             self.assertTrue(groups[0]["hooks"][0]["command"].endswith('/hooks/claude/lookup-coach.sh"'))
 
+    def test_lookup_coach_is_registered_on_user_prompt_submit_without_a_matcher(self):
+        settings = deep(FOREIGN)
+        settings["hooks"]["UserPromptSubmit"] = [{"hooks": [{"type": "command", "command": "echo mine"}]}]
+        inst.merge(settings, FRAGMENT)
+        commands = inst.commands(settings, "UserPromptSubmit")
+        self.assertEqual(commands[0], "echo mine")
+        self.assertEqual(len([c for c in commands if c.endswith('/hooks/claude/lookup-coach.sh"')]), 1)
+        self.assertEqual(inst.merge(settings, FRAGMENT), [])
+
     def test_timeout_is_kept(self):
         settings = {}
         inst.merge(settings, FRAGMENT)

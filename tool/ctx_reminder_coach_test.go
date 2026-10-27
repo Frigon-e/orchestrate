@@ -23,16 +23,19 @@ var coachTexts = map[string]string{
 	"symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
 	"batch-lookups":  "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
 	"read-batch":     "Read the ranges you already know as parallel reads in one message.",
+	"lookup-ladder":  `Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message.`,
 }
 
 type coachCall struct {
-	Name   string         `json:"name,omitempty"`
-	Bash   *string        `json:"bash,omitempty"`
-	Read   map[string]any `json:"read,omitempty"`
-	LSP    map[string]any `json:"lsp,omitempty"`
-	MCP    map[string]any `json:"mcp,omitempty"`
-	Text   string         `json:"text,omitempty"`
-	Failed bool           `json:"failed,omitempty"`
+	Name string         `json:"name,omitempty"`
+	Bash *string        `json:"bash,omitempty"`
+	Read map[string]any `json:"read,omitempty"`
+	LSP  map[string]any `json:"lsp,omitempty"`
+	MCP  map[string]any `json:"mcp,omitempty"`
+	Text string         `json:"text,omitempty"`
+	// Prompt marks a user prompt (pi: before_agent_start), not a tool call.
+	Prompt bool `json:"prompt,omitempty"`
+	Failed bool `json:"failed,omitempty"`
 	// Harness limits a case to one harness; "" runs in both.
 	Harness string `json:"harness,omitempty"`
 	Lookup  *struct {
@@ -50,9 +53,19 @@ type coachSequence struct {
 	Followed [][3]any      `json:"followed"`
 }
 
+// coachPromptSequence is a session of user prompts (a bare {"prompt": true}) and
+// turns (a list of calls); Expect and Followed index [step, call, value].
+type coachPromptSequence struct {
+	Name     string            `json:"name"`
+	Steps    []json.RawMessage `json:"steps"`
+	Expect   [][3]any          `json:"expect"`
+	Followed [][3]any          `json:"followed"`
+}
+
 type coachFile struct {
-	Classify  []coachCall     `json:"classify"`
-	Sequences []coachSequence `json:"sequences"`
+	Classify  []coachCall           `json:"classify"`
+	Sequences []coachSequence       `json:"sequences"`
+	Prompts   []coachPromptSequence `json:"prompts"`
 }
 
 type coachLine struct {
@@ -131,6 +144,11 @@ const count = () => {
 const turns = JSON.parse(process.argv[1]);
 const ctx = { sessionManager: { getSessionId: () => "pi-session" } };
 for (let t = 0; t < turns.length; t += 1) {
+  if (turns[t].length === 1 && turns[t][0].prompt) {
+    const res = handlers.before_agent_start ? await handlers.before_agent_start({ type: "before_agent_start", messageType: "user", prompt: "go", systemPrompt: "", systemPromptOptions: {} }, ctx) : undefined;
+    if (res && res.message) added[t + ".0"] = res.message.content;
+    continue;
+  }
   if (handlers.turn_start) await handlers.turn_start({ type: "turn_start", turnIndex: t, timestamp: 0 }, ctx);
   for (let j = 0; j < turns[t].length; j += 1) {
     const c = turns[t][j];
@@ -261,6 +279,74 @@ func sameTriples(a, b [][3]any) bool {
 		}
 	}
 	return true
+}
+
+func TestCtxReminderCoachPromptSequences(t *testing.T) {
+	for _, seq := range loadCoachCases(t).Prompts {
+		t.Run(seq.Name, func(t *testing.T) {
+			var turns [][]coachCall
+			for _, raw := range seq.Steps {
+				var calls []coachCall
+				if err := json.Unmarshal(raw, &calls); err != nil {
+					var one coachCall
+					if err := json.Unmarshal(raw, &one); err != nil || !one.Prompt {
+						t.Fatalf("bad step %s", raw)
+					}
+					calls = []coachCall{one}
+				}
+				turns = append(turns, calls)
+			}
+			got := runCoach(t, turns)
+			if len(got.Logged) != len(got.Lines) {
+				t.Fatalf("%d logged calls, %d log lines", len(got.Logged), len(got.Lines))
+			}
+			// Reminders in step order: a prompt's note, then its calls' log lines.
+			var fired, followed [][3]any
+			next := 0
+			for step, calls := range turns {
+				if calls[0].Prompt {
+					if note, ok := got.Added[strconv.Itoa(step)+".0"]; ok {
+						if want := coachPrefix + coachTexts["lookup-ladder"]; note != want {
+							t.Errorf("prompt %d added %q, want %q", step, note, want)
+						}
+						fired = append(fired, [3]any{float64(step), float64(0), "lookup-ladder"})
+					}
+					continue
+				}
+				for j := range calls {
+					if next >= len(got.Lines) || got.Logged[next] != strconv.Itoa(step)+"."+strconv.Itoa(j) {
+						t.Fatalf("call %d.%d was not logged in order: %v", step, j, got.Logged)
+					}
+					line := got.Lines[next]
+					next++
+					if line.Reminder != nil {
+						fired = append(fired, [3]any{float64(step), float64(j), *line.Reminder})
+					}
+					if line.Followed != nil {
+						followed = append(followed, [3]any{float64(step), float64(j), *line.Followed})
+					}
+				}
+			}
+			if !sameTriples(fired, seq.Expect) {
+				t.Errorf("reminders %v, want %v", fired, seq.Expect)
+			}
+			if !sameTriples(followed, seq.Followed) {
+				t.Errorf("followed %v, want %v", followed, seq.Followed)
+			}
+		})
+	}
+}
+
+func TestCtxReminderCoachLadderSwitches(t *testing.T) {
+	turns := [][]coachCall{{{Prompt: true}}}
+	if got := runCoach(t, turns); got.Added["0.0"] == "" {
+		t.Errorf("the first prompt got no ladder: %+v", got)
+	}
+	for _, env := range []string{"ORCH_LOOKUP_COACH=off", "ORCH_TOOL_GUARD=off"} {
+		if got := runCoach(t, turns, env); len(got.Added) != 0 || got.LogFile {
+			t.Errorf("%s: %+v", env, got)
+		}
+	}
 }
 
 func TestCtxReminderCoachLogRecord(t *testing.T) {

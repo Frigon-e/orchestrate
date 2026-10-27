@@ -22,6 +22,11 @@ with open(os.path.join(ROOT, "coach_cases.json")) as handle:
     CASES = json.load(handle)
 
 PREFIX = "orch lookup coach: "
+LADDER = (
+    'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> '
+    "orch lsp def|refs|callers|impls <Name>; exact text -> rg. "
+    "Send independent lookups as parallel calls in one message."
+)
 
 
 def claude_call(spec, ident):
@@ -145,6 +150,65 @@ class SequenceTests(unittest.TestCase):
                             followed.append([t, j, line["followed"]])
                 self.assertEqual(fired, seq["expect"])
                 self.assertEqual(followed, seq.get("followed", []))
+
+
+class PromptTests(unittest.TestCase):
+    """UserPromptSubmit: the lookup ladder and the per-prompt re-arm."""
+
+    def prompt(self, box, session="s1", env=None):
+        event = {"hook_event_name": "UserPromptSubmit", "session_id": session, "prompt": "go", "cwd": box.dir}
+        merged = dict(os.environ)
+        merged.update({"ORCH_TOOL_GUARD_STATE_DIR": box.state})
+        merged.update(env or {})
+        return subprocess.run([SCRIPT], input=json.dumps(event), capture_output=True, text=True, env=merged)
+
+    def test_every_prompt_sequence(self):
+        for seq in CASES["prompts"]:
+            with self.subTest(seq["name"]):
+                box = Sandbox(self)
+                turns = [step for step in seq["steps"] if isinstance(step, list)]
+                box.write_transcript(turns)
+                fired, followed, t = [], [], 0
+                for i, step in enumerate(seq["steps"]):
+                    if isinstance(step, dict):
+                        proc = self.prompt(box)
+                        self.assertEqual(proc.returncode, 0)
+                        if proc.stdout:
+                            out = json.loads(proc.stdout)["hookSpecificOutput"]
+                            self.assertEqual(out["hookEventName"], "UserPromptSubmit")
+                            self.assertEqual(out["additionalContext"], PREFIX + LADDER)
+                            fired.append([i, 0, "lookup-ladder"])
+                        continue
+                    for j, spec in enumerate(step):
+                        before = len(box.log())
+                        box.run(spec, f"tu_{t}_{j}")
+                        line = box.log()[before]
+                        if line["reminder"]:
+                            fired.append([i, j, line["reminder"]])
+                        if line["followed"] is not None:
+                            followed.append([i, j, line["followed"]])
+                    t += 1
+                self.assertEqual(fired, seq["expect"])
+                self.assertEqual(followed, seq["followed"])
+
+    def test_prompt_writes_no_lookup_row(self):
+        box = Sandbox(self)
+        self.prompt(box)
+        self.assertEqual(box.log(), [])
+
+    def test_coach_off_and_guard_off_silence_the_ladder(self):
+        for env in ({"ORCH_LOOKUP_COACH": "off"}, {"ORCH_TOOL_GUARD": "off"}):
+            with self.subTest(env):
+                box = Sandbox(self)
+                proc = self.prompt(box, env=env)
+                self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+    def test_broken_state_dir_fails_open(self):
+        box = Sandbox(self)
+        blocker = os.path.join(box.dir, "file")
+        open(blocker, "w").close()
+        proc = self.prompt(box, env={"ORCH_TOOL_GUARD_STATE_DIR": os.path.join(blocker, "x")})
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
 
 
 class BehaviorTests(unittest.TestCase):

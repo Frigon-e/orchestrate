@@ -505,7 +505,14 @@ COACH_TEXT = {
     "symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
     "batch-lookups": "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
     "read-batch": "Read the ranges you already know as parallel reads in one message.",
+    "lookup-ladder": (
+        'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> '
+        "orch lsp def|refs|callers|impls <Name>; exact text -> rg. "
+        "Send independent lookups as parallel calls in one message."
+    ),
 }
+# Kinds that fire at most once per prompt window; the others once per session.
+PER_PROMPT = ("concept-first", "symbol-via-lsp")
 QUERY_MAX = 200
 TRANSCRIPT_TAIL = 512 * 1024
 NO_RESULT = "No relevant results found"
@@ -665,8 +672,18 @@ def coach_step(state, tool, symbol, turn, adjacent, reminders=True):
     followed = None
     if reminders and state.get("pending"):
         kind = state["pending"]
-        followed = tool == "jbcontext" if kind == "concept-first" else tool.startswith("lsp:")
+        if kind == "concept-first":
+            followed = tool == "jbcontext"
+        elif kind == "lookup-ladder":
+            followed = tool == "jbcontext" or tool.startswith("lsp:")
+        else:
+            followed = tool.startswith("lsp:")
         state["pending"] = None
+    if state.get("window_first") is None:
+        if tool in ("rg", "fd"):
+            state["window_first"] = "bad"
+        elif tool == "jbcontext" or tool.startswith("lsp:"):
+            state["window_first"] = "good"
     turns = state.setdefault("turns", [])
     new_turn = turn is not None and not (turns and turns[-1]["id"] == turn)
     candidates = []
@@ -688,9 +705,10 @@ def coach_step(state, tool, symbol, turn, adjacent, reminders=True):
     fired = state.setdefault("fired", [])
     if reminders:
         for kind in candidates:
-            if kind not in fired:
+            key = f"{kind}@{state.get('prompt', 0)}" if kind in PER_PROMPT else kind
+            if key not in fired:
                 reminder = kind
-                fired.append(kind)
+                fired.append(key)
                 break
         if reminder in ("concept-first", "symbol-via-lsp"):
             state["pending"] = reminder
@@ -700,6 +718,20 @@ def coach_step(state, tool, symbol, turn, adjacent, reminders=True):
             del turns[:-3]
         turns[-1]["rd" if tool == "read" else "nr"] += 1
     return reminder, followed
+
+
+def prompt_step(state, reminders=True):
+    """Open a new prompt window; returns True when the lookup ladder is due: on the
+    session's first prompt, and after a window whose first search was rg or fd."""
+    due = reminders and (not state.get("prompt") or state.get("window_first") == "bad")
+    state["prompt"] = state.get("prompt", 0) + 1
+    state["window_first"] = None
+    state["first_search_done"] = False
+    state["concept_seen"] = False
+    state["fired"] = [k for k in state.get("fired", []) if "@" not in k or k.endswith("@" + str(state["prompt"]))]
+    if due:
+        state["pending"] = "lookup-ladder"
+    return due
 
 
 def transcript_turn(path, tool_use_id):
@@ -777,9 +809,43 @@ def outcome(event, tool, text):
     return True, tool == "jbcontext" and NO_RESULT in text
 
 
+def coach_prompt(event):
+    """UserPromptSubmit: add the lookup ladder when prompt_step says it is due."""
+    if os.environ.get("ORCH_LOOKUP_COACH") == "off":
+        return 0
+    session = str(event.get("session_id") or "unknown")
+    base_dir = state_dir()
+    os.makedirs(os.path.join(base_dir, "coach"), exist_ok=True)
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session)
+    import fcntl
+
+    with open(os.path.join(base_dir, "coach", name + ".json"), "a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        try:
+            state = json.loads(handle.read() or "{}")
+        except ValueError:
+            state = {}
+        due = prompt_step(state)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(state))
+    if due:
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": COACH_PREFIX + COACH_TEXT["lookup-ladder"],
+            }
+        }
+        sys.stdout.write(json.dumps(out))
+    return 0
+
+
 def coach(event):
     if os.environ.get("ORCH_TOOL_GUARD") == "off":
         return 0
+    if event.get("hook_event_name") == "UserPromptSubmit":
+        return coach_prompt(event)
     found = lookup_claude(event)
     if found is None:
         return 0

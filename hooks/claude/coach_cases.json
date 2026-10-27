@@ -1063,5 +1063,196 @@
     ]
    ]
   }
+ ],
+ "prompts": [
+  {
+   "name": "the first prompt gets the ladder, a window that opened with jbcontext gets none, one that opened with rg gets it",
+   "steps": [
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "jbcontext search \"a b\""
+     }
+    ],
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "rg -n gateway src"
+     }
+    ],
+    {
+     "prompt": true
+    }
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "lookup-ladder"
+    ],
+    [
+     3,
+     0,
+     "concept-first"
+    ],
+    [
+     4,
+     0,
+     "lookup-ladder"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     true
+    ]
+   ]
+  },
+  {
+   "name": "a window without lookups gets no new ladder",
+   "steps": [
+    {
+     "prompt": true
+    },
+    {
+     "prompt": true
+    }
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "lookup-ladder"
+    ]
+   ],
+   "followed": []
+  },
+  {
+   "name": "concept-first fires again in a new prompt window, and once per window",
+   "steps": [
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "rg -n gateway src"
+     },
+     {
+      "bash": "rg -n router src"
+     }
+    ],
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "rg -n store src"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "lookup-ladder"
+    ],
+    [
+     1,
+     0,
+     "concept-first"
+    ],
+    [
+     2,
+     0,
+     "lookup-ladder"
+    ],
+    [
+     3,
+     0,
+     "concept-first"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     false
+    ],
+    [
+     1,
+     1,
+     false
+    ],
+    [
+     3,
+     0,
+     false
+    ]
+   ]
+  },
+  {
+   "name": "symbol-via-lsp fires again in a new prompt window, and once per window",
+   "steps": [
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "jbcontext search \"x\""
+     },
+     {
+      "bash": "rg GatewayServer"
+     },
+     {
+      "bash": "rg Foo.Bar"
+     }
+    ],
+    {
+     "prompt": true
+    },
+    [
+     {
+      "bash": "jbcontext search \"x\""
+     },
+     {
+      "bash": "rg GatewayServer"
+     }
+    ]
+   ],
+   "expect": [
+    [
+     0,
+     0,
+     "lookup-ladder"
+    ],
+    [
+     1,
+     1,
+     "symbol-via-lsp"
+    ],
+    [
+     3,
+     1,
+     "symbol-via-lsp"
+    ]
+   ],
+   "followed": [
+    [
+     1,
+     0,
+     true
+    ],
+    [
+     1,
+     2,
+     false
+    ]
+   ]
+  }
  ]
 }

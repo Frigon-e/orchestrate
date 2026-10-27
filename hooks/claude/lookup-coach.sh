@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PostToolUse and PostToolUseFailure hook (matcher: Bash|Read|LSP|mcp__jbcontext__.*).
+# PostToolUse and PostToolUseFailure hook (matcher: Bash|Read|LSP|mcp__jbcontext__.*),
+# and UserPromptSubmit (adds the lookup-ladder reminder when it is due).
 # Never blocks. Logs each lookup (jbcontext, orch lsp, rg, fd, Read) to
 # lookups.jsonl and, at most once per session per kind, adds a short reminder
 # as additionalContext: concept-first, symbol-via-lsp, batch-lookups, read-batch.

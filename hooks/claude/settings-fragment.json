@@ -17,6 +17,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/lookup-coach.sh\"", "timeout": 5 }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",

@@ -586,7 +586,11 @@ const coachText: Record<string, string> = {
 	"symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
 	"batch-lookups": "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
 	"read-batch": "Read the ranges you already know as parallel reads in one message.",
+	"lookup-ladder":
+		'Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> orch lsp def|refs|callers|impls <Name>; exact text -> rg. Send independent lookups as parallel calls in one message.',
 };
+// Kinds that fire at most once per prompt window; the others once per session.
+const perPrompt = new Set(["concept-first", "symbol-via-lsp"]);
 const queryMax = 200;
 const docExtensions = new Set(["md", "txt", "json", "yaml", "yml", "toml"]);
 const docTypes = new Set([...docExtensions, "markdown"]);
@@ -718,15 +722,36 @@ type coachState = {
 	conceptSeen: boolean;
 	pending: string;
 	turns: { id: number; nr: number; rd: number }[];
+	prompt: number;
+	windowFirst: "" | "good" | "bad";
 };
+
+// Open a new prompt window; true when the lookup ladder is due: on the session's
+// first prompt, and after a window whose first search was rg or fd.
+function promptStep(state: coachState, reminders: boolean): boolean {
+	const due = reminders && (state.prompt === 0 || state.windowFirst === "bad");
+	state.prompt += 1;
+	state.windowFirst = "";
+	state.firstSearchDone = false;
+	state.conceptSeen = false;
+	state.fired = new Set([...state.fired].filter((key) => !key.includes("@")));
+	if (due) state.pending = "lookup-ladder";
+	return due;
+}
 
 // Advance the session state for one lookup; returns the reminder fired on this
 // call (or "") and whether it followed the previous reminder (null when none).
 function coachStep(state: coachState, found: lookup, turn: number | null, reminders: boolean) {
 	let followed: boolean | null = null;
 	if (reminders && state.pending) {
-		followed = state.pending === "concept-first" ? found.tool === "jbcontext" : found.tool.startsWith("lsp:");
+		if (state.pending === "concept-first") followed = found.tool === "jbcontext";
+		else if (state.pending === "lookup-ladder") followed = found.tool === "jbcontext" || found.tool.startsWith("lsp:");
+		else followed = found.tool.startsWith("lsp:");
 		state.pending = "";
+	}
+	if (!state.windowFirst) {
+		if (found.tool === "rg" || found.tool === "fd") state.windowFirst = "bad";
+		else if (found.tool === "jbcontext" || found.tool.startsWith("lsp:")) state.windowFirst = "good";
 	}
 	const last = state.turns[state.turns.length - 1];
 	const newTurn = turn !== null && !(last && last.id === turn);
@@ -746,8 +771,9 @@ function coachStep(state: coachState, found: lookup, turn: number | null, remind
 	}
 	let reminder = "";
 	if (reminders) {
-		reminder = candidates.find((kind) => !state.fired.has(kind)) ?? "";
-		if (reminder) state.fired.add(reminder);
+		const keyOf = (kind: string) => (perPrompt.has(kind) ? `${kind}@${state.prompt}` : kind);
+		reminder = candidates.find((kind) => !state.fired.has(keyOf(kind))) ?? "";
+		if (reminder) state.fired.add(keyOf(reminder));
 		if (reminder === "concept-first" || reminder === "symbol-via-lsp") state.pending = reminder;
 	}
 	if (turn !== null) {
@@ -832,7 +858,7 @@ export default function (pi: ExtensionAPI) {
 	const coachOn = guard && process.env.ORCH_LOOKUP_COACH !== "off";
 	const logOn = guard && process.env.ORCH_LOOKUP_LOG !== "off";
 	const coaching = coachOn || logOn;
-	const state: coachState = { fired: new Set(), firstSearchDone: false, conceptSeen: false, pending: "", turns: [] };
+	const state: coachState = { fired: new Set(), firstSearchDone: false, conceptSeen: false, pending: "", turns: [], prompt: 0, windowFirst: "" };
 	let turn: number | null = null;
 	const open = new Map<string, { record?: lookupRecord; ended?: boolean; durationMs?: number | null }>();
 	const settle = (id: string, part: { record?: lookupRecord; ended?: boolean; durationMs?: number | null }) => {
@@ -870,6 +896,18 @@ export default function (pi: ExtensionAPI) {
 			pi.on("turn_start", async (event: { turnIndex: number }) => {
 				turn = event.turnIndex;
 			});
+			// A prompt opens a new window; the ladder rides in as a message before the turn.
+			if (coachOn) {
+				pi.on("before_agent_start", async (event: { messageType?: string }) => {
+					if (event.messageType !== "user") return undefined;
+					try {
+						if (!promptStep(state, true)) return undefined;
+						return { message: { customType: "orch-lookup-coach", content: coachPrefix + coachText["lookup-ladder"], display: false } };
+					} catch {
+						return undefined;
+					}
+				});
+			}
 			if (logOn) {
 				pi.on("tool_execution_end", async (event: { toolCallId: string; durationMs?: number }) => {
 					settle(event.toolCallId, { ended: true, durationMs: event.durationMs ?? null });
