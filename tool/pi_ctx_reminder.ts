@@ -471,7 +471,8 @@ const rules: rule[] = [
 		match: denySedInplace,
 		reason: () =>
 			`${guardMarker} (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n` +
-			`Use the built-in edit tool.`,
+			`Use the built-in edit tool. If the mtime must stay the same, run touch -r FILE REF before the edit and touch -r REF FILE after. ` +
+			`Do not rewrite files with python, awk or tee.`,
 	},
 	{
 		name: "deny-grep-rg",

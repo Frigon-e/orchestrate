@@ -415,7 +415,9 @@ def rules():
             "match": lambda line, tools: deny_sed_inplace(line),
             "reason": lambda tools: (
                 f"{GUARD_MARKER} (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n"
-                "Use the built-in Edit tool."
+                "Use the built-in Edit tool. If the mtime must stay the same, run touch -r FILE REF "
+                "before the Edit and touch -r REF FILE after. "
+                "Do not rewrite files with python, awk or tee."
             ),
         },
         {
