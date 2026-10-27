@@ -249,6 +249,13 @@ func symbolsHint(path string) string {
 	return fmt.Sprintf(`rg -n "^(func|type|export|class|def) " %s`, path)
 }
 
+// noServerHover is noServer for a position: the fallback is reading the file
+// around the line, not searching the path as a word.
+func noServerHover(lang, path string, line int) lspAnswer {
+	return lspAnswer{Name: fmt.Sprintf("%s:%d", path, line), Status: "no_server", Items: []lspItem{},
+		Message: fmt.Sprintf("no language server for %s; read %s around line %d", lang, path, line)}
+}
+
 func noServer(lang, name string) lspAnswer {
 	return lspAnswer{Name: name, Status: "no_server", Message: fmt.Sprintf("no language server for %s; use rg -n -w %s", lang, name), Items: []lspItem{}}
 }
@@ -817,6 +824,9 @@ func (r *lspRun) repoFile(p string) (string, *lspAnswer) {
 	return rp, nil
 }
 
+// lspWarmup bounds the wait for a registry server's first non-empty outline.
+var lspWarmup = 3 * time.Second
+
 func (r *lspRun) symbols(arg string) lspAnswer {
 	path, bad := r.repoFile(arg)
 	if bad != nil {
@@ -839,6 +849,17 @@ func (r *lspRun) symbols(arg string) lspAnswer {
 	raw, err := s.ask("textDocument/documentSymbol", map[string]any{"textDocument": map[string]any{"uri": fileURI(abs)}})
 	if err != nil {
 		return lspFailed(path, err)
+	}
+	// A registry server (bash-language-server) answers empty until its
+	// background analysis of the workspace has finished, a fraction of a second.
+	// A file with no symbols costs the whole wait once.
+	if lspEmpty(raw) && !s.ts && s.bin != "gopls" {
+		for deadline := time.Now().Add(lspWarmup); lspEmpty(raw) && time.Now().Before(deadline); {
+			time.Sleep(250 * time.Millisecond)
+			if raw, err = s.c.call("textDocument/documentSymbol", map[string]any{"textDocument": map[string]any{"uri": fileURI(abs)}}, tsRequestLimit); err != nil {
+				return lspFailed(path, err)
+			}
+		}
 	}
 	var syms []lspDocSym
 	if err := json.Unmarshal(raw, &syms); err != nil {
@@ -887,7 +908,7 @@ func (r *lspRun) hover(arg string) lspAnswer {
 		if l := langOf(path); l != nil {
 			lang = l.ID
 		}
-		return noServer(lang, path).withWhy(why)
+		return noServerHover(lang, path, ln).withWhy(why)
 	}
 	abs := filepath.Join(r.e.Code, filepath.FromSlash(path))
 	s.c.open(abs)

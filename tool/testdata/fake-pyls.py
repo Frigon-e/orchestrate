@@ -44,13 +44,20 @@ while True:
         continue
     if method == "initialize":
         note(method=method, args=sys.argv[1:], root=p["rootUri"])
-        send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {"referencesProvider": True, "implementationProvider": True}}})
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {"referencesProvider": True, "implementationProvider": True, "documentSymbolProvider": True}}})
     elif method == "textDocument/didOpen":
         note(method=method, uri=p["textDocument"]["uri"], lang=p["textDocument"]["languageId"])
     elif method in ("workspace/symbol", "textDocument/references", "textDocument/implementation"):
         pos = p.get("position", {})
         note(method=method, line=pos.get("line"), character=pos.get("character"))
         send({"jsonrpc": "2.0", "id": m["id"], "result": refs.get(method, [])})
+    elif method == "textDocument/documentSymbol":
+        # Like a server still analysing its workspace: empty for the first
+        # refs["empty_first"] requests.
+        note(method=method)
+        seen = globals().setdefault("doc_seen", 0)
+        globals()["doc_seen"] = seen + 1
+        send({"jsonrpc": "2.0", "id": m["id"], "result": [] if seen < refs.get("empty_first", 0) else refs.get(method, [])})
     elif method == "shutdown":
         send({"jsonrpc": "2.0", "id": m["id"], "result": None})
     elif method == "exit":

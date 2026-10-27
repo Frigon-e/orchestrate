@@ -193,3 +193,43 @@ func TestLspMissingNameWithAnUnconfirmedProjectExitsOne(t *testing.T) {
 		t.Errorf("exit %d %q, want exit 1 and the not-found line", code, out)
 	}
 }
+
+// A registry server such as bash-language-server answers an empty outline until
+// its workspace analysis has finished: the outline is asked again, not given up
+// as "no symbols".
+func TestLspSymbolsRetriesAnOutlineThatIsEmptyWhileTheServerWarmsUp(t *testing.T) {
+	code := pyFixture(t)
+	tmp := t.TempDir()
+	syms, _ := json.Marshal(map[string]any{
+		"empty_first": 2,
+		"textDocument/documentSymbol": []map[string]any{{"name": "build_cart", "kind": 12, "location": map[string]any{
+			"uri":   "file://" + code + "/shop/cart.py",
+			"range": map[string]any{"start": map[string]int{"line": 5, "character": 0}, "end": map[string]int{"line": 7, "character": 0}}}}},
+	})
+	refsF, logF := filepath.Join(tmp, "refs.json"), filepath.Join(tmp, "lsp.log")
+	os.WriteFile(refsF, syms, 0o644)
+	os.WriteFile(logF, nil, 0o644)
+	t.Setenv("FAKE_LSP_REFS", refsF)
+	t.Setenv("FAKE_LSP_LOG", logF)
+	abs, _ := filepath.Abs("testdata/fake-pyls.py")
+	t.Setenv("ORCH_PYLS", "python3 "+abs)
+	r := &lspRun{e: newCtxEnv(code, ctxOpts{}), sessions: map[string]*lspSession{}, whys: map[string]string{}}
+	defer r.close()
+	an := r.symbols("shop/cart.py")
+	if an.Status != "ok" || len(an.Items) != 1 || an.Items[0].Name != "build_cart" || an.Items[0].Line != 6 {
+		t.Fatalf("outline = %+v", an)
+	}
+}
+
+func TestLspHoverWithoutAServerSuggestsReadingTheLine(t *testing.T) {
+	c := newCtxHarness(t)
+	t.Setenv("ORCH_GOPLS", filepath.Join(c.jbDir, "no-such-gopls"))
+	code, out := c.run("lsp", "hover", "pay/pay.go:7:18")
+	if code != 2 {
+		t.Errorf("exit %d", code)
+	}
+	wantContains(t, out, "no language server for go; read pay/pay.go around line 7")
+	if strings.Contains(out, "rg -n -w") {
+		t.Errorf("the position is suggested as a word: %q", out)
+	}
+}
