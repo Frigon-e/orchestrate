@@ -4,32 +4,32 @@
 // grep), deny-find (a find over a tree), deny-sed-inplace (sed -i, perl -pi),
 // deny-cat-head-tail (a bare cat, head, tail or sed -n on one file) and
 // deny-grep-rg (a plain grep, egrep, fgrep, ag or git grep over files or a
-// directory, and rg too while orch is healthy). A block names orch ctx first
-// when `orch` answers `--version`, then fd for a file search and rg for a
-// content search, and the pi built-in tool last. An `orch` that is on PATH but
-// cannot answer is treated as absent, and the block says it is broken.
+// directory). A grep is blocked only while rg is on PATH and rg itself is never
+// blocked; a find rule names fd, or the built-in tool when fd is missing. Every
+// search block ends with the lookup ladder (jbcontext search, orch lsp, rg, fd).
 // pi's own grep and find reach the tree without a shell, so two more rules
-// refuse them the same way while orch answers; ls only lists a directory and
-// stays, and with no usable orch the built-in searches are the fallback, so
-// nothing is blocked and nothing is appended. orch ctx is pinned to a git
-// repository root, so a built-in search that names a path outside the
-// session's repository has no replacement and is allowed. A grep filtering
-// another command's output and plain fd are not blocked; the note is appended
-// to their result instead, and to a built-in search that does run.
+// refuse them while rg (for grep) or fd (for find) is on PATH and point at the
+// shell tool; ls only lists a directory and stays. A built-in search that names
+// a path outside the session's git repository is allowed. A grep filtering
+// another command's output and plain fd are not blocked; the ladder is appended
+// to their result instead, and to a built-in search that does run, while `orch`
+// is on PATH.
 // deny-big-read refuses pi's read of a file over 30 KB when it has no offset and
 // no limit, whatever is installed; it names a ranged read and how to get the lines.
 import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { spawnSync } from "node:child_process";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const marker = "orch ctx reminder";
+const marker = "Lookup order:";
 const guardMarker = "orch tool guard";
 
-const reminder =
-	`${marker}: one orch ctx call replaces this search - ` +
-	`orch ctx batch -q "find:Code that ..." -q "symbol:Name refs=3" -q "text:pattern glob=dir/**"\n` +
-	`--compact shortens the output; sym takes a name, text a string, find a concept.`;
+// The line every search block ends with, and the note appended to a search
+// result: where to look, in order.
+const ladder =
+	`${marker} jbcontext search "<one behavior>" if the location is unknown, ` +
+	`orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, ` +
+	`fd for file names; send independent lookups in one message.`;
+const reminder = ladder;
 
 const shellSearches = new Set(["rg", "grep", "egrep", "fgrep", "ag", "fd", "find"]);
 const builtinSearches = new Set(["grep", "find", "ls"]);
@@ -45,11 +45,9 @@ type segment = {
 	redirect: boolean;
 };
 
-// The replacements, in the order a block names them: our ctx system first,
-// then the standalone search tools the user prefers, then pi's built-ins.
-// `broken` carries the probe's error when orch is on PATH but does not answer,
-// so a block can say why it stopped naming it.
-type tools = { orch: boolean; fd: boolean; rg: boolean; broken: string };
+// The tools a block may name: orch for the result note, fd and rg as the
+// replacements for a file search and a content search.
+type tools = { orch: boolean; fd: boolean; rg: boolean };
 
 type rule = {
 	// The full name, and the short name ORCH_TOOL_GUARD_SKIP takes.
@@ -69,48 +67,13 @@ type builtinRule = {
 	id: string;
 	// The one ORCH_TOOL_GUARD_SKIP name that disables every built-in rule.
 	group: string;
-	match: (call: builtinCall) => boolean;
-	// The reason is fixed: the rule only matches while orch answers.
+	match: (call: builtinCall, tools: tools) => boolean;
+	// The reason is fixed: the rule only matches while its replacement is on PATH.
 	reason: string;
 };
 
-// The probe's timeout in milliseconds. `orch --version` prints a fingerprint
-// and starts nothing else, so a healthy wrapper answers at once; one that
-// cannot find its tool directory fails at once too.
-const probeTimeout = 3000;
-
-// The first line of the probe's error, cut at 120 characters, so it fits in one
-// line of a block.
-function firstLine(text: string): string {
-	for (const part of String(text).split("\n")) {
-		const line = part.trim();
-		if (line) return line.slice(0, 120);
-	}
-	return "";
-}
-
-// True when `orch --version` exits 0 within the timeout. A wrapper that is on
-// PATH and cannot answer is not a replacement, and a block that points at it
-// teaches the model to go around the guard instead.
-function orchAnswers(): { ok: boolean; detail: string } {
-	try {
-		const done = spawnSync("orch", ["--version"], {
-			timeout: probeTimeout,
-			encoding: "utf8",
-			killSignal: "SIGKILL",
-		});
-		if (done.error) return { ok: false, detail: firstLine(done.error.message) || "probe failed" };
-		if (done.status === 0) return { ok: true, detail: "" };
-		const detail =
-			firstLine(done.stderr ?? "") || firstLine(done.stdout ?? "") || `orch --version exited ${done.status ?? "unknown"}`;
-		return { ok: false, detail };
-	} catch (error) {
-		return { ok: false, detail: firstLine(String(error)) || "probe failed" };
-	}
-}
-
-// True when an executable of this name is on PATH, so the reminder is harmless
-// in repos and sessions that never installed the skill or the search tools.
+// True when an executable of this name is on PATH, so the guard is harmless in
+// repos and sessions that never installed the skill or the search tools.
 function onPath(name: string): boolean {
 	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
 		if (!dir) continue;
@@ -126,32 +89,9 @@ function onPath(name: string): boolean {
 	return false;
 }
 
-// Computed once: PATH does not change under a running session, and one probe
-// per session is enough for a wrapper whose content does not change either.
+// Computed once: PATH does not change under a running session.
 function installed(): tools {
-	const present = onPath("orch");
-	let healthy = false;
-	let detail = "";
-	if (present) {
-		const probe = orchAnswers();
-		healthy = probe.ok;
-		if (!healthy) detail = probe.detail;
-	}
-	return { orch: healthy, fd: onPath("fd"), rg: onPath("rg"), broken: detail };
-}
-
-// The one line a search block adds when orch is installed but cannot answer:
-// the model is told the replacement it cannot use, instead of hunting for a
-// loophole around the block.
-function brokenLine(detail: string): string {
-	return `orch ctx is installed but broken here (${detail}); use the tools above and tell the user.`;
-}
-
-// The three rules that name a search replacement add that line. The two that
-// always name a built-in tool (edit, read) never do, because orch does not back
-// them and a file edit or read still works.
-function withBroken(reason: string, broken: string): string {
-	return broken ? `${reason}\n${brokenLine(broken)}` : reason;
+	return { orch: onPath("orch"), fd: onPath("fd"), rg: onPath("rg") };
 }
 
 // Split a command line on unquoted separators, dropping quoted text, so an
@@ -282,7 +222,10 @@ function inPlaceEdit(args: string[]): boolean {
 const findChain = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete"]);
 // A search tool feeding one of these is a search chain.
 const searchSource = new Set(["find", "fd", "rg", "ag"]);
-const searchSink = new Set(["grep", "rg", "ag"]);
+// fd piped into rg filters file names, so only grep and ag are pipe sinks; xargs
+// also counts rg.
+const pipeSink = new Set(["grep", "ag"]);
+const xargsSink = new Set(["grep", "rg", "ag"]);
 
 function denyFindChains(line: string): boolean {
 	const list = segments(line);
@@ -294,7 +237,7 @@ function denyFindChains(line: string): boolean {
 		if (!list[at].stdoutPipe || !searchSource.has(command(list[at]).name)) continue;
 		for (let next = at + 1; next < list.length && list[next].stdinPipe; next += 1) {
 			const { name, args } = command(list[next]);
-			const sink = name === "xargs" ? args.some((arg) => searchSink.has(base(arg)) || arg === "find") : searchSink.has(name);
+			const sink = name === "xargs" ? args.some((arg) => xargsSink.has(base(arg)) || arg === "find") : pipeSink.has(name);
 			if (sink) return true;
 			if (!list[next].stdoutPipe) break;
 		}
@@ -302,8 +245,7 @@ function denyFindChains(line: string): boolean {
 	return false;
 }
 
-// find over a tree is a file search by name, path or type, which fd or one
-// ctx call answers. A find reading a pipe is formatting stdin, so it stays.
+// find over a tree is a file search by name, path or type, which fd answers. A find reading a pipe is formatting stdin, so it stays.
 function denyFind(line: string): boolean {
 	return segments(line).some((segment) => !segment.stdinPipe && command(segment).name === "find");
 }
@@ -436,8 +378,8 @@ function repositoryRoot(): string {
 	return repoRoot;
 }
 
-// Resolve relative and missing paths from the session directory. orch ctx is
-// pinned to a git repository root, so searches outside it have no ctx answer.
+// Resolve relative and missing paths from the session directory. A search
+// outside the session's git repository is allowed.
 function insideRepository(path: string): boolean {
 	const root = repositoryRoot();
 	if (!root) return false;
@@ -454,10 +396,9 @@ function insideRepository(path: string): boolean {
 // One segment is a raw content search over files.
 function grepSearches(segment: segment, tools: tools): boolean {
 	const { name, args } = command(segment);
-	if (!name) return false;
+	if (!name || !tools.rg) return false;
 	if (name === "git") return args[0] === "grep" && !segment.stdinPipe;
-	if (name === "rg" && !tools.orch) return false;
-	if (!plainSearch.has(name)) return false;
+	if (name === "rg" || !plainSearch.has(name)) return false;
 	if (searchTargets(args).length > 0) return true;
 	const recurses =
 		recursiveByDefault.has(name) || args.some((arg) => arg.startsWith("--recursive") || recursive.test(arg));
@@ -465,8 +406,9 @@ function grepSearches(segment: segment, tools: tools): boolean {
 }
 
 // A grep with a file or directory argument, or one that recurses, searches
-// files. One reading stdin is a filter, so it stays allowed. With no orch, rg
-// is the preferred grep rather than a raw search, so rg itself stays allowed.
+// files. One reading stdin is a filter, so it stays allowed. rg is the
+// replacement, so it is never blocked, and with no rg on PATH there is nothing
+// to name, so nothing is.
 function denyGrepRg(line: string, tools: tools): boolean {
 	return segments(line).some((segment) => grepSearches(segment, tools));
 }
@@ -490,38 +432,38 @@ function denyCatHeadTail(line: string): boolean {
 	});
 }
 
-// Two or three short lines: what is blocked, and the tool that replaces it. A
-// search rule adds one more line while orch is broken, and the 3rd block in a
-// row one more again.
+// Two or three short lines: what is blocked, and the tool that replaces it. The
+// 3rd block in a row adds one more.
+const findReason = (
+	{ fd }: tools,
+	name: string,
+	first: string,
+	fallback: string,
+) => `${guardMarker} (${name}): ` + (fd ? `${first}\n${ladder}` : fallback);
+
 const rules: rule[] = [
 	{
 		name: "deny-find-chains",
 		id: "find-chains",
 		match: denyFindChains,
-		reason: ({ orch, fd, broken }) =>
-			withBroken(
-				`${guardMarker} (deny-find-chains): find -exec, -delete and find | grep chains are blocked.\n` +
-					(orch
-						? `One orch ctx batch replaces them: orch ctx batch -q "find:Code that ..." -q "symbol:Name refs=3" -q "text:pattern glob=dir/**" (--compact shortens it).`
-						: fd
-							? `Use fd instead (e.g. fd -e ts pattern dir, and fd -x cmd replaces find -exec).`
-							: `Use the built-in grep and find tools; orch ctx and fd are not installed.`),
-				broken,
+		reason: (tools) =>
+			findReason(
+				tools,
+				"deny-find-chains",
+				`find -exec, -delete and find | grep chains are blocked; use fd, or rg -g 'GLOB' PATTERN for content.`,
+				`find -exec, -delete and find | grep chains are blocked. Use the built-in grep and find tools; fd is not installed.`,
 			),
 	},
 	{
 		name: "deny-find",
 		id: "find",
 		match: denyFind,
-		reason: ({ orch, fd, broken }) =>
-			withBroken(
-				`${guardMarker} (deny-find): find over a tree is blocked.\n` +
-					(orch
-						? `One orch ctx batch replaces it: orch ctx batch -q "find:Code that ..." -q "text:pattern glob=dir/**" (--compact shortens it).`
-						: fd
-							? `Use fd instead (e.g. fd -e ts pattern dir, and fd -x cmd replaces find -exec).`
-							: `Use the built-in find tool; orch ctx and fd are not installed.`),
-				broken,
+		reason: (tools) =>
+			findReason(
+				tools,
+				"deny-find",
+				`find over a tree is blocked; use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').`,
+				`find over a tree is blocked. Use the built-in find tool; fd is not installed.`,
 			),
 	},
 	{
@@ -530,22 +472,15 @@ const rules: rule[] = [
 		match: denySedInplace,
 		reason: () =>
 			`${guardMarker} (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n` +
-			`Use the built-in edit tool; orch ctx is read-only and never replaces an edit.`,
+			`Use the built-in edit tool.`,
 	},
 	{
 		name: "deny-grep-rg",
 		id: "grep-rg",
 		match: denyGrepRg,
-		reason: ({ orch, rg, broken }) =>
-			withBroken(
-				`${guardMarker} (deny-grep-rg): a plain grep${orch ? ", rg" : ""}, ag or git grep over files is blocked.\n` +
-					(orch
-						? `One orch ctx batch replaces it: orch ctx batch -q "text:pattern glob=dir/**" -q "symbol:Name refs=3" (a concept: find:...).`
-						: rg
-							? `Use rg instead (e.g. rg -n pattern dir).`
-							: `Use the built-in grep tool; orch ctx and rg are not installed.`),
-				broken,
-			),
+		reason: () =>
+			`${guardMarker} (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; ` +
+			`use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n${ladder}`,
 	},
 	{
 		name: "deny-cat-head-tail",
@@ -558,28 +493,28 @@ const rules: rule[] = [
 ];
 
 // pi's built-in grep and find walk the tree without a shell, so a shell rule
-// alone leaves them as the way around the guard. While orch answers they are
-// refused like the shell rules and point at the same ctx query; with no usable
-// orch they are the fallback, so they are never blocked then. `ls` lists a
-// directory instead of searching, so it has no rule and stays allowed.
+// alone leaves them as the way around the guard. They are refused while the
+// shell replacement (rg for grep, fd for find) is on PATH; with it missing they
+// are the fallback and stay allowed. `ls` lists a directory instead of
+// searching, so it has no rule and stays allowed.
 const builtinRules: builtinRule[] = [
 	{
 		name: "deny-builtin-grep",
 		id: "builtin-grep",
 		group: "builtin-search",
-		match: (call) => call.name === "grep",
+		match: (call, tools) => call.name === "grep" && tools.rg,
 		reason:
-			`${guardMarker} (deny-builtin-grep): the built-in grep tool is blocked; orch ctx answers searches here.\n` +
-			`One orch ctx batch replaces it: orch ctx batch -q "text:pattern glob=dir/**" -q "symbol:Name refs=3" (a concept: find:...).`,
+			`${guardMarker} (deny-builtin-grep): the built-in grep tool is blocked; ` +
+			`use rg in bash (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n${ladder}`,
 	},
 	{
 		name: "deny-builtin-find",
 		id: "builtin-find",
 		group: "builtin-search",
-		match: (call) => call.name === "find",
+		match: (call, tools) => call.name === "find" && tools.fd,
 		reason:
-			`${guardMarker} (deny-builtin-find): the built-in find tool is blocked; orch ctx answers file searches here.\n` +
-			`One orch ctx batch replaces it: orch ctx batch -q "find:Code that ..." -q "text:pattern glob=dir/**" (--compact shortens it).`,
+			`${guardMarker} (deny-builtin-find): the built-in find tool is blocked; ` +
+			`use fd in bash (fd PATTERN dir, fd -e go, fd -g '*.ts').\n${ladder}`,
 	},
 ];
 
@@ -592,7 +527,7 @@ const readExempt = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".
 
 // The block reason for a big read, or "" when the call is not one. Any path it
 // cannot stat is allowed: a missing file or a directory is not a big read.
-function bigReadReason(input: Record<string, unknown>, ready: tools): string {
+function bigReadReason(input: Record<string, unknown>): string {
 	const path = input.path;
 	if (typeof path !== "string" || !path.trim()) return "";
 	const ranged = (key: string) => input[key] !== undefined && input[key] !== null && input[key] !== "";
@@ -607,9 +542,7 @@ function bigReadReason(input: Record<string, unknown>, ready: tools): string {
 		return "";
 	}
 	if (size <= bigReadBytes) return "";
-	const lookup = ready.orch
-		? `Get the line numbers first: orch ctx text "pattern" --glob <file> or orch ctx sym Name (a doc: its headings with orch ctx text "^#{1,3} " --glob <file>).`
-		: `Get the line numbers first: rg -n "pattern" <file> (a doc: rg -n "^#{1,3} " <file>).`;
+	const lookup = `Get the line numbers first: rg -n PATTERN file (a doc: rg -n "^#{1,3} " file).`;
 	return (
 		`${guardMarker} (deny-big-read): ${path} is ${Math.max(1, Math.round(size / 1024))} KB; reading it whole floods the context.\n` +
 		`Use read with offset and limit and take only the section you need.\n` +
@@ -661,8 +594,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			pi.on("tool_result", async (event: ToolResultEvent) => {
 				if (!isSearch(event.toolName, event.input)) return undefined;
-				// A search outside the repository has no orch ctx replacement, so it
-				// gets no note either.
+				// A search outside the repository is not guarded, so it gets no note.
 				if (!insideRepository(String(event.input.path ?? ""))) return undefined;
 				const content = event.content ?? [];
 				if (content.some((part) => part.type === "text" && part.text.includes(marker))) return undefined;
@@ -687,21 +619,18 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event: ToolCallEvent) => {
 		const input = event.input as Record<string, unknown>;
-		// The built-in searches are the way around the shell rules, so while orch
-		// answers they are refused the same way. With no usable orch they are the
-		// fallback, so they run and the shell rules point at them instead.
-		const builtin = ready.orch
-			? activeBuiltins.find(
-					(rule) => rule.match({ name: event.toolName, input }) && insideRepository(String(input.path ?? "")),
-				)
-			: undefined;
+		// The built-in searches are the way around the shell rules, so they are
+		// refused the same way while the shell replacement is on PATH.
+		const builtin = activeBuiltins.find(
+			(rule) => rule.match({ name: event.toolName, input }, ready) && insideRepository(String(input.path ?? "")),
+		);
 		if (builtin) {
 			blocksInRow += 1;
 			return { block: true, reason: blockReason(builtin.reason) };
 		}
 		const bigRead =
 			guard && event.toolName === "read" && !skipped().has("big-read") && !skipped().has("deny-big-read")
-				? bigReadReason(input, ready)
+				? bigReadReason(input)
 				: "";
 		if (bigRead) {
 			blocksInRow += 1;

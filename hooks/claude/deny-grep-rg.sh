@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # PreToolUse hook (matcher: Bash). Blocks rule deny-grep-rg from the shared
-# guard: grep, egrep, fgrep, ag or git grep over files or a directory, and rg
-# too while orch is installed (with no orch, rg is the preferred grep).
-# Does not touch: a grep filtering another command's output (go test ./... |
-# grep FAIL), grep -q as a condition, grep reading stdin, a quoted word, and
-# orch ctx itself.
-# Replacement: one orch ctx batch, else rg, else the built-in Grep tool.
+# guard: grep, egrep, fgrep, ag or git grep over files or a directory, while rg
+# is on PATH. With no rg there is no replacement, so nothing is blocked.
+# Does not touch: rg itself, a grep filtering another command's output (go
+# test ./... | grep FAIL), grep -q as a condition, grep reading stdin and a
+# quoted word.
+# Replacement: rg.
 set -u
 unset CDPATH
 dir=$(cd -- "$(dirname -- "$0")" && pwd) || exit 0
