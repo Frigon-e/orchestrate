@@ -383,13 +383,13 @@ func TestCtxReminderGuardDenyCatHeadTail(t *testing.T) {
 	read := []string{"read", "offset and limit"}
 	cases := []reminderCase{
 		{Name: "cat one file", Tool: "bash", Input: bash(`cat notes.txt`), Blocks: "cat-head-tail", Needs: read},
-		{Name: "head -n 20", Tool: "bash", Input: bash(`head -n 20 notes.txt`), Blocks: "cat-head-tail", Needs: read},
-		{Name: "tail -c 100", Tool: "bash", Input: bash(`tail -c 100 notes.txt`), Blocks: "cat-head-tail", Needs: read},
+		{Name: "head -n 20", Tool: "bash", Input: bash(`head -n 20 notes.txt`)},
+		{Name: "tail -c 100", Tool: "bash", Input: bash(`tail -c 100 notes.txt`)},
 		{Name: "sed -n range", Tool: "bash", Input: bash(`sed -n '10,20p' notes.txt`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "sudo cat", Tool: "bash", Input: bash(`sudo cat /etc/hosts`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "cat -n one file", Tool: "bash", Input: bash(`cat -n notes.txt`), Blocks: "cat-head-tail", Needs: read},
 		{Name: "absolute cat", Tool: "bash", Input: bash(`/bin/cat notes.txt`), Blocks: "cat-head-tail", Needs: read},
-		{Name: "head bare", Tool: "bash", Input: bash(`head notes.txt`), Blocks: "cat-head-tail", Needs: read},
+		{Name: "head bare", Tool: "bash", Input: bash(`head notes.txt`)},
 		// Does not touch: follow, several files, a pipe on either side, a
 		// redirect, and reading from another command's output.
 		{Name: "tail -f", Tool: "bash", Input: bash(`tail -f /var/log/app.log`)},

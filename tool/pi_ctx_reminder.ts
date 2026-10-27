@@ -2,7 +2,7 @@
 // right tool instead. Each rule is a table entry with a name, a matcher and a
 // reason: deny-find-chains (find -exec / find -delete / a search tool feeding a
 // grep), deny-find (a find over a tree), deny-sed-inplace (sed -i, perl -pi),
-// deny-cat-head-tail (a bare cat, head, tail or sed -n on one file) and
+// deny-cat-head-tail (a bare cat or sed -n on one file) and
 // deny-grep-rg (a plain grep, egrep, fgrep, ag or git grep over files or a
 // directory). A grep is blocked only while rg is on PATH and rg itself is never
 // blocked; a find rule names fd, or the built-in tool when fd is missing. Every
@@ -423,10 +423,6 @@ function denyCatHeadTail(line: string): boolean {
 		if (segment.stdinPipe || segment.stdoutPipe || segment.redirect) return false;
 		const { name, args } = command(segment);
 		if (name === "cat") return plainFiles(args).length === 1;
-		if (name === "head" || name === "tail") {
-			if (args.some((arg) => follow.test(arg) || arg.startsWith("--follow"))) return false;
-			return countFiles(args).length === 1;
-		}
 		if (name === "sed") {
 			if (inPlaceEdit(args)) return false;
 			return sedPrints(args) && sedFiles(args).length === 1;
@@ -490,7 +486,7 @@ const rules: rule[] = [
 		id: "cat-head-tail",
 		match: denyCatHeadTail,
 		reason: () =>
-			`${guardMarker} (deny-cat-head-tail): a bare cat, head, tail or sed -n floods the context.\n` +
+			`${guardMarker} (deny-cat-head-tail): a bare cat or sed -n over one file floods the context.\n` +
 			`Use the built-in read tool with offset and limit (a section or the whole file).`,
 	},
 ];

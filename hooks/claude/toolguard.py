@@ -367,12 +367,6 @@ def deny_cat_head_tail(line):
             if len(plain_files(args)) == 1:
                 return True
             continue
-        if name in ("head", "tail"):
-            if any(FOLLOW.match(arg) or arg.startswith("--follow") for arg in args):
-                continue
-            if len(count_files(args)) == 1:
-                return True
-            continue
         if name == "sed":
             if in_place_edit(args):
                 continue
@@ -440,7 +434,7 @@ def rules():
             "id": "cat-head-tail",
             "match": lambda line, tools: deny_cat_head_tail(line),
             "reason": lambda tools: (
-                f"{GUARD_MARKER} (deny-cat-head-tail): a bare cat, head, tail or sed -n floods the context.\n"
+                f"{GUARD_MARKER} (deny-cat-head-tail): a bare cat or sed -n over one file floods the context.\n"
                 "Use the built-in Read tool with offset and limit (a section or the whole file)."
             ),
         },
