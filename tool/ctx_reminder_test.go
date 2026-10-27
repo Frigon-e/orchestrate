@@ -316,7 +316,7 @@ func TestCtxReminderReplacementOrder(t *testing.T) {
 	})
 	t.Run("only rg installed", func(t *testing.T) {
 		cases := []reminderCase{
-			{Name: "find by name", Tool: "bash", Input: bash(`find . -name '*.ts'`), Blocks: "find", Needs: []string{"built-in find"}},
+			{Name: "find by name", Tool: "bash", Input: bash(`find . -name '*.ts'`)},
 			{Name: "find -exec", Tool: "bash", Input: bash(`find . -name x -exec ls {} \;`), Blocks: "find-chains", Needs: []string{"built-in grep and find"}},
 			{Name: "grep recursive", Tool: "bash", Input: bash(`grep -rn x src`), Blocks: "grep-rg", Needs: []string{"use rg"}},
 			{Name: "rg tree", Tool: "bash", Input: bash(`rg x src`)},
@@ -325,9 +325,6 @@ func TestCtxReminderReplacementOrder(t *testing.T) {
 		checkReminder(t, got, cases)
 		if reason := withoutGiveWay(got.Out["grep recursive"].Block); reason != grepReason {
 			t.Errorf("the grep reason is not the fixed text: %q", reason)
-		}
-		if reason := got.Out["find by name"].Block; strings.Contains(reason, "fd (") {
-			t.Errorf("fd is not installed but the reason named it: %q", reason)
 		}
 	})
 	t.Run("only fd installed", func(t *testing.T) {
@@ -345,7 +342,7 @@ func TestCtxReminderReplacementOrder(t *testing.T) {
 	})
 	t.Run("neither installed", func(t *testing.T) {
 		cases := []reminderCase{
-			{Name: "find by name", Tool: "bash", Input: bash(`find . -name '*.ts'`), Blocks: "find", Needs: []string{"built-in find"}},
+			{Name: "find by name", Tool: "bash", Input: bash(`find . -name '*.ts'`)},
 			{Name: "find in a pipe", Tool: "bash", Input: bash(`cat list.txt | find . -name '*.ts'`)},
 			{Name: "grep recursive", Tool: "bash", Input: bash(`grep -rn x src`)},
 			{Name: "rg tree", Tool: "bash", Input: bash(`rg x src`)},
@@ -354,9 +351,6 @@ func TestCtxReminderReplacementOrder(t *testing.T) {
 		}
 		got := runCtxReminderWith(t, nil, nil, cases)
 		checkReminder(t, got, cases)
-		if reason := got.Out["find by name"].Block; strings.Contains(reason, "fd (") || strings.Contains(reason, "orch ctx") {
-			t.Errorf("a tool that is not on PATH was named: %q", reason)
-		}
 	})
 }
 
@@ -658,7 +652,7 @@ func TestCtxReminderSilentInCtxOnlyShellAndGuardsWithoutOrch(t *testing.T) {
 			{Name: "sed -i", Tool: "bash", Input: bash(`sed -i 's/a/b/' file.go`), Blocks: "sed-inplace", Needs: []string{"edit"}},
 			{Name: "cat one file", Tool: "bash", Input: bash(`cat notes.txt`), Blocks: "cat-head-tail", Needs: []string{"read", "offset"}},
 			{Name: "rg Foo internal/", Tool: "bash", Input: bash(`rg Foo internal/`)},
-			{Name: "find by name", Tool: "bash", Input: bash(`find . -name "*.ts"`), Blocks: "find", Needs: []string{"built-in find"}},
+			{Name: "find by name", Tool: "bash", Input: bash(`find . -name "*.ts"`)},
 			{Name: "fd", Tool: "bash", Input: bash(`fd gateway`)},
 			{Name: "go test | tail", Tool: "bash", Input: bash(`go test ./... | tail -n 20`)},
 		}

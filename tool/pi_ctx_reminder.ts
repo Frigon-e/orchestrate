@@ -457,13 +457,13 @@ const rules: rule[] = [
 	{
 		name: "deny-find",
 		id: "find",
-		match: denyFind,
+		match: (line, tools) => tools.fd && denyFind(line),
 		reason: (tools) =>
 			findReason(
 				tools,
 				"deny-find",
 				`find over a tree is blocked; use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').`,
-				`find over a tree is blocked. Use the built-in find tool; fd is not installed.`,
+				`find over a tree is blocked; use fd.`,
 			),
 	},
 	{

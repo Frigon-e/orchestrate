@@ -41,8 +41,8 @@ HOOK_FOR_RULE = {
 BIG_READ_HOOK = "deny-big-read.sh"
 
 # The replacement a block must name, given the tools on PATH and the rule. A
-# find rule names fd, or the built-in tool when fd is missing; a grep is only
-# blocked with rg on PATH, so it always names rg.
+# plain find and a grep are only blocked when fd or rg is on PATH, so they
+# always name it; a find chain with no fd names a plain find.
 REPLACEMENT = {
     "fd-rg": {
         "find-chains": "use fd",
@@ -52,8 +52,7 @@ REPLACEMENT = {
         "grep-rg": "use rg",
     },
     "rg": {
-        "find-chains": "built-in Glob and Grep",
-        "find": "built-in Glob",
+        "find-chains": "run a plain find",
         "sed-inplace": "built-in Edit",
         "cat-head-tail": "built-in Read",
         "grep-rg": "use rg",
@@ -66,8 +65,7 @@ REPLACEMENT = {
         "grep-rg": "use rg",
     },
     "none": {
-        "find-chains": "built-in Glob and Grep",
-        "find": "built-in Glob",
+        "find-chains": "run a plain find",
         "sed-inplace": "built-in Edit",
         "cat-head-tail": "built-in Read",
         "grep-rg": "use rg",
@@ -158,14 +156,14 @@ def check_generic_reasons(checker):
         done = hook_run(checker, script, command, "fd-rg")
         if done.returncode != 2 or done.stderr.strip() != want:
             failures.append(f"{command}: the reason is not the fixed text byte for byte: {done.stderr.strip()!r}")
-    # With no rg a grep has no replacement and passes; with no fd a find names
-    # the built-in tool.
+    # With no rg a grep has no replacement and passes; with no fd a plain find
+    # passes the same way (Claude's Glob is not loaded by default on macOS).
     done = hook_run(checker, "deny-grep-rg.sh", "grep -rn Normalize src", "none")
     if done.returncode != 0 or done.stderr.strip():
         failures.append(f"grep without rg was not allowed: {done.stderr.strip()!r}")
     done = hook_run(checker, "deny-find-chains.sh", "find . -name '*.ts'", "none")
-    if done.returncode != 2 or "built-in Glob" not in done.stderr or "fd (" in done.stderr:
-        failures.append(f"find without fd did not name the built-in tool: {done.stderr.strip()!r}")
+    if done.returncode != 0 or done.stderr.strip():
+        failures.append(f"find without fd was not allowed: {done.stderr.strip()!r}")
     return failures
 
 

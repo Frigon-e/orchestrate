@@ -24,7 +24,7 @@ These are the Claude side of the pi guard in `tool/pi_ctx_reminder.ts`, which st
 
 | Script | Rule | Blocks | Does not touch |
 |---|---|---|---|
-| `deny-find-chains.sh` | `deny-find-chains`, `deny-find` | `find` with `-exec/-execdir/-ok/-okdir/-delete`; a search tool (`find`, `fd`, `rg`, `ag`) feeding `grep`/`ag`, or `xargs grep`/`rg`/`ag`; a plain `find` over a tree | a `find` reading stdin (it formats a pipe), `fd ... \| rg pattern` (it filters file names), a quoted word or a path that merely contains `find`, `fd` alone |
+| `deny-find-chains.sh` | `deny-find-chains`, `deny-find` | `find` with `-exec/-execdir/-ok/-okdir/-delete`; a search tool (`find`, `fd`, `rg`, `ag`) feeding `grep`/`ag`, or `xargs grep`/`rg`/`ag`; a plain `find` over a tree while `fd` is on PATH | a `find` reading stdin (it formats a pipe), `fd ... \| rg pattern` (it filters file names), a quoted word or a path that merely contains `find`, `fd` alone, and a plain `find` when `fd` is not installed |
 | `deny-sed-inplace.sh` | `deny-sed-inplace` | `sed`/`gsed` with `-i`, `-i.bak`, `-i ''` or `--in-place`; `perl` with `-i` or `-pi` | `sed` that prints to stdout, a piped transform (`git diff \| sed 's/^/  /'`), `grep -i` |
 | `deny-cat-head-tail.sh` | `deny-cat-head-tail` | a bare `cat`, `head`, `tail` or `sed -n` over exactly one file | `tail -f`/`--follow`, several files, a pipe on either side, a redirect, `cat` reading stdin |
 | `deny-grep-rg.sh` | `deny-grep-rg` | `grep`, `egrep`, `fgrep`, `ag`, `git grep` over files or a directory, while `rg` is on PATH | `rg` itself, a `grep` filtering another command's output (`go test ./... \| grep FAIL`), `grep -q` as a condition, `grep` reading stdin, a quoted word, and every `grep` when `rg` is not installed (there is no replacement to name) |
@@ -41,7 +41,7 @@ orch tool guard (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files a
 Lookup order: jbcontext search "<one behavior>" if the location is unknown, orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, fd for file names; send independent lookups in one message.
 ```
 
-`deny-find` and `deny-find-chains` name `fd` the same way (`fd PATTERN dir`, `fd -e go`, `fd -g '*.ts'`; a chain says "use fd, or rg -g 'GLOB' PATTERN for content"). With no `fd` on PATH they name the built-in `Glob`/`Grep` tools and skip the ladder, because it would send the model to a tool that is missing. `deny-sed-inplace` always names `Edit` and `deny-cat-head-tail` always names `Read` with offset and limit (a section or the whole file).
+`deny-find` and `deny-find-chains` name `fd` the same way (`fd PATTERN dir`, `fd -e go`, `fd -g '*.ts'`; a chain says "use fd, or rg -g 'GLOB' PATTERN for content"). With no `fd` on PATH a plain `find` is allowed (Claude Code does not load `Glob` by default on macOS, so there is nothing else to name), and a chain names a plain `find` or `rg` and skips the ladder. `deny-sed-inplace` always names `Edit` and `deny-cat-head-tail` always names `Read` with offset and limit (a section or the whole file).
 
 ### Big whole-file reads
 

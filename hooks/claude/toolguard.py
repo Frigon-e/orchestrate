@@ -396,19 +396,19 @@ def rules():
                 tools,
                 "deny-find-chains",
                 "find -exec, -delete and find | grep chains are blocked; use fd, or rg -g 'GLOB' PATTERN for content.",
-                "find -exec, -delete and find | grep chains are blocked. Use the built-in Glob and Grep tools; fd is not installed.",
+                "find -exec, -delete and find | grep chains are blocked; run a plain find and act on its output, or rg for content (fd is not installed).",
             ),
         },
         {
             "script": "find-chains",
             "name": "deny-find",
             "id": "find",
-            "match": lambda line, tools: deny_find(line),
+            "match": lambda line, tools: tools["fd"] and deny_find(line),
             "reason": lambda tools: find_reason(
                 tools,
                 "deny-find",
                 "find over a tree is blocked; use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').",
-                "find over a tree is blocked. Use the built-in Glob tool; fd is not installed.",
+                "find over a tree is blocked; use fd.",
             ),
         },
         {
