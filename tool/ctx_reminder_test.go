@@ -2,13 +2,47 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+var (
+	guardBinOnce sync.Once
+	guardBinDir  string
+	guardBinPath string
+	guardBinErr  error
+)
+
+// guardBin is orch-guard built from this checkout, once for the package's tests.
+// The extension is only wiring, so its tests run it against the real binary.
+func guardBin(t *testing.T) string {
+	t.Helper()
+	guardBinOnce.Do(func() {
+		if guardBinDir, guardBinErr = os.MkdirTemp("", "orch-guard-test"); guardBinErr != nil {
+			return
+		}
+		guardBinPath = filepath.Join(guardBinDir, "orch-guard")
+		if out, err := exec.Command("go", "build", "-o", guardBinPath, "./cmd/orch-guard").CombinedOutput(); err != nil {
+			guardBinErr = fmt.Errorf("building orch-guard: %v\n%s", err, out)
+		}
+	})
+	if guardBinErr != nil {
+		t.Fatal(guardBinErr)
+	}
+	return guardBinPath
+}
+
+func removeGuardBin() {
+	if guardBinDir != "" {
+		os.RemoveAll(guardBinDir)
+	}
+}
 
 // The extension decides in pi, so the decision tables run the real file in node
 // (which strips its types) against a stand-in for pi's extension API.
@@ -53,7 +87,7 @@ func runCtxReminder(t *testing.T, env []string, cases []reminderCase) reminderRu
 
 // runCtxReminderWith copies the real extension into a temp dir, puts a stub for
 // each named tool on PATH and runs the cases through the loaded extension in
-// node. PATH is only that temp dir, so the real system tools never leak in and
+// node, which calls the real orch-guard binary. PATH is only that temp dir, so the real system tools never leak in and
 // the case group decides which replacements the guard can name.
 func runCtxReminderWith(t *testing.T, onPath []string, env []string, cases []reminderCase) reminderRun {
 	t.Helper()
@@ -98,7 +132,8 @@ for (const c of JSON.parse(process.argv[1])) {
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), out }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, cases)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off"}, env...))
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off",
+		"ORCH_GUARD_BIN=" + guardBin(t), "ORCH_TOOL_GUARD_STATE_DIR=" + filepath.Join(dir, "state")}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)

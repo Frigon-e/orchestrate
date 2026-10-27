@@ -17,7 +17,8 @@ import (
 )
 
 // `orch lookups report` reads the lookup log the lookup coach writes
-// (orch-guard coach for Claude, tool/pi_ctx_reminder.ts for pi):
+// (orch-guard coach, run by the Claude hooks and, with --harness pi, by
+// tool/pi_ctx_reminder.ts):
 // one JSON line per lookup in $ORCH_TOOL_GUARD_STATE_DIR/lookups.jsonl. It
 // answers whether workers picked the right tool, in the right order, in few turns.
 

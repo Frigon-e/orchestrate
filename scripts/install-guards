@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Install the orchestrate tool guards for both harnesses. One binary,
+# hooks/bin/orch-guard (tool/guard, tool/cmd/orch-guard), serves both:
+#
+#   Claude Code  hooks in ~/.claude/settings.json (hooks/claude/install_settings.py)
+#   pi           ~/.pi/agent/extensions/ctx-reminder.ts, a symlink to
+#                tool/pi_ctx_reminder.ts, which only wires pi events to the binary
+#
+#   install-guards            build the binary, register the Claude hooks, link the pi extension
+#   install-guards --check    change nothing; list what is missing or stale; exit 1 if anything is
+#   install-guards --remove   unregister the Claude hooks and unlink the pi extension
+#                             (the built binary and any .bak-* backup stay)
+#
+# Everything lands under $HOME, so a temporary HOME gives a throwaway install.
+# A regular file already at the pi extension path is moved to
+# ctx-reminder.ts.bak-<YYYYMMDD> first, never deleted. Running it again changes nothing.
+set -eo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+repo="$(dirname "$here")"
+bin="$repo/hooks/bin/orch-guard"
+source_ext="$repo/tool/pi_ctx_reminder.ts"
+ext_dir="$HOME/.pi/agent/extensions"
+ext="$ext_dir/ctx-reminder.ts"
+settings="$HOME/.claude/settings.json"
+install_settings=(python3 "$repo/hooks/claude/install_settings.py" --settings "$settings")
+
+mode=install
+case "${1:-}" in
+  "") ;;
+  --check) mode=check ;;
+  --remove) mode=remove ;;
+  -h | --help)
+    sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    echo "install-guards: unknown argument $1 (use --check or --remove)" >&2
+    exit 2
+    ;;
+esac
+
+# True when the pi extension path is a symlink to this repo's extension.
+linked() { [ -L "$ext" ] && [ "$(readlink "$ext")" = "$source_ext" ]; }
+
+check() {
+  local bad=0 fp
+  if [ ! -x "$bin" ]; then
+    echo "missing: $bin (the orch-guard binary is not built)"
+    bad=1
+  else
+    fp="$("$here/build-guard" --print-fingerprint)"
+    if [ "$("$bin" --version 2>/dev/null || true)" != "$fp" ]; then
+      echo "stale: $bin does not match the sources in tool/guard"
+      bad=1
+    fi
+  fi
+  if ! out="$("${install_settings[@]}" --check)"; then
+    printf '%s\n' "$out" | sed 's/^/claude: /'
+    bad=1
+  fi
+  if linked; then
+    :
+  elif [ -L "$ext" ]; then
+    echo "pi: $ext points at $(readlink "$ext"), not at $source_ext"
+    bad=1
+  elif [ -e "$ext" ]; then
+    echo "pi: $ext is a regular file, not a link to $source_ext"
+    bad=1
+  else
+    echo "pi: $ext is missing"
+    bad=1
+  fi
+  return $bad
+}
+
+case "$mode" in
+  check)
+    if check; then
+      echo "ok: orch-guard, the Claude hooks and the pi extension are installed"
+    else
+      echo "run scripts/install-guards to fix this" >&2
+      exit 1
+    fi
+    ;;
+  install)
+    "$here/build-guard"
+    "${install_settings[@]}" --apply
+    if linked; then
+      echo "pi extension already linked: $ext"
+    else
+      mkdir -p "$ext_dir"
+      if [ -e "$ext" ] && [ ! -L "$ext" ]; then
+        backup="$ext.bak-$(date +%Y%m%d)"
+        n=1
+        while [ -e "$backup" ] || [ -L "$backup" ]; do
+          n=$((n + 1))
+          backup="$ext.bak-$(date +%Y%m%d)-$n"
+        done
+        mv "$ext" "$backup"
+        echo "moved the existing pi extension to $backup"
+      fi
+      ln -sfn "$source_ext" "$ext"
+      echo "linked $ext -> $source_ext"
+    fi
+    ;;
+  remove)
+    "${install_settings[@]}" --apply --remove
+    if linked; then
+      rm "$ext"
+      echo "removed $ext"
+    elif [ -e "$ext" ] || [ -L "$ext" ]; then
+      echo "left $ext alone: it is not a link to $source_ext"
+    else
+      echo "nothing to remove: $ext is absent"
+    fi
+    ;;
+esac

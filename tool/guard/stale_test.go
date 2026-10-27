@@ -127,3 +127,62 @@ func TestBuildGuardFingerprintMatchesTheLibrary(t *testing.T) {
 		t.Errorf("build-guard says %s, Fingerprint says %s", got, want)
 	}
 }
+
+// failingBuild makes the fake build script record its run and fail.
+func failingBuild(t *testing.T, root, marks string) {
+	t.Helper()
+	body := "#!/bin/sh\ntouch \"" + marks + "/ran.$$\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(root, "scripts", "build-guard"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// settled waits for any rebuild that is running: it holds the lock until it ends.
+func settled(t *testing.T) {
+	t.Helper()
+	lock, err := os.OpenFile(filepath.Join(StateDir(), "guard-build.lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+}
+
+func TestFailedBuildIsNotRetriedForTheSameSourceFor10Minutes(t *testing.T) {
+	root, marks := fakeSource(t)
+	failingBuild(t, root, marks)
+	failed := filepath.Join(StateDir(), "guard-build-failed")
+	CheckStale("older", root)
+	waitFor(t, "the failure to be recorded", func() bool { _, err := os.Stat(failed); return err == nil })
+	fp, _ := Fingerprint(filepath.Join(root, "tool"))
+	if data, _ := os.ReadFile(failed); !strings.HasPrefix(string(data), fp+" ") {
+		t.Fatalf("failure record %q does not name the fingerprint %s", data, fp)
+	}
+	CheckStale("older", root)
+	CheckStale("a third fingerprint of the same sources", root)
+	settled(t)
+	if n := runs(marks); n != 1 {
+		t.Fatalf("%d builds, want 1: a failed build must not restart for the same sources", n)
+	}
+
+	// Changed sources are a new build, whatever failed before.
+	os.WriteFile(filepath.Join(root, "tool", "guard", "a.go"), []byte("package guard // fixed\n"), 0o644)
+	CheckStale("older", root)
+	waitFor(t, "a build of the changed sources", func() bool { return runs(marks) == 2 })
+	settled(t)
+
+	// After ten minutes the same sources are tried again.
+	fp, _ = Fingerprint(filepath.Join(root, "tool"))
+	old := time.Now().Add(-11 * time.Minute).Unix()
+	os.WriteFile(failed, []byte(fp+" "+itoa(int(old))+"\n"), 0o644)
+	CheckStale("older", root)
+	waitFor(t, "the retry after the backoff", func() bool { return runs(marks) == 3 })
+	settled(t)
+	recent := time.Now().Add(-9 * time.Minute).Unix()
+	os.WriteFile(failed, []byte(fp+" "+itoa(int(recent))+"\n"), 0o644)
+	CheckStale("older", root)
+	settled(t)
+	if n := runs(marks); n != 3 {
+		t.Fatalf("%d builds, want 3: nine minutes is inside the backoff", n)
+	}
+}

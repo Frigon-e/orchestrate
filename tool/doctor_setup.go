@@ -35,7 +35,7 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 	}
 
 	// 3. hooks registered in Claude settings.
-	const hookFix = "python3 ~/.agents/skills/orchestrate/hooks/claude/install_settings.py --apply"
+	const hookFix = "scripts/install-guards"
 	if b, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json")); err != nil {
 		if os.IsNotExist(err) {
 			add("warn", "setup", "~/.claude/settings.json is missing", hookFix)
@@ -66,7 +66,7 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 							add("error", "setup", "hook script missing or not executable: "+script, hookFix)
 						} else if filepath.Base(script) == "orch-guard" {
 							if msg := staleGuard(script); msg != "" {
-								add("warn", "setup", msg, filepath.Join(filepath.Dir(script), "..", "..", "scripts", "build-guard"))
+								add("warn", "setup", msg, hookFix)
 							}
 						}
 					}
@@ -76,6 +76,18 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 				add("warn", "setup", "no orchestrate hook is registered in settings.json", hookFix)
 			}
 		}
+	}
+
+	// 3b. the pi guard extension, a link to this skill's tool/pi_ctx_reminder.ts.
+	piExt := filepath.Join(home, ".pi", "agent", "extensions", "ctx-reminder.ts")
+	if fi, err := os.Lstat(piExt); err != nil {
+		add("warn", "setup", "pi tool guard extension is missing: ~/.pi/agent/extensions/ctx-reminder.ts", hookFix)
+	} else if fi.Mode()&os.ModeSymlink == 0 {
+		add("warn", "setup", "~/.pi/agent/extensions/ctx-reminder.ts is a regular file, not a link to the skill", hookFix)
+	} else if got, err := filepath.EvalSymlinks(piExt); err != nil {
+		add("error", "setup", "~/.pi/agent/extensions/ctx-reminder.ts is a dangling link", hookFix)
+	} else if want, err := filepath.EvalSymlinks(filepath.Join(home, ".agents", "skills", "orchestrate", "tool", "pi_ctx_reminder.ts")); err == nil && got != want {
+		add("warn", "setup", "~/.pi/agent/extensions/ctx-reminder.ts points at "+got+", not at this skill's "+want, hookFix)
 	}
 
 	// 4. tools.

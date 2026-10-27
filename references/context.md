@@ -531,21 +531,25 @@ unchanged check remain separate layers, not an operating-system sandbox;
 ignored files and outside paths are not covered by that check. Gate records,
 reports and compare show `ctx_shell`; missing historical fields display `open`.
 
-`tool/pi_ctx_reminder.ts` is a user-level pi extension (the
-orchestrator installs it under `~/.pi/agent/extensions/`). Gate passes do not
-rely on that copy: a pi pass with `--ctx-tool on --ctx-shell open` starts with `--no-extensions -e <cli-dir>/orch-ctx-reminder.ts`, the copy
+`tool/pi_ctx_reminder.ts` is a user-level pi extension (`scripts/install-guards`
+links it as `~/.pi/agent/extensions/ctx-reminder.ts`). It holds no rules: it turns
+pi events into JSON requests for `orch-guard ... --harness pi` (the same binary
+the Claude hooks run, `hooks/bin/orch-guard`) and applies the replies; the
+protocol is in `hooks/claude/README.md`. orch sets `ORCH_GUARD_BIN` for the pi
+leads and gate panes it launches, and a missing or slow binary fails open. Gate passes do not
+rely on the linked copy: a pi pass with `--ctx-tool on --ctx-shell open` starts with `--no-extensions -e <cli-dir>/orch-ctx-reminder.ts`, the copy
 embedded in the binary and written next to the ctx shim, so a guarded gate run
-tests the code in the checkout. Ctx-only and ctx off do not load it. The
+tests the extension in the checkout. Ctx-only and ctx off do not load it. The
 `ORCH_TOOL_GUARD`, `ORCH_TOOL_GUARD_SKIP` and `ORCH_TOOL_GUARD_STATE_DIR` settings in orch's environment reach the pane's pi through the pane shell exports. `ORCH_TSLS`, when
 set in orch's environment, reaches the pane's `orch ctx` and `orch lsp` the same way in any
-ctx-tool pass. The Claude hooks in `hooks/claude/` port the same rules, and
+ctx-tool pass. The Claude hooks run the same binary and rules, and
 `hooks/claude/README.md` is the reference for them. The guard carries five
 small deny rules over shell commands, each a table entry with a name, a matcher
 and a reason, plus two more for pi's own `grep` and `find` tools:
 `deny-find-chains` (find `-exec`/`-delete`, and a search tool feeding a grep),
 `deny-find` (a plain `find` over a tree while `fd` is installed),
 `deny-sed-inplace` (`sed -i`, `perl -pi`), `deny-cat-head-tail` (one bare
-`cat`, `head`, `tail` or `sed -n` on a file) and `deny-grep-rg` (a plain
+`cat` or `sed -n` on a file; `head` and `tail` are not blocked) and `deny-grep-rg` (a plain
 `grep`, `egrep`, `fgrep`, `ag` or `git grep` over files or a directory, while
 `rg` is installed; `rg` itself is never blocked). `deny-builtin-grep` and
 `deny-builtin-find` refuse pi's own `grep` and `find` tools while `rg` (for
@@ -573,10 +577,10 @@ does not run on a retry; from the third block in a row the reason adds `Blocked
 `ORCH_TOOL_GUARD_SKIP=find-chains,find,sed-inplace,cat-head-tail,grep-rg`
 disables rules by name; the group name `builtin-search` disables both built-in
 search rules. The guard stays silent inside the ctx-only gate shell. Its
-decision tables run in node: `go test -run 'CtxReminder' .` in `tool`.
+decision tables run the extension in node against the real binary: `go test -run 'CtxReminder' .` in `tool`.
 
-The lookup coach is a non-blocking part of the same extension and of the Claude
-`lookup-coach.sh` hook. It logs every lookup (`jbcontext search`, `orch lsp`,
+The lookup coach is a non-blocking part of the same binary (`orch-guard coach`),
+run by the same extension and by the Claude hooks. It logs every lookup (`jbcontext search`, `orch lsp`,
 `orch ctx`, `rg`, `fd`, reads) to `~/.local/state/orchestrate/lookups.jsonl`
 and reminds the worker, at most once per kind per session, when its first `rg`
 or `fd` comes before any `jbcontext` or `orch lsp` call, when an `rg` pattern is

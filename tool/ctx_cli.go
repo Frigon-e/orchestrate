@@ -95,6 +95,10 @@ func ctxCLIForExecutable(harness, code, exe string) (CtxCLI, error) {
 		cli.Hook = shellQuote(shim) + " ctx-only-check"
 	}
 	if harness == "pi" {
+		// The extension runs the orch-guard binary; leads and gate panes inherit this.
+		if bin := guardBinary(); bin != "" {
+			cli.Env = append(cli.Env, "ORCH_GUARD_BIN="+bin)
+		}
 		if cli.Extension, err = writeCtxOnlyExtension(dir); err != nil {
 			return CtxCLI{}, err
 		}
@@ -103,4 +107,16 @@ func ctxCLIForExecutable(harness, code, exe string) (CtxCLI, error) {
 		}
 	}
 	return cli, nil
+}
+
+// guardBinary is the orch-guard binary the pi guard extension runs: ORCH_GUARD_BIN
+// when set, else hooks/bin/orch-guard of the skill. Empty when neither is known.
+func guardBinary() string {
+	if bin := os.Getenv("ORCH_GUARD_BIN"); bin != "" {
+		return bin
+	}
+	if dir, err := skillDir(); err == nil {
+		return filepath.Join(dir, "hooks", "bin", "orch-guard")
+	}
+	return ""
 }

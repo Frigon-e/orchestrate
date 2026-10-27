@@ -31,7 +31,9 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeHerdr(path, os.Args[1:]))
 	}
 	gateOutsideHerdr = true
-	os.Exit(m.Run())
+	code := m.Run()
+	removeGuardBin()
+	os.Exit(code)
 }
 
 type fakeAgent struct {

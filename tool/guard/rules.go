@@ -32,8 +32,18 @@ var (
 
 const readTail = "as a parallel call in the same message as your other commands."
 
-// tools is which replacements are installed, so a block never names a missing one.
-type tools struct{ fd, rg bool }
+// tools is which replacements are installed, so a block never names a missing
+// one. orch is only read for pi, which appends the lookup ladder to a search
+// result while orch is on PATH.
+type tools struct{ fd, rg, orch bool }
+
+// harness is the agent the guard speaks to: the block texts name its own tools.
+type harness int
+
+const (
+	forClaude harness = iota
+	forPi
+)
 
 func onPath(name string) bool {
 	for _, dir := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
@@ -245,10 +255,14 @@ func sedScript(args []string) string {
 }
 
 // catHeadTailReason is the block text: what the output is not, then the exact Read call to send.
-func catHeadTailReason(line string) string {
+// pi's read tool takes path, offset and limit and accepts a relative path.
+func catHeadTailReason(line string, h harness) string {
 	head := Marker + " (deny-cat-head-tail): cat and sed -n output is not a Read, so a later Edit of the file fails.\n"
 	name, args, ok := catHeadTailHit(line)
 	if !ok {
+		if h == forPi {
+			return head + "Send read with offset and limit instead, " + readTail
+		}
 		return head + "Send Read with offset and limit instead, " + readTail
 	}
 	files := sedFiles(args)
@@ -257,6 +271,9 @@ func catHeadTailReason(line string) string {
 	}
 	path := files[0]
 	call := "Read file_path=" + path
+	if h == forPi {
+		call = "read path=" + path
+	}
 	var found []string
 	if name == "sed" {
 		found = sedRange.FindStringSubmatch(sedScript(args))
@@ -272,7 +289,7 @@ func catHeadTailReason(line string) string {
 	} else {
 		text = "Send " + call + " instead (add offset and limit for a section), " + readTail
 	}
-	if !strings.HasPrefix(path, "/") {
+	if h == forClaude && !strings.HasPrefix(path, "/") {
 		text += " Read needs an absolute path."
 	}
 	return head + text
@@ -305,15 +322,23 @@ type rule struct {
 	reason   func(t tools, line string) string
 }
 
+func piOr(h harness, pi, claude string) string {
+	if h == forPi {
+		return pi
+	}
+	return claude
+}
+
 // rules is in the order they run; a find chain is the sharper name for a plain find.
-func rules() []rule {
+func rules(h harness) []rule {
 	return []rule{
 		{"find-chains", "deny-find-chains",
 			func(line string, t tools) bool { return denyFindChains(line) },
 			func(t tools, line string) string {
 				return findReason(t, "deny-find-chains",
 					"find -exec, -delete and find | grep chains are blocked; use fd, or rg -g 'GLOB' PATTERN for content.",
-					"find -exec, -delete and find | grep chains are blocked; run a plain find and act on its output, or rg for content (fd is not installed).")
+					piOr(h, "find -exec, -delete and find | grep chains are blocked. Use the built-in grep and find tools; fd is not installed.",
+						"find -exec, -delete and find | grep chains are blocked; run a plain find and act on its output, or rg for content (fd is not installed)."))
 			}},
 		{"find", "deny-find",
 			func(line string, t tools) bool { return t.fd && denyFind(line) },
@@ -325,9 +350,10 @@ func rules() []rule {
 		{"sed-inplace", "deny-sed-inplace",
 			func(line string, t tools) bool { return denySedInplace(line) },
 			func(t tools, line string) string {
+				edit := piOr(h, "edit", "Edit")
 				return Marker + " (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n" +
-					"Use the built-in Edit tool. If the mtime must stay the same, run touch -r FILE REF " +
-					"before the Edit and touch -r REF FILE after. " +
+					"Use the built-in " + edit + " tool. If the mtime must stay the same, run touch -r FILE REF " +
+					"before the " + edit + " and touch -r REF FILE after. " +
 					"Do not rewrite files with python, awk or tee."
 			}},
 		{"grep-rg", "deny-grep-rg", denyGrepRg,
@@ -337,7 +363,7 @@ func rules() []rule {
 			}},
 		{"cat-head-tail", "deny-cat-head-tail",
 			func(line string, t tools) bool { _, _, ok := catHeadTailHit(line); return ok },
-			func(t tools, line string) string { return catHeadTailReason(line) }},
+			func(t tools, line string) string { return catHeadTailReason(line, h) }},
 	}
 }
 
@@ -354,13 +380,13 @@ func skipped() map[string]bool {
 
 // activeRules: ORCH_TOOL_GUARD=off disables every rule; ORCH_TOOL_GUARD_SKIP
 // disables single rules by short name or by full name.
-func activeRules() []rule {
+func activeRules(h harness) []rule {
 	if os.Getenv("ORCH_TOOL_GUARD") == "off" {
 		return nil
 	}
 	skip := skipped()
 	var out []rule
-	for _, r := range rules() {
+	for _, r := range rules(h) {
 		if !skip[r.id] && !skip[r.name] {
 			out = append(out, r)
 		}
@@ -392,7 +418,7 @@ func Pre(ev *Event, stderr io.Writer) int {
 	if line == "" {
 		return 0
 	}
-	active := activeRules()
+	active := activeRules(forClaude)
 	if len(active) == 0 {
 		return 0
 	}

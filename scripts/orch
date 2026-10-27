@@ -67,4 +67,6 @@ if [ "$rebuilt" = 1 ] || [ ! -x "$skill/hooks/bin/orch-guard" ]; then
   "$here/build-guard" >&2 || echo "orch: building hooks/bin/orch-guard failed; the Claude tool guards stay as they were" >&2
 fi
 export ORCH_SELF="$here/orch" ORCH_SKILL_DIR="$skill"
+# The pi tool-guard extension runs this binary (tool/pi_ctx_reminder.ts).
+export ORCH_GUARD_BIN="$skill/hooks/bin/orch-guard"
 exec "$bin" "$@"

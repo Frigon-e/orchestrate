@@ -15,7 +15,7 @@ import (
 )
 
 // The lookup coach: a non-blocking log of every lookup and a few reminders. The
-// pi side is tool/pi_ctx_reminder.ts; both read hooks/claude/coach_cases.json.
+// pi side is in pi.go; both are tested against hooks/claude/coach_cases.json.
 
 const coachPrefix = "orch lookup coach: "
 
@@ -48,6 +48,11 @@ type State struct {
 	ConceptSeen     bool     `json:"concept_seen"`
 	Fired           []string `json:"fired"`
 	Prompt          int      `json:"prompt"`
+	// The pi side keeps its per-session memory here too: the run of blocks, the
+	// one-time fallback block and rows waiting for a duration (see pi.go).
+	BlocksInRow      int    `json:"blocks_in_row,omitempty"`
+	FallbackReminded bool   `json:"fallback_reminded,omitempty"`
+	Open             []Open `json:"open,omitempty"`
 }
 
 // Turn is one assistant message and how many lookups it made: nr non-read, rd reads.

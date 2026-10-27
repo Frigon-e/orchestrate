@@ -189,28 +189,6 @@ func (goBinary) coach(t *testing.T, payload []byte, stateDir string, env map[str
 	return code, stdout
 }
 
-// python runs toolguard.py, which phase 2 deletes. Its Bash and Read rules sit
-// in five groups behind five hook scripts; orch-guard pre is all of them, so
-// the first group that blocks stands for the whole.
-type python struct{ script string }
-
-func (python) name() string { return "toolguard.py" }
-
-func (p python) pre(t *testing.T, payload []byte, pathDir string, env map[string]string) (int, string) {
-	for _, group := range []string{"find-chains", "sed-inplace", "grep-rg", "cat-head-tail", "big-read"} {
-		code, _, stderr := execHook(t, childEnv(env, "PATH="+pathDir), payload, "python3", p.script, group)
-		if code != 0 {
-			return code, stderr
-		}
-	}
-	return 0, ""
-}
-
-func (p python) coach(t *testing.T, payload []byte, stateDir string, env map[string]string) (int, string) {
-	code, stdout, _ := execHook(t, childEnv(env, "ORCH_TOOL_GUARD_STATE_DIR="+stateDir), payload, "python3", p.script, "coach")
-	return code, stdout
-}
-
 func jsonBytes(t testing.TB, v any) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)

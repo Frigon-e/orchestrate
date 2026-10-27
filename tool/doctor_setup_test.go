@@ -222,3 +222,49 @@ func TestSetupFindingsGuardBinary(t *testing.T) {
 		t.Fatalf("unexpected: %v", fs)
 	}
 }
+
+func fixOf(fs []finding, sub string) string {
+	for _, f := range fs {
+		if strings.Contains(f.msg, sub) {
+			return f.fix
+		}
+	}
+	return ""
+}
+
+func TestSetupFindingsPiExtension(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
+	home := t.TempDir()
+	root := filepath.Join(home, "r")
+	ext := filepath.Join(home, ".pi", "agent", "extensions", "ctx-reminder.ts")
+	mine := filepath.Join(home, ".agents", "skills", "orchestrate", "tool", "pi_ctx_reminder.ts")
+	mustWrite(t, mine, "// ext", 0o644)
+
+	fs := setupFindings(home, home, root, okLook)
+	if !hasMsg(fs, "warn", "pi tool guard extension is missing") || fixOf(fs, "pi tool guard extension") != "scripts/install-guards" {
+		t.Fatalf("missing extension: %v", fs)
+	}
+	mustWrite(t, ext, "old copy", 0o644)
+	if !hasMsg(setupFindings(home, home, root, okLook), "warn", "regular file") {
+		t.Fatal("want regular-file warn")
+	}
+	os.Remove(ext)
+	os.Symlink(filepath.Join(home, "gone.ts"), ext)
+	if !hasMsg(setupFindings(home, home, root, okLook), "error", "dangling link") {
+		t.Fatal("want dangling error")
+	}
+	other := filepath.Join(home, "other", "pi_ctx_reminder.ts")
+	mustWrite(t, other, "// other", 0o644)
+	os.Remove(ext)
+	os.Symlink(other, ext)
+	if !hasMsg(setupFindings(home, home, root, okLook), "warn", "not at this skill's") {
+		t.Fatal("want foreign-link warn")
+	}
+	os.Remove(ext)
+	os.Symlink(mine, ext)
+	for _, f := range setupFindings(home, home, root, okLook) {
+		if strings.Contains(f.msg, "ctx-reminder.ts") || strings.Contains(f.msg, "pi tool guard") {
+			t.Fatalf("a correct link was flagged: %v", f)
+		}
+	}
+}

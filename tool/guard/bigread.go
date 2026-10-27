@@ -16,10 +16,15 @@ const bigReadBytes = 30720
 // Files Claude Code's Read tool opens specially, so a size limit does not apply.
 var readExemptSuffixes = set(".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb")
 
-func bigReadReason(path string, size int64) string {
+func bigReadReason(path string, size int64, h harness) string {
+	// pi rounds halves up (JavaScript), Claude to even (Python).
 	kilobytes := math.Max(1, math.RoundToEven(float64(size)/1024))
+	read := "Read"
+	if h == forPi {
+		kilobytes, read = math.Max(1, math.Floor(float64(size)/1024+0.5)), "read"
+	}
 	return fmt.Sprintf("%s (deny-big-read): %s is %d KB; reading it whole floods the context.\n", Marker, path, int(kilobytes)) +
-		"Use Read with offset and limit and take only the section you need.\n" +
+		"Use " + read + " with offset and limit and take only the section you need.\n" +
 		`Get the line numbers first: rg -n PATTERN file (a doc: rg -n "^#{1,3} " file).`
 }
 
@@ -106,6 +111,6 @@ func bigRead(ev *Event, stderr io.Writer) int {
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= bigReadBytes {
 		return 0
 	}
-	io.WriteString(stderr, bigReadReason(path, info.Size())+"\n")
+	io.WriteString(stderr, bigReadReason(path, info.Size(), forClaude)+"\n")
 	return 2
 }

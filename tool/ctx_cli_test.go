@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,12 @@ func TestCtxCLIShimNoticeAndTools(t *testing.T) {
 		if !reflect.DeepEqual(cfg.Tools, tools) {
 			t.Fatalf("tools=%v", cfg.Tools)
 		}
-		if len(cfg.Env) != 3 || cfg.Env[0] != "ORCH_CTX_ROOT="+evalOr(c.repo) || cfg.Env[1] != "ORCH_CTX_READONLY=1" {
+		// pi also carries ORCH_GUARD_BIN for its guard extension (last entry).
+		wantEnv := 3
+		if h == "pi" {
+			wantEnv = 4
+		}
+		if len(cfg.Env) != wantEnv || cfg.Env[0] != "ORCH_CTX_ROOT="+evalOr(c.repo) || cfg.Env[1] != "ORCH_CTX_READONLY=1" {
 			t.Fatalf("env=%v", cfg.Env)
 		}
 		shimDir, _, _ := strings.Cut(strings.TrimPrefix(cfg.Env[2], "PATH="), string(os.PathListSeparator))
@@ -101,5 +107,26 @@ func TestCtxCLICommandsOnly(t *testing.T) {
 		if err := cmdCtx(c.a, []string{sub}); err == nil {
 			t.Fatalf("read-only command allowed: %s", sub)
 		}
+	}
+}
+
+// Gate panes and leads run pi with only CtxCLI.Env plus the extension, so the
+// guard extension finds the orch-guard binary through ORCH_GUARD_BIN there.
+func TestCtxCLIPiEnvNamesTheGuardBinary(t *testing.T) {
+	c := newCtxHarness(t)
+	t.Setenv("ORCH_GUARD_BIN", "")
+	t.Setenv("ORCH_SKILL_DIR", "/skill")
+	cfg, err := CtxCLIFor("pi", c.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ORCH_GUARD_BIN=/skill/hooks/bin/orch-guard"
+	if !slices.Contains(cfg.Env, want) {
+		t.Fatalf("env %v lacks %s", cfg.Env, want)
+	}
+	t.Setenv("ORCH_GUARD_BIN", "/elsewhere/orch-guard")
+	cfg, _ = CtxCLIFor("pi", c.repo)
+	if !slices.Contains(cfg.Env, "ORCH_GUARD_BIN=/elsewhere/orch-guard") {
+		t.Fatalf("explicit ORCH_GUARD_BIN ignored: %v", cfg.Env)
 	}
 }

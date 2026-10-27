@@ -10,11 +10,12 @@ import (
 	"testing"
 )
 
-// The lookup coach runs in pi through the same extension file. These tests drive
-// the real extension in node with a stand-in for pi's extension API, feeding the
+// The lookup coach runs in pi through the same extension file, which calls
+// orch-guard. These tests drive the real extension in node (against the real
+// binary) with a stand-in for pi's extension API, feeding the
 // events pi sends (turn_start, tool_result, tool_execution_end) and reading the
 // lookup log it writes. The classification and reminder tables are shared with
-// the Claude hook (hooks/claude/coach_cases.json, run by coach_test.py).
+// the Claude hook (hooks/claude/coach_cases.json, run by tool/guard/coach_test.go).
 
 const coachPrefix = "orch lookup coach: "
 
@@ -170,7 +171,7 @@ const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(B
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), lines, added, logged, logFile: existsSync(file) }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, turns)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD="}, env...))
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_GUARD_BIN=" + guardBin(t), "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD="}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)
