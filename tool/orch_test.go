@@ -771,6 +771,8 @@ func (h *harness) fakePi(passes map[string]string) string {
 	script := `#!/bin/sh
 echo "$*" >> "` + dir + `/calls.log"
 echo "$PI_CACHE_RETENTION" >> "` + dir + `/cache.log"
+# Stand in for the loaded extension's session_start acknowledgement.
+[ -n "$ORCH_LOOKUP_READY" ] && printf 'lookup-only\n' > "$ORCH_LOOKUP_READY"
 case "$*" in *GATE-PLAN*) case "$*" in *--no-tools*) echo no-tools >> "` + dir + `/plan.log";; *) echo tools >> "` + dir + `/plan.log";; esac;; esac
 case "$*" in
 *GATE-GROUP*) f=group; ids=$(echo "$*" | sed -n 's/.*Packages in this pass: \([a-z0-9 ,_-]*\)\..*/\1/p' | head -1 | tr -d ,)

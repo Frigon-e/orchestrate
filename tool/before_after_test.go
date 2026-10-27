@@ -85,7 +85,7 @@ func beforeAfterEmit(t *testing.T, name, side, result string) {
 
 func beforeAfterGate(t *testing.T, h *harness, bin string, before bool, extra ...string) (int, map[string]any) {
 	t.Helper()
-	args := append([]string{"gate", "spec.md"}, extra...)
+	args := append([]string{"gate", "spec.md", "--lookup-tool", "off"}, extra...)
 	var code int
 	var out string
 	if before {

@@ -116,8 +116,9 @@ the reuse checklist: `references/gate.md`. Model roles and connector health:
 Send independent lookups as parallel calls in one message. `grep` (also
 `egrep`, `fgrep`, `ag`, `git grep`), a bare `cat FILE` and `sed -n` over one
 file stay blocked; plain `rg` is allowed, and plain `find` only when `fd` is
-not installed. A missing language server is not zero callers (`orch lsp` exits
-2). Repo-local servers need `ctx_trust = ["/absolute/repo"]` in user config;
+not installed. Gate agent passes get a read-only lookup shell (`--lookup-tool
+on|off`, `--lookup-shell restricted|open`; see `references/gate.md`). A missing
+language server is not zero callers (`orch lsp` exits 2). Repo-local servers need `ctx_trust = ["/absolute/repo"]` in user config;
 `ctx_deny` wins. `orch doctor` reports retrieval readiness (index, watch,
 tools).
 

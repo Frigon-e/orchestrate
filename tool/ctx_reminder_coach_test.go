@@ -412,6 +412,12 @@ func TestCtxReminderCoachSwitches(t *testing.T) {
 			t.Errorf("%+v", got)
 		}
 	})
+	t.Run("silent in the restricted gate shell", func(t *testing.T) {
+		got := runCoach(t, turns, "ORCH_LOOKUP_READY=1")
+		if len(got.Handlers) != 0 || got.LogFile {
+			t.Errorf("%+v", got)
+		}
+	})
 	t.Run("both off registers only the guard hooks", func(t *testing.T) {
 		got := runCoach(t, turns, "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off")
 		if strings.Join(got.Handlers, ",") != "tool_call,tool_result" {

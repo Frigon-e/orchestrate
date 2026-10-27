@@ -88,9 +88,9 @@ disabled; an existing stale index can still answer, with a staleness note.
 Traversal and symlinks outside the root cannot be read. `orch lsp` honors both
 variables.
 
-Gate passes get no lookup CLI: a pi pass runs with `read,grep,find,ls`, a Claude
-pass with its native `Read,Grep,Glob`. The gate gathers its facts itself (see
-`references/gate.md`).
+Gate agent passes get a read-only lookup shell (`jbcontext search`, `orch lsp`,
+`rg`, `fd`) through a PATH shim that resolves `orch` to this binary, with both
+variables set; see `references/gate.md` (`--lookup-tool`, `--lookup-shell`).
 
 ## Tool guard and lookup coach
 

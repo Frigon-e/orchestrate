@@ -444,7 +444,7 @@ func benchRecordWith(a *app, source, suite, label, arm string, opts benchRecordO
 		}
 		r.Config.Runners = rec.PassRunners
 		r.Config.Cache = rec.Cache
-		r.Config.CtxTool = rec.CtxTool
+		r.Config.CtxTool = orDefault(rec.LookupTool, rec.CtxTool)
 		r.Config.ContextFiles = rec.ContextFiles
 		names := map[string]bool{}
 		for k := range rec.PassSeconds {

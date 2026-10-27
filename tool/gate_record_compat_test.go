@@ -16,18 +16,22 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// A record written while the ctx switches existed keeps its ctx settings in the
-// compare view; a record without them shows none.
+// A record written while the ctx switches existed shows them under the lookup
+// names in the compare view (ctx-only is restricted).
 func TestGateCompareShowsLegacyCtxSettingsOnly(t *testing.T) {
 	for _, mode := range []string{"", "open", "ctx-only"} {
 		t.Run(orDefault(mode, "legacy"), func(t *testing.T) {
 			var out strings.Builder
 			describeExperiment(&out, "A", "shell", &gateRecord{CtxTool: "on", CtxShell: mode}, t.TempDir())
-			wantContains(t, out.String(), "ctx_tool: on; ctx_shell: "+orDefault(mode, "open"))
+			want := orDefault(mode, "open")
+			if mode == "ctx-only" {
+				want = "restricted"
+			}
+			wantContains(t, out.String(), "lookup_tool: on; lookup_shell: "+want)
 		})
 	}
 	var out strings.Builder
-	describeExperiment(&out, "B", "new", &gateRecord{}, t.TempDir())
+	describeExperiment(&out, "B", "new", &gateRecord{LookupTool: "on", LookupShell: "restricted"}, t.TempDir())
 	if strings.Contains(out.String(), "ctx_") {
 		t.Errorf("a new record shows ctx settings: %s", out.String())
 	}
@@ -45,9 +49,9 @@ func TestGateRecordWithRemovedCtxProfileStillLoads(t *testing.T) {
 	}
 	var out strings.Builder
 	describeExperiment(&out, "A", "lean-vs-default", &old, t.TempDir())
-	wantContains(t, out.String(), "(cache short, groups group)", "ctx_shell: ctx-only; context_files: off; ctx_profile: lean")
+	wantContains(t, out.String(), "(cache short, groups group)", "lookup_shell: restricted; context_files: off; ctx_profile: lean")
 	out.Reset()
-	describeExperiment(&out, "B", "new", &gateRecord{}, t.TempDir())
+	describeExperiment(&out, "B", "new", &gateRecord{LookupTool: "on", LookupShell: "restricted"}, t.TempDir())
 	for _, gone := range []string{"ctx_profile", "context_files", "cache short"} {
 		if strings.Contains(out.String(), gone) {
 			t.Errorf("a new record shows %s: %s", gone, out.String())
@@ -69,7 +73,7 @@ func TestGateRecordWithRemovedSwitchesPrintsInReport(t *testing.T) {
 	if err := writeGate(dir, &old); err != nil {
 		t.Fatal(err)
 	}
-	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "ctx_tool: on; ctx_shell: ctx-only; context_files: off; ctx_profile: lean")
+	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "lookup_tool: on; lookup_shell: restricted; context_files: off; ctx_profile: lean")
 }
 
 func TestGateCtxFlagsWereRemoved(t *testing.T) {

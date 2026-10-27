@@ -137,7 +137,7 @@ func TestGatePaneLauncherLeavesTheCacheSettingAlone(t *testing.T) {
 	h := setup(t)
 	h.gateRepo(1)
 	h.sessionPi(gatePasses(nil))
-	h.must("gate", "spec.md")
+	h.must("gate", "spec.md", "--lookup-tool", "off")
 	runs := h.gateCalls("pane", "run")
 	if len(runs) != 3 {
 		t.Fatalf("pane run calls = %d, want one per pass", len(runs))

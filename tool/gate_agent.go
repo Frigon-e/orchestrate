@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 )
+
+const lookupBudgetHint = "Look up in this order: `jbcontext search` for an unknown location, `orch lsp def|refs|callers|impls` for a named symbol, `rg` for exact text, `fd` for file names, then read with offset and limit. Send independent lookups in one message."
 
 const gatePacketContract = ` For every unresolved decisive question, include packet from your own review: goal, known_facts (checked state and constraints), evidence_ids, unknown (the exact missing fact or decision), options [{id,text,gain,cost}], recommendation (an option id), rationale, authority (the spec's actual authority basis), and next_action. Do not invent project vocabulary, trade-offs, facts or delegated authority. Leave unavailable fields empty; incomplete packets are research work, not ready owner questions. No formatting pass will fill them.`
 const adversaryEvidenceScope = " Follow bounded relevant incoming AND outgoing references (at most two hops and eight additional files), registrations/configuration, and tests. Stop at the existing turn budget, not at forward imports. Include coverage_gaps (an array of strings) alongside findings in your JSON. Name failed/unrun checks explicitly; an empty findings list does not establish complete exploration."
@@ -61,7 +64,51 @@ func gateEvidenceContract(p gatePass) gatePass {
 }
 
 func gateAgentPass(repo, harness string, p gatePass) (gatePass, error) {
-	return gateEvidenceContract(p), nil
+	p = gateEvidenceContract(p)
+	if !p.lookupTool {
+		return p, nil
+	}
+	cli, err := LookupCLIFor(harness, repo)
+	if err != nil {
+		if p.restrictedShell && harness == "pi" {
+			return p, fmt.Errorf("restricted-shell extension setup failed; refusing an open shell: %w", err)
+		}
+		return p, err
+	}
+	if p.restrictedShell && harness == "pi" && !p.noTools {
+		if cli.Extension == "" {
+			return p, fmt.Errorf("restricted-shell extension unavailable; refusing an open shell")
+		}
+		ready, err := os.CreateTemp(filepath.Dir(cli.Extension), "ready-*")
+		if err != nil {
+			return p, fmt.Errorf("restricted-shell readiness: %w", err)
+		}
+		cli.Ready = ready.Name()
+		_ = ready.Close()
+		_ = os.Remove(cli.Ready)
+		cli.Env = append(cli.Env, "ORCH_LOOKUP_READY="+cli.Ready)
+		cli.Notice += "\n" + restrictedShellNotice
+	}
+	if v, ok := os.LookupEnv("ORCH_TSLS"); ok {
+		// The pane shell does not inherit orch's environment, so name the user's
+		// TypeScript server override for paneAgentEnv. The value is never logged.
+		cli.Env = append(cli.Env, "ORCH_TSLS="+v)
+	}
+	if piGuardLoaded(harness, p) {
+		// A pane's shell, not orch, hands the environment to pi: name the guard
+		// knobs so paneAgentEnv exports them there too.
+		cli.Env = append(cli.Env, guardEnv(os.Environ())...)
+	}
+	p.cli = cli
+	if !strings.HasPrefix(p.shared, cli.Notice+"\n\n") {
+		p.shared = cli.Notice + "\n\n" + p.shared
+		p.prompt = cli.Notice + "\n\n" + p.prompt
+	}
+	if !p.noTools && !strings.Contains(p.task, lookupBudgetHint) {
+		p.task += "\n" + lookupBudgetHint
+		p.prompt += "\n" + lookupBudgetHint
+	}
+	return p, nil
 }
 
 func passContext(p gatePass) context.Context {
@@ -92,18 +139,86 @@ func agentEnv(base, extra []string) []string {
 	return env
 }
 
+// piGuardLoaded reports whether a pass starts pi with the tool guard: pi with the
+// ctx tool in open shell mode and a shell. Ctx-only mode restricts the shell
+// itself and the guard is silent there; lookup off has no orch lsp to point to.
+func piGuardLoaded(harness string, p gatePass) bool {
+	return harness == "pi" && p.lookupTool && !p.restrictedShell && !p.noTools
+}
+
+// piGuardArgs is the guard's -e argument for a pi pass, or nil.
+func piGuardArgs(p gatePass) []string {
+	if piGuardLoaded("pi", p) && p.cli.Guard != "" {
+		return []string{"-e", p.cli.Guard}
+	}
+	return nil
+}
+
+// guardEnv picks the guard's settings out of env: the switch, the skip list and
+// the state directory.
+func guardEnv(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "ORCH_TOOL_GUARD", "ORCH_TOOL_GUARD_SKIP", "ORCH_TOOL_GUARD_STATE_DIR":
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 func piPassTools(p gatePass) []string {
 	if p.noTools {
 		return []string{"--no-tools"}
 	}
-	tools := []string{"read", "grep", "find", "ls"}
+	if p.restrictedShell && p.lookupTool {
+		// No shell until the loaded extension installs its guard and enables bash.
+		// If loading fails, pi can continue, but never with an open shell.
+		// A modifier selects the initial loadout without excluding bash from
+		// pi's registry. A hard --tools read allowlist cannot later enable it.
+		args := []string{"--no-builtin-tools", "--tools", "+read"}
+		if p.cli.Extension != "" {
+			args = append(args, "-e", p.cli.Extension)
+		}
+		return args
+	}
+	tools := append([]string{"read", "grep", "find", "ls"}, p.cli.Tools...)
 	return []string{"--tools", strings.Join(tools, ",")}
+}
+
+func restrictedShellReady(p gatePass) error {
+	if !p.restrictedShell || !p.lookupTool || p.noTools {
+		return nil
+	}
+	if b, err := os.ReadFile(p.cli.Ready); err != nil || string(b) != "lookup-only\n" {
+		return fmt.Errorf("restricted-shell extension did not load or activate; refusing pass results (shell was disabled at startup)")
+	}
+	return nil
 }
 
 func claudePassArgs(choice profile, p gatePass) []string {
 	args := claudeArgs(choice, p.noTools)
+	if !p.noTools && len(p.cli.Tools) > 0 {
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--tools" {
+				args[i+1] += ",Bash"
+			}
+			if args[i] == "--allowedTools" {
+				args[i+1] += "," + strings.Join(p.cli.Tools, ",")
+			}
+		}
+	}
 	// Exclude repository memories without --bare, which disables subscription auth.
 	settings := map[string]any{"claudeMdExcludes": []string{"**"}}
+	if !p.noTools && p.cli.Hook != "" {
+		// Prefix allow rules cannot refuse rg --pre or fd -x, so every Bash call goes
+		// through the same check pi's shell uses. It adds to the user's own hooks.
+		settings["hooks"] = map[string]any{"PreToolUse": []any{map[string]any{
+			"matcher": "Bash",
+			"hooks":   []any{map[string]any{"type": "command", "command": p.cli.Hook}},
+		}}}
+	}
 	b, _ := json.Marshal(settings)
 	return append(args, "--settings", string(b))
 }
@@ -125,7 +240,7 @@ func paneLaunchScript(header string, env []string, argv []string) string {
 		if key == "PATH" || key == "" {
 			continue
 		}
-		// Values remain literal shell strings.
+		// Env names come from LookupCLIFor; values remain literal shell strings.
 		b.WriteString("export ")
 		b.WriteString(key)
 		b.WriteString("=")

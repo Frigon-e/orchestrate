@@ -302,9 +302,11 @@ type gateSubject struct {
 
 type gateReviewPolicy struct {
 	Version      string `json:"version"`
-	CtxTool      string `json:"ctx_tool"`
+	LookupTool   string `json:"lookup_tool,omitempty"`
+	LookupShell  string `json:"lookup_shell,omitempty"`
+	CtxTool      string `json:"ctx_tool,omitempty"` // read from old records only
 	ContextFiles string `json:"context_files"`
-	CtxShell     string `json:"ctx_shell"`
+	CtxShell     string `json:"ctx_shell,omitempty"` // read from old records only
 	CtxProfile   string `json:"ctx_profile"`
 }
 

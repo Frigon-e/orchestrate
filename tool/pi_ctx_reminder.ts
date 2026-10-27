@@ -54,6 +54,9 @@ function guardBinary(): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	// The restricted-shell gate shell already refuses everything but one lookup call,
+	// and has its own guard, so this one has to stay silent there.
+	if (process.env.ORCH_LOOKUP_READY) return;
 	const guardOn = process.env.ORCH_TOOL_GUARD !== "off";
 	const coachOn = guardOn && process.env.ORCH_LOOKUP_COACH !== "off";
 	const logOn = guardOn && process.env.ORCH_LOOKUP_LOG !== "off";

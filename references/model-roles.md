@@ -9,7 +9,7 @@ no inherited model choices, even when a command supplies a runner override.
 
 ```toml
 [roles.gate]
-# Gate passes get no lookup CLI or shell; the gate gathers its own facts.
+# Pi gate passes default to a restricted lookup shell; CLI --lookup-shell open opts out.
 use = [
   { harness = "pi", model = "openrouter/~deepseek/deepseek-flash-latest" },
   { harness = "claude", model = "haiku", effort = "low" },
@@ -357,9 +357,12 @@ Claude passes run `claude -p` with Read/Grep/Glob and Bash limited to
 `jbcontext search`, `orch lsp`, `rg` and `fd`, non-interactive `dontAsk`
 permissions and disabled slash commands. The strict empty server configuration
 excludes ambient servers, and the gate runs no ctx server. Tool-less tasks stay
-tool-less even with ctx enabled. The ctx tool, shell modes, repository-context
-exclusion and the unchanged-checkout check are in `gate.md` (Context tools for
-passes); the guard rules are in `context.md`.
+tool-less even with the lookup tool enabled. The lookup tool, shell modes,
+repository-context exclusion and the unchanged-checkout check are in `gate.md`
+(Context tools for passes); the shim, environment and guard rules are in
+`context.md`.
 
+`--lookup-tool on --lookup-shell restricted` is the default and no config key
+changes it.
 Keep gate state artifacts outside the code checkout or ignored: the
 unchanged-checkout scan does not exempt non-ignored orch artifacts.

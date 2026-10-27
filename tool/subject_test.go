@@ -44,7 +44,7 @@ func TestPlanSubjectApprovalLegacyRefused(t *testing.T) {
 	if err := writeGate(dir, &legacy); err != nil {
 		t.Fatal(err)
 	}
-	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "Historical result: **pass** (legacy record, not a v2 state)")
+	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "Historical result: **pass** (legacy record, not a v2 state)", "off (legacy)")
 	code, out := h.run("plan", "spec.md", "--dry-run")
 	if code != 1 {
 		t.Fatalf("legacy approval authorized planning: exit %d\n%s", code, out)
@@ -253,9 +253,9 @@ func TestGateSubjectRecordsReviewAndReusesApproval(t *testing.T) {
 	h := setup(t)
 	dir := h.gateRepo(1)
 	h.fakePi(gatePasses(nil))
-	h.must("gate", "spec.md")
+	h.must("gate", "spec.md", "--lookup-shell", "open")
 	rec := readRecord(t, dir)
-	if !rec.Subject.valid() || rec.ReviewPolicy == nil || rec.ReviewPolicy.CtxShell != "" || rec.CtxShell != "" {
+	if !rec.Subject.valid() || rec.ReviewPolicy == nil || rec.ReviewPolicy.LookupShell != "open" || rec.LookupShell != "open" {
 		t.Fatalf("unbound review: %+v", rec)
 	}
 	src := mustRead(t, filepath.Join(h.repo, "spec.md"))
@@ -329,10 +329,11 @@ func TestGateSubjectRuntimeReview(t *testing.T) {
 	h.gateRepo(1)
 	dir := gateDir(h.a.siteRoot(t), specHash(mustRead(t, filepath.Join(h.repo, "spec.md"))))
 	h.fakePi(gatePasses(nil))
-	h.must("gate", "spec.md")
+	h.must("gate", "spec.md", "--lookup-tool", "off", "--lookup-shell", "restricted")
 	rec := readRecord(t, dir)
-	// The review policy no longer records any ctx setting.
-	if rec.ReviewPolicy == nil || rec.CtxShell != "" || rec.ReviewPolicy.CtxShell != "" || rec.ReviewPolicy.CtxTool != "" {
+	// restricted has no effect when the lookup tool is off. Record the effective
+	// policy rather than falsely claiming that the shell was restricted.
+	if rec.ReviewPolicy == nil || rec.LookupShell != "open" || rec.ReviewPolicy.LookupShell != "open" || rec.ReviewPolicy.LookupTool != "off" {
 		t.Fatalf("effective review policy: %+v", rec.ReviewPolicy)
 	}
 	if !rec.Subject.valid() || rec.Subject.RuntimePath != ".gate-runtime" {

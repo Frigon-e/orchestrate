@@ -623,6 +623,25 @@ func TestCtxReminderGuardBuiltinSearch(t *testing.T) {
 		checkReminder(t, got, off)
 	})
 
+	t.Run("silent in the restricted gate shell", func(t *testing.T) {
+		cases := []reminderCase{
+			{Name: "grep", Tool: "grep", Input: map[string]any{"pattern": "Gateway"}},
+			{Name: "find", Tool: "find", Input: map[string]any{"pattern": "*.go"}},
+		}
+		got := runCtxReminder(t, []string{"ORCH_LOOKUP_READY=/tmp/ready"}, cases)
+		if len(got.Handlers) != 0 {
+			t.Fatalf("the extension acted inside the restricted shell: %v", got.Handlers)
+		}
+		for _, c := range cases {
+			if reason := got.Out[c.Name].Block; reason != "" {
+				t.Errorf("%q was blocked inside the restricted shell: %s", c.Name, reason)
+			}
+			if added := got.Out[c.Name].Added; added != "" {
+				t.Errorf("%q got a reminder inside the restricted shell: %q", c.Name, added)
+			}
+		}
+	})
+
 }
 
 func TestCtxReminderBuiltinRepositoryBoundary(t *testing.T) {
@@ -660,7 +679,7 @@ func TestCtxReminderBuiltinRepositoryBoundary(t *testing.T) {
 // Without orch on PATH every rule still blocks, pointing at the built-ins, and
 // no note is appended because there is nothing to name. rg is the exception:
 // with no orch it is the preferred grep, so it is never blocked.
-func TestCtxReminderGuardsWithoutOrch(t *testing.T) {
+func TestCtxReminderSilentInRestrictedShellAndGuardsWithoutOrch(t *testing.T) {
 	t.Run("no orch on PATH", func(t *testing.T) {
 		cases := []reminderCase{
 			{Name: "find | grep", Tool: "bash", Input: bash(`find . -name "*.go" | grep Gateway`), Blocks: "find-chains", Needs: []string{"grep", "find"}},
@@ -678,6 +697,13 @@ func TestCtxReminderGuardsWithoutOrch(t *testing.T) {
 		checkReminder(t, got, cases)
 		if strings.Contains(got.Out["find | grep"].Block, "orch ctx batch") {
 			t.Errorf("a block reason named orch ctx although orch is not on PATH: %q", got.Out["find | grep"].Block)
+		}
+	})
+	t.Run("restricted gate shell", func(t *testing.T) {
+		cases := []reminderCase{{Name: "rg", Tool: "bash", Input: bash(`rg -n Gateway .`)}}
+		got := runCtxReminder(t, []string{"ORCH_LOOKUP_READY=/tmp/ready"}, cases)
+		if len(got.Handlers) != 0 || got.Out["rg"].Added != "" || got.Out["rg"].Block != "" {
+			t.Fatalf("extension acted inside the restricted shell: %v %+v", got.Handlers, got.Out["rg"])
 		}
 	})
 }

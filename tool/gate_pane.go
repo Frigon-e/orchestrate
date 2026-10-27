@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -21,6 +22,19 @@ import (
 // gatePaneMode reports whether passes should run in Herdr panes.
 func gatePaneMode() bool {
 	return os.Getenv("HERDR_ENV") == "1" && os.Getenv("HERDR_WORKSPACE_ID") != ""
+}
+
+// paneOrchOnPath fails a pane run with the ctx tool when orch is not on PATH:
+// pane passes call orch lsp through the pane shell's own PATH, which orch never
+// edits. A dry run starts no pane.
+func paneOrchOnPath(opts gateOpts, dry bool) error {
+	if !opts.lookupTool || opts.headless || dry || !gatePaneMode() {
+		return nil
+	}
+	if _, err := exec.LookPath("orch"); err != nil {
+		return fmt.Errorf("orch is not on PATH, so gate panes cannot run orch lsp: link it, for example ln -s %s ~/.local/bin/orch", selfPath())
+	}
+	return nil
 }
 
 // gateOutsideHerdr lets a gate run outside herdr, with its passes headless.
@@ -251,6 +265,7 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 	if err != nil {
 		return "", "", err
 	}
+	defer os.Remove(p.cli.Ready)
 	if err = writeSharedFile(gdir, p); err != nil {
 		return "", "", err
 	}
@@ -283,6 +298,7 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 	if f := expandHome(gatePiExtension); fileExists(f) {
 		argv = append(argv, "-e", f)
 	}
+	argv = append(argv, piGuardArgs(p)...)
 	argv = append(argv, "--no-skills", "--no-context-files")
 	argv = append(argv, piPassTools(p)...)
 	if choice.Effort != "" {
@@ -298,7 +314,7 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 		argv = append(argv, "--session-id", id, p.shared+"\n\n"+p.task)
 	}
 	agent := agentName(gdir, *pane, p.name)
-	if err = os.WriteFile(launcher, []byte(paneLaunchScript(p.name+": herdr agent "+agent, nil, argv)), 0o600); err != nil {
+	if err = os.WriteFile(launcher, []byte(paneLaunchScript(p.name+": herdr agent "+agent, p.cli.Env, argv)), 0o600); err != nil {
 		return "", "", err
 	}
 	start := time.Now()
@@ -397,6 +413,12 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 		screen, _ := herdrCmd(herdrTimeout, "agent", "read", *pane, "--source", "recent-unwrapped", "--lines", "30")
 		leavePane(pane, repo, true)
 		return "", hit, fmt.Errorf("%s is blocked waiting for input: %s", choice.Harness, short(strings.Join(strings.Fields(string(screen)), " "), 300))
+	}
+	if choice.Harness == "pi" {
+		if failure := restrictedShellReady(p); failure != nil {
+			leavePane(pane, repo, true)
+			return "", hit, failure
+		}
 	}
 	if transcript != "" {
 		copyClaudeTranscript(transcript, session)

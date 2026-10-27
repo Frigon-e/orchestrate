@@ -83,18 +83,19 @@ func TestCheckoutUntrackedContentAndIgnoredLimit(t *testing.T) {
 
 func TestGateCheckoutMutationDiscardsAndStops(t *testing.T) {
 	// Representative cases only. Between them every harness, every change kind
-	// still appears at least once.
+	// and both ctx settings still appear at least once.
 	for _, c := range []struct {
 		harness string
 		kind    string
+		ctxOn   bool
 	}{
-		{"pi", "tracked"},
-		{"pi", "deleted"},
-		{"claude", "untracked"},
-		{"claude", "none"},
+		{"pi", "tracked", false},
+		{"pi", "deleted", true},
+		{"claude", "untracked", false},
+		{"claude", "none", true},
 	} {
-		harness, kind := c.harness, c.kind
-		t.Run(fmt.Sprintf("%s/%s", harness, kind), func(t *testing.T) {
+		harness, kind, ctxOn := c.harness, c.kind, c.ctxOn
+		t.Run(fmt.Sprintf("%s/%s/ctx-%v", harness, kind, ctxOn), func(t *testing.T) {
 			h := setup(t)
 			tracked := filepath.Join(h.repo, "tracked.txt")
 			os.WriteFile(tracked, []byte("before"), 0o644)
@@ -125,7 +126,7 @@ func TestGateCheckoutMutationDiscardsAndStops(t *testing.T) {
 				}})
 			}
 			runner, _ := roleSite(profile{Harness: harness, Model: "test"}).newRoleRun("gate", modelOptions{})
-			runGatePasses(filepath.Join(h.tmp, "gate"), h.repo, "test", passes, rec, nil, gateOpts{runner: runner, headless: true})
+			runGatePasses(filepath.Join(h.tmp, "gate"), h.repo, "test", passes, rec, nil, gateOpts{runner: runner, headless: true, lookupTool: ctxOn})
 			if kind == "none" {
 				if len(rec.TreeChanged) > 0 || applied.Load() != 12 || len(rec.PassErrors) > 0 {
 					t.Fatalf("unchanged: %+v, applied %d", rec, applied.Load())
@@ -160,12 +161,13 @@ func TestGatePaneCheckoutMutation(t *testing.T) {
 	for _, c := range []struct {
 		harness string
 		kind    string
+		ctxOn   bool
 	}{
-		{"pi", "deleted"},
-		{"claude", "tracked"},
+		{"pi", "deleted", false},
+		{"claude", "tracked", true},
 	} {
-		harness, kind := c.harness, c.kind
-		t.Run(fmt.Sprintf("%s/%s", harness, kind), func(t *testing.T) {
+		harness, kind, ctxOn := c.harness, c.kind, c.ctxOn
+		t.Run(fmt.Sprintf("%s/%s/ctx-%v", harness, kind, ctxOn), func(t *testing.T) {
 			h := setup(t)
 			gateWarmDelay = time.Minute // leave a third pass queued until the check cancels it
 			gdir := h.gateRepo(1)
@@ -184,7 +186,7 @@ func TestGatePaneCheckoutMutation(t *testing.T) {
 			if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+mutation+string(original)), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			code, out := h.run("gate", "spec.md", "--runner", harness+":test")
+			code, out := h.run("gate", "spec.md", "--runner", harness+":test", "--lookup-tool", onOff(ctxOn))
 			if code != 1 {
 				t.Fatalf("%d %s", code, out)
 			}
@@ -278,7 +280,7 @@ func TestGateCheckoutWarningInV2AndFirstInReport(t *testing.T) {
 	t.Setenv("HERDR_ENV", "")
 	t.Setenv("ORCH_PI", fakeRunner(t, "pi", `printf changed > agent.txt
 printf '{}'`))
-	code, out := h.run("gate", "spec.md", "--runner", "pi:test")
+	code, out := h.run("gate", "spec.md", "--runner", "pi:test", "--lookup-tool", "off")
 	if code != 1 {
 		t.Fatalf("%d %s", code, out)
 	}
@@ -287,7 +289,7 @@ printf '{}'`))
 	if view.Warning != treeWarning(&rec) || !strings.HasPrefix(view.Warning, "UNVERIFIED: checkout changed:") {
 		t.Fatalf("checkout warning missing or differs from recorded facts: %+v", view)
 	}
-	if rec.State != "stale" || len(rec.Findings) != 0 {
+	if rec.State != "stale" || rec.LookupTool != "off" || len(rec.Findings) != 0 {
 		t.Fatalf("%+v", rec)
 	}
 	report := string(mustRead(t, filepath.Join(gdir, "report.md")))

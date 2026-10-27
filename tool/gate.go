@@ -110,11 +110,13 @@ type gateRecord struct {
 	Spec              string                       `json:"spec"`
 	Hash              string                       `json:"hash"`
 	At                int64                        `json:"at"`
-	Reasons           []string                     `json:"reasons,omitempty"`  // incomplete review or execution failures
+	Reasons           []string                     `json:"reasons,omitempty"` // incomplete review or execution failures
+	LookupTool        string                       `json:"lookup_tool,omitempty"`
 	CtxTool           string                       `json:"ctx_tool,omitempty"` // read from old records only
 	ContextFiles      string                       `json:"context_files"`
-	CtxProfile        string                       `json:"ctx_profile,omitempty"` // read from old records only
-	CtxShell          string                       `json:"ctx_shell,omitempty"`   // read from old records only
+	CtxProfile        string                       `json:"ctx_profile,omitempty"`  // read from old records only
+	LookupShell       string                       `json:"lookup_shell,omitempty"` // effective shell policy: open or restricted
+	CtxShell          string                       `json:"ctx_shell,omitempty"`    // read from old records only (ctx-only is restricted)
 	TreeChanged       []string                     `json:"tree_changed,omitempty"`
 	TreeChangedPasses []string                     `json:"tree_changed_passes,omitempty"`
 	TreeCheckError    string                       `json:"tree_check_error,omitempty"`
@@ -736,6 +738,7 @@ func runPi(repo, model string, p gatePass, sessionDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(p.cli.Ready)
 	_ = os.MkdirAll(sessionDir, 0o755)
 	ctx, cancel := context.WithTimeout(passContext(p), gateTimeout)
 	defer cancel()
@@ -759,6 +762,7 @@ func runPi(repo, model string, p gatePass, sessionDir string) (string, error) {
 		}
 	}()
 	args := []string{"-p", "--session-dir", sessionDir, "--no-extensions"}
+	args = append(args, piGuardArgs(p)...)
 	args = append(args, "--no-skills", "--no-context-files")
 	args = append(args, piPassTools(p)...)
 	if p.effort != "" {
@@ -767,6 +771,7 @@ func runPi(repo, model string, p gatePass, sessionDir string) (string, error) {
 	cmd := processCommandContext(ctx, envOr("ORCH_PI", "pi"), append(args, "--model", model, p.prompt)...)
 	defer cmd.Cancel()
 	cmd.Dir = repo
+	cmd.Env = agentEnv(nil, p.cli.Env)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -783,6 +788,9 @@ func runPi(repo, model string, p gatePass, sessionDir string) (string, error) {
 	}
 	if err != nil {
 		return "", fmt.Errorf("pi failed: %w: %s", err, short(strings.TrimSpace(stderr.String()), 200))
+	}
+	if err := restrictedShellReady(p); err != nil {
+		return "", err
 	}
 	if err := sessionFailure(sessionDir); err != nil {
 		return "", err
@@ -821,17 +829,20 @@ func extractJSON(text string, v any) error {
 
 // gatePass is one model pass. Passes of one class share the text in shared.
 type gatePass struct {
-	name, class  string
-	shared, task string // the prompt in two parts; a pane pass sends them as two files
-	prompt       string // shared + task, for a headless pass
-	brief        string // the start of the task instruction, for --dry-run
-	apply        func(raw string, rec *gateRecord, repo string, sp *spec) error
-	effort       string // runner-specific thinking effort
-	noTools      bool   // the pass gets no tools at all
-	ctx          context.Context
-	sessionDir   string           // invocation-local session; retries retain earlier usage
-	admission    *budgetAdmission // shared run ticket for pane continuation requests
-	budget       int              // soft tool-call budget; 0 means none
+	name, class     string
+	shared, task    string // the prompt in two parts; a pane pass sends them as two files
+	prompt          string // shared + task, for a headless pass
+	brief           string // the start of the task instruction, for --dry-run
+	apply           func(raw string, rec *gateRecord, repo string, sp *spec) error
+	effort          string // runner-specific thinking effort
+	noTools         bool   // the pass gets no tools at all
+	lookupTool      bool
+	restrictedShell bool // pi: read tool plus a shell limited to the lookup commands
+	cli             LookupCLI
+	ctx             context.Context
+	sessionDir      string           // invocation-local session; retries retain earlier usage
+	admission       *budgetAdmission // shared run ticket for pane continuation requests
+	budget          int              // soft tool-call budget; 0 means none
 }
 
 // Turn budget of a pass: gateTurnsBase plus gateTurnsPerPackage for each
@@ -850,11 +861,17 @@ var (
 // budgetSentenceItems is the budget of a group pass that must decide every
 // item of a checklist: it ends in "answer every item" instead of leaving the
 // stop to the model.
-func budgetSentenceItems(n int) string {
+func budgetSentenceItems(n int, ctxOn ...bool) string {
+	if len(ctxOn) > 0 && ctxOn[0] {
+		return budgetSentenceItems(n) + " " + lookupBudgetHint
+	}
 	return fmt.Sprintf(" Budget: about %d turns. A turn is one reply from you; put every independent lookup in the same reply (several tool calls at once are one turn). Never re-read the spec or a file you already read; answer every item.", n)
 }
 
-func budgetSentence(n int) string {
+func budgetSentence(n int, ctxOn ...bool) string {
+	if len(ctxOn) > 0 && ctxOn[0] {
+		return budgetSentence(n) + " " + lookupBudgetHint
+	}
 	return fmt.Sprintf(" Budget: about %d turns. A turn is one reply from you; put every independent lookup in the same reply (several tool calls at once are one turn). Never re-read the spec or a file you already read; answer as soon as you have enough.", n)
 }
 
@@ -989,10 +1006,12 @@ func cmdGateEnrich(a *app, args []string) error {
 
 // gateOpts are the options of one gate run.
 type gateOpts struct {
-	keep     bool // keep the sessions of passes that succeeded (experiments)
-	headless bool // tests only: run passes without panes even inside herdr
-	runner   *roleRun
-	guard    *checkoutGuard
+	keep            bool // keep the sessions of passes that succeeded (experiments)
+	headless        bool // tests only: run passes without panes even inside herdr
+	runner          *roleRun
+	lookupTool      bool
+	restrictedShell bool
+	guard           *checkoutGuard
 }
 
 var experimentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,40}$`)
@@ -1049,6 +1068,8 @@ func cmdGate(a *app, args []string) (retErr error) {
 	onlyF := fs.String("only", "", "experiment: run only these group passes (comma-separated keys); needs --experiment")
 	expF := fs.String("experiment", "", "experiment: write everything under the gate dir's experiments/<name>/ and leave the real gate record alone")
 	benchSuiteF := fs.String("bench-suite", "", "durable benchmark suite for experiment runs (default: user bench_suite, or none)")
+	lookupTool := fs.String("lookup-tool", "on", "on or off: read-only lookup CLI (jbcontext search, orch lsp, rg, fd) in gate agents (default on)")
+	lookupShell := fs.String("lookup-shell", "restricted", "open or restricted: pi with lookup-tool on defaults to read plus a shell limited to the lookup commands; open opts out; ignored by Claude and with lookup-tool off")
 	runnerF := fs.String("runner", "", "ordered harness:model[:effort],... choices for this run")
 	degraded := fs.Bool("degraded", false, "allow degraded role choices approved by the user")
 	for _, arg := range args {
@@ -1084,6 +1105,12 @@ func cmdGate(a *app, args []string) (retErr error) {
 	if err := exactArgs(pos, 1, "gate <spec> [--dry-run] | gate <spec> --only <group-key>[,...] --experiment <name> | gate enrich <spec> | gate compare <spec> <experiment-a> <experiment-b>"); err != nil {
 		return err
 	}
+	if *lookupTool != "on" && *lookupTool != "off" {
+		return fail("--lookup-tool is on or off, not %q", *lookupTool)
+	}
+	if *lookupShell != "open" && *lookupShell != "restricted" {
+		return fail("--lookup-shell is open or restricted, not %q", *lookupShell)
+	}
 	if (*onlyF == "") != (*expF == "") {
 		return fail("--only and --experiment go together")
 	}
@@ -1093,7 +1120,10 @@ func cmdGate(a *app, args []string) (retErr error) {
 	if !*dry && !gatePaneMode() && !gateOutsideHerdr {
 		return fail("gate passes run in herdr panes; start orch gate inside herdr")
 	}
-	opts := gateOpts{keep: *expF != ""}
+	opts := gateOpts{lookupTool: *lookupTool == "on", restrictedShell: *lookupShell == "restricted" && *lookupTool == "on", keep: *expF != ""}
+	if err := paneOrchOnPath(opts, *dry); err != nil {
+		return fail("%v", err)
+	}
 	gs, err := loadGateSpec(a, pos[0])
 	if err != nil {
 		return err
@@ -1123,8 +1153,12 @@ func cmdGate(a *app, args []string) (retErr error) {
 		}
 	}
 	rec := &gateRecord{Spec: pos[0], Hash: hash, At: a.now().Unix(), PassErrors: map[string]string{}, PassSeconds: map[string]int{}, PassKept: map[string]string{}, PassTokens: map[string]passTokens{}, Groups: map[string][]string{},
-		SpecRel: rel}
-	rec.ReviewPolicy = &gateReviewPolicy{Version: gateReviewPolicyVersion}
+		SpecRel: rel, LookupTool: onOff(opts.lookupTool)}
+	rec.LookupShell = "open"
+	if opts.restrictedShell {
+		rec.LookupShell = "restricted"
+	}
+	rec.ReviewPolicy = &gateReviewPolicy{Version: gateReviewPolicyVersion, LookupTool: rec.LookupTool, LookupShell: rec.LookupShell}
 	rec.BenchBuild = benchBuildNow()
 	rec.BenchInputs = benchInputs{Repo: code, SpecPath: rel, SpecHash: hash, SpecSHA256: benchHash([]byte(src))}
 	rec.BenchConfig = benchConfig{Roles: s.cfg.Roles, Flags: append([]string(nil), args...), Command: benchCommand(args), Budgets: map[string]int{}}
@@ -1370,7 +1404,7 @@ func runGatePasses(dir, code, model string, passes []gatePass, rec *gateRecord, 
 					return fmt.Errorf("%s: %w", lastRoute, err)
 				}
 				run1 := func(q gatePass) (string, string, error) {
-					q.ctx = passCtx
+					q.lookupTool, q.restrictedShell, q.ctx = opts.lookupTool, opts.restrictedShell, passCtx
 					job := strings.TrimSuffix(q.name, "#retry")
 					repair := calls[job] > 0
 					calls[job]++
@@ -1794,9 +1828,7 @@ func writeGate(dir string, rec *gateRecord) error {
 	} else if label := storedGateResultLabel(rec); label != "" {
 		fmt.Fprintf(&r, "Historical result: **%s** (legacy record, not a v2 state)\n\n", label)
 	}
-	if l := legacyCtxSettings(rec); l != "" {
-		fmt.Fprintf(&r, "%s\n\n", l)
-	}
+	fmt.Fprintf(&r, "lookup_tool: %s; lookup_shell: %s%s%s\n\n", lookupToolOf(rec), lookupShellOf(rec), legacyContextFiles(rec), legacyCtxProfile(rec))
 	if t := rec.tokenSummary(); t != "" {
 		fmt.Fprintf(&r, "Tokens: %s\n\n", t)
 	}

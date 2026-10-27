@@ -108,13 +108,26 @@ func legacyCtxProfile(rec *gateRecord) string {
 	return "; ctx_profile: " + rec.CtxProfile
 }
 
-// legacyCtxSettings names the ctx settings an old record ran with. The switches
-// are gone, so a new record has none and shows nothing.
-func legacyCtxSettings(rec *gateRecord) string {
-	if rec.CtxTool == "" {
-		return ""
+// lookupToolOf is the lookup-tool setting a record ran with: on or off, or ""
+// when the record predates the setting. Old records stored it as ctx_tool.
+func lookupToolOf(rec *gateRecord) string {
+	if rec.LookupTool != "" {
+		return rec.LookupTool
 	}
-	return fmt.Sprintf("ctx_tool: %s; ctx_shell: %s%s%s", rec.CtxTool, orDefault(rec.CtxShell, "open"), legacyContextFiles(rec), legacyCtxProfile(rec))
+	return orDefault(rec.CtxTool, "off (legacy)")
+}
+
+// lookupShellOf is the effective shell policy of a record: open or restricted.
+// Old records stored it as ctx_shell, with ctx-only for what is now restricted;
+// a record without one ran an open shell.
+func lookupShellOf(rec *gateRecord) string {
+	switch {
+	case rec.LookupShell != "":
+		return rec.LookupShell
+	case rec.CtxShell == "ctx-only":
+		return "restricted"
+	}
+	return orDefault(rec.CtxShell, "open")
 }
 
 // legacyContextFiles names the context-files setting an old record ran with.
@@ -136,9 +149,7 @@ func legacyCache(rec *gateRecord) string {
 
 func describeExperiment(w io.Writer, label, name string, rec *gateRecord, dir string) {
 	fmt.Fprintf(w, "experiment %s: %s (%sgroups %s)\n", label, name, legacyCache(rec), strings.Join(rec.Only, ", "))
-	if l := legacyCtxSettings(rec); l != "" {
-		fmt.Fprintf(w, "  %s\n", l)
-	}
+	fmt.Fprintf(w, "  lookup_tool: %s; lookup_shell: %s%s%s\n", lookupToolOf(rec), lookupShellOf(rec), legacyContextFiles(rec), legacyCtxProfile(rec))
 	if warning := treeWarning(rec); warning != "" {
 		fmt.Fprintf(w, "  %s\n", warning)
 	}

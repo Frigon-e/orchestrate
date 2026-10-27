@@ -68,28 +68,48 @@ the same facts.
 
 ## Context tools for passes
 
-Gate passes get no lookup CLI and no shell: pi runs with `read,grep,find,ls`
-and Claude with its native `Read,Grep,Glob`. The gate gathers its own facts
-(enrichment) and puts them in the prompt. `ORCH_CTX_ROOT` and
-`ORCH_CTX_READONLY` still pin retrieval to the code checkout where it runs.
+Gate agents use plain shell lookups, not a server or generated adapter: `jbcontext
+search`, `orch lsp`, `rg` and `fd`.
+`--lookup-tool on|off` defaults to on: a read-only notice is first in the shared
+prompt prefix, `ORCH_CTX_ROOT` and `ORCH_CTX_READONLY` pin lookups to the code
+checkout, and a PATH shim resolves `orch` to this binary. `--lookup-shell
+restricted` is the default for Pi: native `read` plus a shell limited to one
+lookup command per call (`jbcontext search`, `orch lsp`, `rg`, `fd`, `ls` or
+`wc`). Pi starts with read alone; the loaded guard enables bash and acknowledges
+activation. If the extension cannot be written or loaded, the pass is an
+execution failure, never an open-shell fallback. `--lookup-shell open` restores
+Pi's native read/search tools and unrestricted bash, and loads the tool guard
+(`ORCH_GUARD_BIN`, plus the `ORCH_TOOL_GUARD*` knobs and `ORCH_TSLS` when set)
+so the checkout's own guard is the code under test. Claude ignores this setting
+and adds Bash with the `Bash(jbcontext search:*)`, `Bash(orch lsp:*)`,
+`Bash(rg:*)` and `Bash(fd:*)` permissions, plus an `orch lookup-only-check`
+PreToolUse hook that applies Pi's restricted-shell refusal to every Bash call.
+Send independent lookups as parallel calls in one message; read what they return
+before searching again. With lookup off, the original read and search tools
+remain and the notice/env are absent. `orch` must be on the pane's PATH for a
+pane run with lookup on.
 
 Repository context files are never loaded: pi gets `--no-context-files`;
 Claude uses `--settings '{"claudeMdExcludes":["**"]}'` instead of `--bare`, so
 disabling CLAUDE.md discovery does not disable subscription authentication.
-The checklist stays in the task text, not in a context file. Records written
-while `--ctx-tool` and `--ctx-shell` existed still load, and their `ctx_tool`
-and `ctx_shell` still show in reports and compare output; new records carry
-neither.
+The checklist stays in the task text, not in a context file. `lookup_tool` and
+the effective `lookup_shell` (`open` with lookup off) are in gate/experiment
+records, reports, and compare output. Records written under the earlier names
+(`ctx_tool`, `ctx_shell`, with `ctx-only` meaning `restricted`) still load and
+display; old records without a shell setting display `open`.
 
-Every runner gets a post-pass unchanged-checkout
+Every runner, including lookup-off runs, gets a post-pass unchanged-checkout
 check against the pre-pass baseline: Git status, diff and untracked-file
 content hashes. A change discards model results, cancels pending/in-flight
 passes, sets state to `stale` (or `error` if the subject cannot be checked),
 and puts a loud warning in stdout/report. The record names changed files and
 passes in flight, not a proven culprit. Files are never reverted. Ignored
 files and writes outside the checkout are not covered; edits restored before
-the check can also escape detection. Passes have no shell, but native read can
-still read outside the repo. The prompt and the post-pass check are not an
+the check can also escape detection. Pi's default restricted shell and Claude's
+lookup-only hook block unrelated commands, pipes and redirects. With
+`--lookup-shell open`, its shell is unrestricted and can write ignored/outside
+files or use the network. Native read can still read outside the repo in either
+mode. The guard, prompt, pinned read-only mode and post-pass check are not an
 operating-system sandbox.
 
 ## Options and experiments
