@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -187,6 +188,11 @@ func cmdDoctor(a *app, args []string) error {
 	me := orchID()
 	var fs []finding
 	add := func(sev, where, msg, fix string) { fs = append(fs, finding{sev, where, msg, fix}) }
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		for _, f := range setupFindings(homeDir, s.repo, s.root, exec.LookPath) {
+			add(f.severity, f.where, f.msg, f.fix)
+		}
+	}
 	if s.cfg.benchSuiteIgnored {
 		add("warn", "config", "repo bench_suite ignored", "use --bench-suite or bench_suite in the user config")
 	}

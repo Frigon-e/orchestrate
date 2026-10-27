@@ -39,7 +39,7 @@ Orchestrator:
   orch quick <id> --owns <file>[,<file>] <request...>
   orch models
   orch triage <id>... [--force] | orch triage report
-  orch doctor
+  orch doctor    (also checks the machine setup: links, hooks, tools, Claude trust)
   orch sweep <topic-dir> [--roots name=dir] [--min-passes 2] [--final settle]
   orch audit [<id>] [--system S] [--since 6h] [--problems]
   orch hold [on <reason> | off]

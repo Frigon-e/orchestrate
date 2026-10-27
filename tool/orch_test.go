@@ -713,7 +713,12 @@ func TestFrozenReason(t *testing.T) {
 
 func TestFreezeHoldAndDoctor(t *testing.T) {
 	h := setup(t)
-	wantContains(t, h.must("doctor"), "doctor: ok")
+	t.Setenv("HOME", t.TempDir())
+	for _, line := range strings.Split(h.must("doctor"), "\n") {
+		if strings.HasPrefix(line, "  ") && !strings.Contains(line, ",setup,") {
+			t.Errorf("unexpected doctor finding: %s", line)
+		}
+	}
 	for _, id := range []string{"t1", "t2"} {
 		h.task(id)
 		h.must("spawn", id)
