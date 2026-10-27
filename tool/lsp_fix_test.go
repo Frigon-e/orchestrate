@@ -81,6 +81,14 @@ func TestLspGoNameResolvesOnTheServeSession(t *testing.T) {
 	if code != 1 || strings.TrimSpace(out) != "no symbol zzzNone" {
 		t.Errorf("not found: exit %d %q", code, out)
 	}
+	// The same lookup at the same commit comes from the cache: no gopls start.
+	starts := len(w.events("start"))
+	if code, _ := w.run("lsp", "def", "zzzNone"); code != 1 {
+		t.Errorf("repeat not found: exit %d", code)
+	}
+	if n := len(w.events("start")); n != starts {
+		t.Errorf("a cached lookup started gopls serve (%d starts, want %d)", n, starts)
+	}
 }
 
 func TestLspImplsAcceptsLimit(t *testing.T) {

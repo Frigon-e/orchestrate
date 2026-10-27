@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -163,7 +164,13 @@ type goplsRunner struct {
 	mu                 sync.Mutex
 	fails              int
 	note               string
+	// rows, when set, answers workspace_symbol from a running server instead of
+	// the command line; errNoServe sends the call back to the command line.
+	rows    func(query string) (string, error)
+	noServe bool // rows had no session, so the command line answered
 }
+
+var errNoServe = errors.New("no gopls serve session")
 
 // run executes one gopls command in the checkout, from the cache when the same
 // call was made before. Only successful calls are cached.
@@ -181,6 +188,20 @@ func (g *goplsRunner) run(args ...string) (string, error) {
 		if json.Unmarshal(b, &out) == nil && validGoplsOutput(args[0], out) == nil {
 			return out, nil
 		}
+	}
+	if g.rows != nil && len(args) == 2 && args[0] == "workspace_symbol" {
+		out, err := g.rows(args[1])
+		if err == nil {
+			if err := validGoplsOutput(args[0], out); err != nil {
+				return "", err
+			}
+			ctxCacheWrite(cache, out)
+			return out, nil
+		}
+		if !errors.Is(err, errNoServe) {
+			return "", err
+		}
+		g.noServe = true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), goplsLimit)
 	defer cancel()
@@ -311,7 +332,9 @@ func (g *goplsRunner) symbolFactsWith(sym string, symbols func(query string) (st
 			}
 		}
 		d := symDef{Where: fmt.Sprintf("%s:%d", g.rel(path), ln), Kind: kind, Match: match}
-		if kind == "Function" || kind == "Method" {
+		if (kind == "Function" || kind == "Method") && !refs {
+			d.Func, d.Served = true, true
+		} else if kind == "Function" || kind == "Method" {
 			d.Func = true
 			at := fmt.Sprintf("%s:%d:%d", path, ln, col)
 			refs, err := g.run("references", at)

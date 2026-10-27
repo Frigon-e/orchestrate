@@ -359,6 +359,19 @@ func (r *lspRun) one(verb, name string, f *symFact, d symDef, limit int) lspAnsw
 	if l := langOf(path); l != nil {
 		lang = l.ID
 	}
+	if d.Served && verb == "refs" {
+		// Found from the cache, but the serve session will not start: the
+		// command line answers the references.
+		if s, _ := r.session(path); s == nil {
+			if cf := r.e.goFactsCLI([]string{name})[name]; cf != nil {
+				for _, c := range cf.Defs {
+					if c.Where == d.Where {
+						d = c
+					}
+				}
+			}
+		}
+	}
 	switch verb {
 	case "def":
 		it := lspItem{Path: path, Line: ln, Kind: d.Kind}
@@ -590,11 +603,20 @@ func (r *lspRun) goFacts(names []string) map[string]*symFact {
 		return e.goFactsCLI(names)
 	}
 	dirs := e.goModuleDirs()
+	// A lookup made before at this commit is answered from the cache the
+	// command line pass shares, so a name of another language skips gopls.
+	runners := map[string]*goplsRunner{}
 	for _, dir := range dirs {
-		if s, _ := r.sessionIn(l, dir); s == nil {
-			// No serve session: the command line pass answers, or reports why not.
-			return e.goFactsCLI(names)
-		}
+		dir := dir
+		runners[dir] = &goplsRunner{bin: e.Gopls, dir: dir, root: e.Code, cacheDir: e.CacheDir,
+			rows: func(q string) (string, error) {
+				s, _ := r.sessionIn(l, dir)
+				if s == nil {
+					// No serve session: the command line answers, or reports why not.
+					return "", errNoServe
+				}
+				return s.goSymbolRows(q)
+			}}
 	}
 	e.use("gopls", e.Gopls)
 	facts := map[string]*symFact{}
@@ -602,9 +624,13 @@ func (r *lspRun) goFacts(names []string) map[string]*symFact {
 		merged := symFact{Symbol: name, Lang: "go", Tier: "gopls"}
 		got := false
 		for _, dir := range dirs {
-			s, _ := r.sessionIn(l, dir)
-			g := &goplsRunner{dir: dir, root: e.Code}
-			f, err := g.symbolFactsWith(name, func(q string) (string, error) { return s.goSymbolRows(q) }, false)
+			g := runners[dir]
+			rows := func(q string) (string, error) { return g.run("workspace_symbol", q) }
+			f, err := g.symbolFactsWith(name, rows, false)
+			if err == nil && g.noServe {
+				// No session to ask the references later: the command line does.
+				f, err = g.symbolFactsWith(name, rows, true)
+			}
 			if err != nil {
 				merged.Errors = append(merged.Errors, dir+": workspace/symbol: "+err.Error())
 				continue
@@ -614,6 +640,11 @@ func (r *lspRun) goFacts(names []string) map[string]*symFact {
 		}
 		if got || len(merged.Errors) > 0 {
 			facts[name] = &merged
+		}
+	}
+	for _, dir := range dirs {
+		if g := runners[dir]; g.note != "" {
+			e.note(g.note)
 		}
 	}
 	return facts
