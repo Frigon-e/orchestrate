@@ -8,14 +8,7 @@ deny-grep-rg. `deny-find-chains.sh` owns the first two, because a plain find is
 a file search and a find chain is its sharper form; the other three scripts own
 one rule each.
 
-`deny-builtin-search.sh` is the sixth script and carries the two rules for
-Claude's own Grep and Glob tools: deny-builtin-grep and deny-builtin-glob. They
-reach the tree without a shell, so while `orch` answers they are refused like
-the shell rules and point at the same ctx query; with no usable `orch` they are
-the fallback. `orch ctx` is pinned to a git repository root, so a search whose
-path is outside the session's repository has no replacement and is allowed.
-
-`deny-big-read.sh` is the seventh script and carries one rule for Claude's own
+`deny-big-read.sh` is the sixth script and carries one rule for Claude's own
 Read tool: deny-big-read blocks a whole-file read of a regular file over
 BIG_READ_BYTES, because every token read stays in context for the rest of the
 session. A read with an offset or a limit always passes.
@@ -24,35 +17,18 @@ Each script passes its group name as the only argument. The hook JSON arrives
 on stdin, and a block is exit 2 with the reason on stderr, which is how Claude
 Code's PreToolUse hooks hand a refusal back to the model.
 
-The replacement text names a tool in the same order as pi: `orch ctx` first
-when `orch` answers `--version`, then fd for a file search and rg for a content
-search, then the built-in Claude tools. An `orch` that is on PATH but cannot
-answer is treated as absent, and a search block says it is broken.
+A block names rg for a content search and fd for a file search, then the lookup
+ladder. A grep is blocked only while rg is on PATH, because with no rg there is
+no replacement to name.
 """
 
 import json
 import os
 import re
 import stat
-import subprocess
 import sys
-import time
 
 GUARD_MARKER = "orch tool guard"
-
-# `orch --version` prints a fingerprint and starts nothing else, so a healthy
-# wrapper answers at once and one that cannot find its tool directory fails at
-# once. A second is plenty; three leaves room for a cold binary cache.
-PROBE_TIMEOUT = 3
-
-# The first line of a probe error is cut at this many characters so it fits in
-# one line of a block.
-DETAIL_MAX = 120
-
-# Every hook call is a fresh process, so a probe would run on every Bash call.
-# The result lives in a small cache for a minute instead.
-HEALTH_TTL = 60
-HEALTH_FILE = "toolguard-health.json"
 
 # A whole-file Read of a regular file over this many bytes is blocked; a range
 # (offset or limit) always passes.
@@ -61,10 +37,12 @@ BIG_READ_BYTES = 30720
 # Files Claude Code's Read tool opens specially, so a size limit does not apply.
 READ_EXEMPT_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb"})
 
-# The rules that name a search replacement, and so say when orch is broken. The
-# two rules that always name a built-in tool (Edit, Read) never do, because
-# orch does not back them and an edit or a read still works.
-SEARCH_RULES = frozenset({"find-chains", "find", "grep-rg"})
+# One line after the first line of a search block: where to look, in order.
+LADDER = (
+    'Lookup order: jbcontext search "<one behavior>" if the location is unknown, '
+    "orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, "
+    "fd for file names; send independent lookups in one message."
+)
 
 # The rule order matters: a find chain is the sharper name for a plain find.
 SHELL_SEARCHES = frozenset({"rg", "grep", "egrep", "fgrep", "ag", "fd", "find"})
@@ -79,7 +57,8 @@ SED_PRINT = re.compile(r"^[\d$,; ]*p$")
 
 FIND_CHAIN = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete"})
 SEARCH_SOURCE = frozenset({"find", "fd", "rg", "ag"})
-SEARCH_SINK = frozenset({"grep", "rg", "ag"})
+PIPE_SINK = frozenset({"grep", "ag"})
+XARGS_SINK = frozenset({"grep", "rg", "ag"})
 PLAIN_SEARCH = frozenset({"grep", "egrep", "fgrep", "rg", "ag"})
 RECURSIVE_BY_DEFAULT = frozenset({"rg", "ag"})
 GREP_VALUE = frozenset(
@@ -120,109 +99,8 @@ def on_path(name):
 
 
 def installed():
-    """The replacements a block may name, computed once per hook run.
-
-    `orch` counts only when it answers `--version`; `broken` carries the probe's
-    first error line so a block can say why it stopped naming it.
-    """
-    present = on_path("orch")
-    healthy = False
-    broken = ""
-    if present:
-        health = orch_health()
-        healthy = health["ok"]
-        if not healthy:
-            broken = health["detail"]
-    return {"orch": healthy, "fd": on_path("fd"), "rg": on_path("rg"), "broken": broken}
-
-
-def first_line(text):
-    """The first non-empty line of a probe's error, cut at DETAIL_MAX."""
-    for line in str(text).splitlines():
-        line = line.strip()
-        if line:
-            return line[:DETAIL_MAX]
-    return ""
-
-
-def probe_orch():
-    """Run `orch --version` once and report whether it answered.
-
-    A wrapper on PATH that fails is not a replacement, and a block that points
-    at it teaches the model to go around the guard instead.
-    """
-    try:
-        done = subprocess.run(
-            ["orch", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=PROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return {"ok": False, "detail": first_line(error) or "probe failed"}
-    if done.returncode == 0:
-        return {"ok": True, "detail": ""}
-    detail = (
-        first_line(done.stderr)
-        or first_line(done.stdout)
-        or f"orch --version exited {done.returncode}"
-    )
-    return {"ok": False, "detail": detail}
-
-
-def health_path():
-    """The probe cache, under ORCH_TOOL_GUARD_STATE_DIR when it is set."""
-    directory = os.environ.get("ORCH_TOOL_GUARD_STATE_DIR")
-    if not directory:
-        directory = os.path.join(os.path.expanduser("~"), ".local", "state", "orchestrate")
-    return os.path.join(directory, HEALTH_FILE)
-
-
-def read_health(path):
-    """The cached probe when it is fresh and well formed, else None."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            cached = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(cached, dict) or not isinstance(cached.get("ok"), bool):
-        return None
-    try:
-        age = time.time() - float(cached.get("ts", 0))
-    except (TypeError, ValueError):
-        return None
-    if not 0 <= age < HEALTH_TTL:
-        return None
-    return {"ok": cached["ok"], "detail": str(cached.get("detail") or "")[:DETAIL_MAX]}
-
-
-def write_health(path, health):
-    """Best effort: a guard never fails a call because it could not cache."""
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump({"ts": time.time(), "ok": health["ok"], "detail": health["detail"]}, handle)
-    except OSError:
-        pass
-
-
-def orch_health():
-    """The probe result, cached for HEALTH_TTL seconds across hook calls."""
-    path = health_path()
-    cached = read_health(path)
-    if cached is not None:
-        return cached
-    health = probe_orch()
-    write_health(path, health)
-    return health
-
-
-def broken_line(detail):
-    """The one line a search block adds when orch is installed but broken."""
-    return (
-        f"orch ctx is installed but broken here ({detail}); "
-        "use the tools above and tell the user."
-    )
+    """The replacements a block may name, computed once per hook run."""
+    return {"fd": on_path("fd"), "rg": on_path("rg")}
 
 
 def segments(command):
@@ -355,9 +233,9 @@ def deny_find_chains(line):
         while nxt < len(listing) and listing[nxt]["stdin"]:
             name, args = command(listing[nxt])
             if name == "xargs":
-                sink = any(base(arg) in SEARCH_SINK or arg == "find" for arg in args)
+                sink = any(base(arg) in XARGS_SINK or arg == "find" for arg in args)
             else:
-                sink = name in SEARCH_SINK
+                sink = name in PIPE_SINK
             if sink:
                 return True
             if not listing[nxt]["stdout"]:
@@ -451,46 +329,16 @@ def search_targets(args):
     return out
 
 
-def repository_root(start=None):
-    """The root of the git repository the hook runs in, or "" outside one.
-
-    orch ctx is pinned to a git repository root, so a path outside it has no ctx
-    answer. A worktree root has a .git file rather than a directory, so any entry
-    counts. Resolve links so aliases share the same repository boundary.
-    """
-    directory = os.path.abspath(start or os.getcwd())
-    while True:
-        if os.path.exists(os.path.join(directory, ".git")):
-            return os.path.realpath(directory)
-        parent = os.path.dirname(directory)
-        if parent == directory:
-            return ""
-        directory = parent
-
-
-def inside_repository(path):
-    """True when a built-in search's target path is inside the repository.
-
-    Resolve relative and missing paths from the session directory. Searches
-    outside its git repository have no orch ctx replacement.
-    """
-    root = repository_root()
-    if not root:
-        return False
-    resolved = os.path.realpath((path or "").strip() or ".")
-    return resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep)
-
-
 def grep_searches(segment, tools):
     """One segment is a raw content search over files."""
     name, args = command(segment)
     if not name:
         return False
+    if not tools["rg"]:
+        return False
     if name == "git":
         return bool(args) and args[0] == "grep" and not segment["stdin"]
-    if name == "rg" and not tools["orch"]:
-        return False
-    if name not in PLAIN_SEARCH:
+    if name == "rg" or name not in PLAIN_SEARCH:
         return False
     if search_targets(args):
         return True
@@ -502,8 +350,8 @@ def grep_searches(segment, tools):
 
 def deny_grep_rg(line, tools):
     """A grep with a file or directory argument, or one that recurses, searches
-    files. One reading stdin is a filter. With no orch, rg is the preferred grep
-    rather than a raw search, so rg itself stays allowed."""
+    files. One reading stdin is a filter. rg is the replacement, so it is never
+    blocked, and with no rg on PATH there is nothing to name, so nothing is."""
     return any(grep_searches(segment, tools) for segment in segments(line))
 
 
@@ -530,17 +378,11 @@ def deny_cat_head_tail(line):
     return False
 
 
-def file_search_reason(tools, with_symbol, none_text):
-    """The line a find rule names: orch ctx, then fd, then the built-in Glob."""
-    if tools["orch"]:
-        queries = 'orch ctx batch -q "find:Code that ..."'
-        if with_symbol:
-            queries += ' -q "symbol:Name refs=3"'
-        queries += ' -q "text:pattern glob=dir/**"'
-        return f"One orch ctx batch replaces it: {queries} (--compact shortens it)."
+def find_reason(tools, name, first, fallback):
+    """A find rule: fd when it is installed, else the built-in tool."""
     if tools["fd"]:
-        return "Use fd instead (e.g. fd -e ts pattern dir, and fd -x cmd replaces find -exec)."
-    return none_text
+        return f"{GUARD_MARKER} ({name}): {first}\n{LADDER}"
+    return f"{GUARD_MARKER} ({name}): {fallback}"
 
 
 def rules():
@@ -550,13 +392,11 @@ def rules():
             "name": "deny-find-chains",
             "id": "find-chains",
             "match": lambda line, tools: deny_find_chains(line),
-            "reason": lambda tools: (
-                f"{GUARD_MARKER} (deny-find-chains): find -exec, -delete and find | grep chains are blocked.\n"
-                + file_search_reason(
-                    tools,
-                    True,
-                    "Use the built-in Glob and Grep tools; orch ctx and fd are not installed.",
-                )
+            "reason": lambda tools: find_reason(
+                tools,
+                "deny-find-chains",
+                "find -exec, -delete and find | grep chains are blocked; use fd, or rg -g 'GLOB' PATTERN for content.",
+                "find -exec, -delete and find | grep chains are blocked. Use the built-in Glob and Grep tools; fd is not installed.",
             ),
         },
         {
@@ -564,9 +404,11 @@ def rules():
             "name": "deny-find",
             "id": "find",
             "match": lambda line, tools: deny_find(line),
-            "reason": lambda tools: (
-                f"{GUARD_MARKER} (deny-find): find over a tree is blocked.\n"
-                + file_search_reason(tools, False, "Use the built-in Glob tool; orch ctx and fd are not installed.")
+            "reason": lambda tools: find_reason(
+                tools,
+                "deny-find",
+                "find over a tree is blocked; use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').",
+                "find over a tree is blocked. Use the built-in Glob tool; fd is not installed.",
             ),
         },
         {
@@ -576,7 +418,7 @@ def rules():
             "match": lambda line, tools: deny_sed_inplace(line),
             "reason": lambda tools: (
                 f"{GUARD_MARKER} (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n"
-                "Use the built-in Edit tool; orch ctx is read-only and never replaces an edit."
+                "Use the built-in Edit tool."
             ),
         },
         {
@@ -585,17 +427,8 @@ def rules():
             "id": "grep-rg",
             "match": deny_grep_rg,
             "reason": lambda tools: (
-                f"{GUARD_MARKER} (deny-grep-rg): a plain grep"
-                + (", rg" if tools["orch"] else "")
-                + ", ag or git grep over files is blocked.\n"
-                + (
-                    'One orch ctx batch replaces it: orch ctx batch -q "text:pattern glob=dir/**" '
-                    '-q "symbol:Name refs=3" (a concept: find:...).'
-                    if tools["orch"]
-                    else "Use rg instead (e.g. rg -n pattern dir)."
-                    if tools["rg"]
-                    else "Use the built-in Grep tool; orch ctx and rg are not installed."
-                )
+                f"{GUARD_MARKER} (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; "
+                "use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n" + LADDER
             ),
         },
         {
@@ -611,94 +444,13 @@ def rules():
     ]
 
 
-# The built-in tools reach the tree without a shell, so their rules match a tool
-# name and the arguments it carries rather than a command line.
-def builtin_rules():
-    """The two rules for Claude's own search tools, which a shell rule alone
-    leaves as the way around the guard."""
-    return [
-        {
-            "script": "builtin-search",
-            "name": "deny-builtin-grep",
-            "id": "builtin-grep",
-            "tool": "Grep",
-            "reason": (
-                f"{GUARD_MARKER} (deny-builtin-grep): the built-in Grep tool is blocked; "
-                "orch ctx answers searches here.\n"
-                'One orch ctx batch replaces it: orch ctx batch -q "text:pattern glob=dir/**" '
-                '-q "symbol:Name refs=3" (a concept: find:...).'
-            ),
-        },
-        {
-            "script": "builtin-search",
-            "name": "deny-builtin-glob",
-            "id": "builtin-glob",
-            "tool": "Glob",
-            "reason": (
-                f"{GUARD_MARKER} (deny-builtin-glob): the built-in Glob tool is blocked; "
-                "orch ctx answers file searches here.\n"
-                'One orch ctx batch replaces it: orch ctx batch -q "find:Code that ..." '
-                '-q "text:pattern glob=dir/**" (--compact shortens it).'
-            ),
-        },
-    ]
-
-
-def active_builtin_rules():
-    """ORCH_TOOL_GUARD=off disables every rule; ORCH_TOOL_GUARD_SKIP takes the
-    group name `builtin-search`, or one rule's short or full name."""
-    if os.environ.get("ORCH_TOOL_GUARD") == "off":
-        return []
-    skip = {name.strip() for name in (os.environ.get("ORCH_TOOL_GUARD_SKIP") or "").split(",") if name.strip()}
-    return [
-        rule
-        for rule in builtin_rules()
-        if rule["id"] not in skip and rule["name"] not in skip and rule["script"] not in skip
-    ]
-
-
-def builtin_search(event):
-    """A Grep or Glob call, decided against the same policy as the pi guard.
-
-    Fail open: a payload without a tool name, a tool input or a pattern is not a
-    search this guard can name a replacement for.
-    """
-    active = active_builtin_rules()
-    if not active:
-        return 0
-    tool = event.get("tool_name")
-    tool_input = event.get("tool_input")
-    if not isinstance(tool_input, dict):
-        return 0
-    pattern = tool_input.get("pattern")
-    if not isinstance(pattern, str) or not pattern.strip():
-        return 0
-    rule = next((rule for rule in active if rule["tool"] == tool), None)
-    if rule is None:
-        return 0
-    path = tool_input.get("path")
-    if not inside_repository(path if isinstance(path, str) else ""):
-        return 0
-    tools = installed()
-    if not tools["orch"]:
-        return 0
-    sys.stderr.write(rule["reason"] + "\n")
-    return 2
-
-
-def big_read_reason(path, size, tools):
+def big_read_reason(path, size):
     """The block text: the size, then how to read only the part needed."""
     kilobytes = max(1, round(size / 1024))
-    if tools["orch"]:
-        lookup = (
-            'Get the line numbers first: orch ctx text "pattern" --glob <file> or orch ctx sym Name '
-            '(a doc: its headings with orch ctx text "^#{1,3} " --glob <file>).'
-        )
-    else:
-        lookup = 'Get the line numbers first: rg -n "pattern" <file> (a doc: rg -n "^#{1,3} " <file>).'
     return (
         f"{GUARD_MARKER} (deny-big-read): {path} is {kilobytes} KB; reading it whole floods the context.\n"
-        "Use Read with offset and limit and take only the section you need.\n" + lookup
+        "Use Read with offset and limit and take only the section you need.\n"
+        'Get the line numbers first: rg -n PATTERN file (a doc: rg -n "^#{1,3} " file).'
     )
 
 
@@ -736,7 +488,7 @@ def big_read(event):
         return 0
     if not stat.S_ISREG(info.st_mode) or info.st_size <= BIG_READ_BYTES:
         return 0
-    sys.stderr.write(big_read_reason(path, info.st_size, installed()) + "\n")
+    sys.stderr.write(big_read_reason(path, info.st_size) + "\n")
     return 2
 
 
@@ -761,8 +513,6 @@ def main(argv):
         return 0
     if not isinstance(event, dict):
         return 0
-    if script == "builtin-search":
-        return builtin_search(event)
     if script == "big-read":
         return big_read(event)
     tool = event.get("tool_name")
@@ -783,10 +533,7 @@ def main(argv):
     tools = installed()
     for rule in active:
         if rule["match"](line, tools):
-            reason = rule["reason"](tools)
-            if tools["broken"] and rule["id"] in SEARCH_RULES:
-                reason += "\n" + broken_line(tools["broken"])
-            sys.stderr.write(reason + "\n")
+            sys.stderr.write(rule["reason"](tools) + "\n")
             return 2
     return 0
 

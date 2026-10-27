@@ -67,7 +67,7 @@ class MergeTests(unittest.TestCase):
 
     def test_merge_completes_a_partial_install(self):
         settings = {"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [dict(
-            FRAGMENT["hooks"]["PreToolUse"][2]["hooks"][0])]}]}}
+            FRAGMENT["hooks"]["PreToolUse"][1]["hooks"][0])]}]}}
         added = inst.merge(settings, FRAGMENT)
         self.assertEqual(len(added), len(FRAGMENT_COMMANDS) - 1)
         self.assertEqual(inst.missing(settings, FRAGMENT), [])
@@ -77,6 +77,46 @@ class MergeTests(unittest.TestCase):
         inst.merge(settings, FRAGMENT)
         read_hook = [h for g in settings["hooks"]["PreToolUse"] if g["matcher"] == "Read" for h in g["hooks"]][0]
         self.assertEqual(read_hook["timeout"], 5)
+
+
+class PruneTests(unittest.TestCase):
+    RETIRED = '"$HOME/.agents/skills/orchestrate/hooks/claude/deny-builtin-search.sh"'
+
+    def with_retired(self):
+        settings = deep(FOREIGN)
+        inst.merge(settings, FRAGMENT)
+        settings["hooks"]["PreToolUse"].append(
+            {"matcher": "Grep|Glob", "hooks": [{"type": "command", "command": self.RETIRED}]}
+        )
+        return settings
+
+    def test_prune_removes_an_owned_hook_the_fragment_dropped(self):
+        settings = self.with_retired()
+        self.assertEqual(inst.prune(settings, FRAGMENT), [self.RETIRED])
+        self.assertEqual(inst.missing(settings, FRAGMENT), [])
+        self.assertNotIn("Grep|Glob", [g.get("matcher") for g in settings["hooks"]["PreToolUse"]])
+
+    def test_prune_leaves_foreign_hooks_and_current_hooks(self):
+        settings = deep(FOREIGN)
+        inst.merge(settings, FRAGMENT)
+        once = deep(settings)
+        self.assertEqual(inst.prune(settings, FRAGMENT), [])
+        self.assertEqual(settings, once)
+
+    def test_apply_prunes_the_retired_hook(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        path = tmp / "settings.json"
+        path.write_text(json.dumps(self.with_retired(), indent=2) + "\n")
+        result = run("--settings", str(path), "--apply")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(f"remove: {self.RETIRED}", result.stdout)
+        self.assertNotIn(self.RETIRED, path.read_text())
+        self.assertEqual(inst.missing(json.loads(path.read_text()), FRAGMENT), [])
+
+    def test_stdin_mode_prunes_too(self):
+        result = run("--stdin", stdin=json.dumps(self.with_retired()))
+        self.assertNotIn(self.RETIRED, result.stdout)
 
 
 class RemoveTests(unittest.TestCase):

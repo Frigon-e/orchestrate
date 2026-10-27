@@ -11,12 +11,6 @@
         ]
       },
       {
-        "matcher": "Grep|Glob",
-        "hooks": [
-          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-builtin-search.sh\"" }
-        ]
-      },
-      {
         "matcher": "Read",
         "hooks": [
           { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/deny-big-read.sh\"", "timeout": 5 }

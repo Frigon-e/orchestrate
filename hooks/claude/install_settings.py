@@ -6,7 +6,8 @@ Every hook whose command points into hooks/claude of this skill is owned by this
 script; every other key and hook in the settings file is left exactly as found.
 
     install_settings.py                  show what would change (default, writes nothing)
-    install_settings.py --apply          merge the fragment into the settings file
+    install_settings.py --apply          merge the fragment into the settings file and
+                                         remove owned hooks the fragment no longer lists
     install_settings.py --apply --remove remove the owned hooks again
     install_settings.py --check          exit 1 when an owned hook is missing
     install_settings.py --stdin          read settings JSON on stdin, write the result on stdout
@@ -63,15 +64,15 @@ def merge(settings, fragment):
     return added
 
 
-def remove(settings):
-    """Drop every owned hook and any group or event left empty. Returns the commands removed."""
+def drop(settings, doomed):
+    """Drop every hook `doomed` accepts and any group or event left empty. Returns the commands dropped."""
     removed = []
     hooks = settings.get("hooks", {})
     for event in list(hooks):
         kept_groups = []
         for group in hooks[event]:
-            kept = [h for h in group.get("hooks", []) if not is_owned(h)]
-            removed += [h["command"] for h in group.get("hooks", []) if is_owned(h)]
+            kept = [h for h in group.get("hooks", []) if not doomed(h)]
+            removed += [h["command"] for h in group.get("hooks", []) if doomed(h)]
             if kept:
                 group["hooks"] = kept
                 kept_groups.append(group)
@@ -82,6 +83,18 @@ def remove(settings):
     if "hooks" in settings and not settings["hooks"]:
         del settings["hooks"]
     return removed
+
+
+def remove(settings):
+    """Drop every owned hook. Returns the commands removed."""
+    return drop(settings, is_owned)
+
+
+def prune(settings, fragment):
+    """Drop owned hooks the fragment no longer lists (a script that was retired).
+    Returns the commands removed."""
+    wanted = {h["command"] for groups in fragment["hooks"].values() for g in groups for h in g["hooks"]}
+    return drop(settings, lambda h: is_owned(h) and h.get("command") not in wanted)
 
 
 def missing(settings, fragment):
@@ -144,7 +157,11 @@ def main(argv=None):
     if args.stdin:
         text = sys.stdin.read()
         settings = parse(text, "stdin")
-        remove(settings) if args.remove else merge(settings, fragment)
+        if args.remove:
+            remove(settings)
+        else:
+            prune(settings, fragment)
+            merge(settings, fragment)
         sys.stdout.write(render(settings, indent_of(text)))
         return 0
 
@@ -158,12 +175,15 @@ def main(argv=None):
             print(f"missing: {command}")
         return 1 if gone else 0
 
-    changed = remove(settings) if args.remove else merge(settings, fragment)
-    verb = "remove" if args.remove else "add"
-    if not changed:
-        print(f"nothing to {verb}: {path} is already up to date")
+    if args.remove:
+        changes = [("remove", c) for c in remove(settings)]
+    else:
+        changes = [("remove", c) for c in prune(settings, fragment)]
+        changes += [("add", c) for c in merge(settings, fragment)]
+    if not changes:
+        print(f"nothing to {'remove' if args.remove else 'add'}: {path} is already up to date")
         return 0
-    for command in changed:
+    for verb, command in changes:
         print(f"{verb}: {command}")
     if not args.apply:
         print("dry run; pass --apply to write")
