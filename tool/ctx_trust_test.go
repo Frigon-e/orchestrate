@@ -170,12 +170,12 @@ func TestCtxServerOverridesPATHAndSymlinks(t *testing.T) {
 	external := filepath.Join(outside, "external-probe")
 	ctxProbeServer(t, external, marker)
 	t.Setenv("ORCH_PROBE_LS", external+" --stdio")
-	if bin, args, ok, _ := langServerReason(c.repo, l); !ok || bin != evalOr(external) || strings.Join(args, " ") != "--stdio" {
+	if bin, args, ok, _ := langServerReason(c.repo, l); !ok || bin != external || strings.Join(args, " ") != "--stdio" {
 		t.Fatalf("external env server rejected: %s %v %v", bin, args, ok)
 	}
 	t.Setenv("ORCH_PROBE_LS", "")
 	l.LSP = []lspCmd{{Bin: "external-probe"}}
-	if bin, _, ok, _ := langServerReason(c.repo, l); !ok || bin != evalOr(external) {
+	if bin, _, ok, _ := langServerReason(c.repo, l); !ok || bin != external {
 		t.Fatal("external PATH server rejected")
 	}
 	t.Setenv("ORCH_TSLS", external)
@@ -227,6 +227,32 @@ func TestStartLSPKeepsTheNameItWasFoundBy(t *testing.T) {
 	}
 	if filepath.Base(string(got)) != "tsc" {
 		t.Fatalf("started as %q, want the name tsc", got)
+	}
+}
+
+// A registry language server installed as a symlink to a multi-call binary
+// (bash-language-server -> vp) must start under the name it was found by.
+func TestOpenLSPStartsARegistryServerUnderTheNameItWasFoundBy(t *testing.T) {
+	c := newCtxHarness(t)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindir := t.TempDir()
+	if err := os.Symlink(self, filepath.Join(bindir, "multicall-ls")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bindir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	marker := filepath.Join(t.TempDir(), "argv0")
+	t.Setenv("ORCH_FAKE_ARGV0", marker)
+	l := &langDef{ID: "probe", LSP: []lspCmd{{Bin: "multicall-ls"}}}
+	_, _ = openLSP(c.repo, l, c.repo) // the fake exits at once: no handshake
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("server did not run: %v", err)
+	}
+	if filepath.Base(string(got)) != "multicall-ls" {
+		t.Fatalf("started as %q, want the name multicall-ls", got)
 	}
 }
 

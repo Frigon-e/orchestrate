@@ -808,6 +808,9 @@ const configuredServerNotUsable = "configured language server not usable: "
 
 // langServer finds a language server for l in the checkout: the override
 // variable (a command line), then the project's own directories, then PATH.
+// The returned bin is the name or path the server was found by, not its
+// symlink-resolved target: startLSP resolves and re-checks it before running
+// and hands it to the server as argv[0].
 func langServer(code string, l *langDef) (bin string, args []string, ok bool) {
 	bin, args, ok, _ = langServerReason(code, l)
 	return
@@ -816,14 +819,13 @@ func langServer(code string, l *langDef) (bin string, args []string, ok bool) {
 func langServerReason(code string, l *langDef) (bin string, args []string, ok bool, why string) {
 	if l.LSPEnv != "" {
 		if v := strings.Fields(os.Getenv(l.LSPEnv)); len(v) > 0 {
-			p, err := ctxServerBinary(code, v[0])
-			if err != nil {
+			if _, err := ctxServerBinary(code, v[0]); err != nil {
 				if ctxPathInRoot(code, v[0]) {
 					return "", nil, false, ctxServerSkip(l.ID)
 				}
 				return "", nil, false, configuredServerNotUsable + err.Error()
 			}
-			return p, v[1:], true, ""
+			return v[0], v[1:], true, ""
 		}
 	}
 	for _, c := range l.LSP {
@@ -833,14 +835,14 @@ func langServerReason(code string, l *langDef) (bin string, args []string, ok bo
 					why = ctxServerSkip(l.ID)
 					continue
 				}
-				if real, err := ctxServerBinary(code, p); err == nil {
-					return real, c.Args, true, why
+				if _, err := ctxServerBinary(code, p); err == nil {
+					return p, c.Args, true, why
 				}
 			}
 		}
 		if p, err := exec.LookPath(c.Bin); err == nil {
-			if real, err := ctxServerBinary(code, p); err == nil {
-				return real, c.Args, true, why
+			if _, err := ctxServerBinary(code, p); err == nil {
+				return p, c.Args, true, why
 			}
 			if ctxPathInRoot(code, p) {
 				why = ctxServerSkip(l.ID)
