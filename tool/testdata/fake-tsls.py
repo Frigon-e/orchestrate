@@ -36,6 +36,11 @@ def note(**kw):
     log.flush()
 
 
+opened = []  # uris opened by the client
+# FAKE_LSP_NEEDS_OPEN: workspace/symbol and documentSymbol answer only once a file
+# whose uri contains this text has been opened (a project that loads on demand).
+needs = os.environ.get("FAKE_LSP_NEEDS_OPEN", "")
+
 while True:
     m = read()
     if m is None:
@@ -55,6 +60,7 @@ while True:
         send({"jsonrpc": "2.0", "id": 901, "method": "workspace/configuration", "params": {"items": [{"section": "js/ts"}, {"section": "typescript"}]}})
     elif method == "textDocument/didOpen":
         note(method=method, uri=p["textDocument"]["uri"], lang=p["textDocument"]["languageId"])
+        opened.append(p["textDocument"]["uri"])
     elif method == "workspace/symbol":
         note(method=method, query=p["query"])
         if os.environ.get("FAKE_LSP_HANG"):
@@ -62,7 +68,13 @@ while True:
         cold = int(os.environ.get("FAKE_LSP_COLD", "0"))
         seen = globals().setdefault("seen_symbol", 0) + 1
         globals()["seen_symbol"] = seen
-        send({"jsonrpc": "2.0", "id": m["id"], "result": [] if seen <= cold else symbols.get(p["query"], [])})
+        loaded = not needs or any(needs in u for u in opened)
+        send({"jsonrpc": "2.0", "id": m["id"], "result": [] if seen <= cold or not loaded else symbols.get(p["query"], [])})
+    elif method == "textDocument/documentSymbol":
+        note(method=method, uri=p["textDocument"]["uri"])
+        # An outline of an opened file; empty always when FAKE_LSP_NODOC is set.
+        has = p["textDocument"]["uri"] in opened and not os.environ.get("FAKE_LSP_NODOC")
+        send({"jsonrpc": "2.0", "id": m["id"], "result": [{"name": "x", "kind": 13, "location": {"uri": p["textDocument"]["uri"], "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}}}] if has else []})
     elif method == "textDocument/references":
         pos = p["position"]
         note(method=method, uri=p["textDocument"]["uri"], line=pos["line"], character=pos["character"], decl=p["context"]["includeDeclaration"])

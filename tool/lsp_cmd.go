@@ -37,9 +37,9 @@ var lspHelps = map[string]lspHelp{
 	"callers": {"orch lsp callers <Name|pkg.Name|Type.Method> [Name...] [--limit N] [--json]",
 		"Incoming calls from the language server's call hierarchy: path:line in EnclosingFunc. Default limit 30.",
 		[]string{"orch lsp callers Handle", "orch lsp callers Stripe.StartCheckout --limit 5"}},
-	"impls": {"orch lsp impls <Name|pkg.Name|Type.Method> [Name...] [--json]",
-		"Implementations of an interface or an interface method, path:line: text.",
-		[]string{"orch lsp impls Gateway", "orch lsp impls Gateway.StartCheckout"}},
+	"impls": {"orch lsp impls <Name|pkg.Name|Type.Method> [Name...] [--limit N] [--json]",
+		"Implementations of an interface or an interface method, path:line: text. Default limit 30.",
+		[]string{"orch lsp impls Gateway", "orch lsp impls Gateway.StartCheckout --limit 5"}},
 	"symbols": {"orch lsp symbols <path/to/file> [--json]",
 		"Outline of a file: kind name line, nested members indented.",
 		[]string{"orch lsp symbols pay/pay.go", "orch lsp symbols src/cart.ts --json"}},
@@ -53,7 +53,7 @@ const lspHomeText = `orch lsp - symbol questions by name, answered by the langua
   orch lsp def Name [Name...]        definition: path:line, kind, signature line, first doc line
   orch lsp refs Name [--limit N]     references grouped by file (path:line: text), default limit 30
   orch lsp callers Name [--limit N]  incoming calls: path:line in EnclosingFunc
-  orch lsp impls Name                implementations of an interface or method
+  orch lsp impls Name [--limit N]    implementations of an interface or method, default limit 30
   orch lsp symbols path/to/file      outline of the file: kind name line
   orch lsp hover path:line:col       type and doc at a position (1-based)
 
@@ -121,7 +121,7 @@ func cmdLsp(a *app, args []string) error {
 	fs.Usage = func() {}
 	asJSON := fs.Bool("json", false, "print JSON")
 	limit := 30
-	if verb == "refs" || verb == "callers" {
+	if verb == "refs" || verb == "callers" || verb == "impls" {
 		fs.IntVar(&limit, "limit", 30, "most hits shown")
 	}
 	pos, err := parseArgs(fs, rest)
@@ -238,6 +238,16 @@ func (r *lspRun) close() {
 	}
 }
 
+// noServerFile is noServer for a file question, where the fallback is an
+// outline by grep, not the path as a word.
+func noServerFile(lang, path string) lspAnswer {
+	return lspAnswer{Name: path, Status: "no_server", Message: fmt.Sprintf("no language server for %s; use %s", lang, symbolsHint(path)), Items: []lspItem{}}
+}
+
+func symbolsHint(path string) string {
+	return fmt.Sprintf(`rg -n "^(func|type|export|class|def) " %s`, path)
+}
+
 func noServer(lang, name string) lspAnswer {
 	return lspAnswer{Name: name, Status: "no_server", Message: fmt.Sprintf("no language server for %s; use rg -n -w %s", lang, name), Items: []lspItem{}}
 }
@@ -301,7 +311,7 @@ func (r *lspRun) byName(verb string, names []string, limit int) []lspAnswer {
 			defs = inRepo
 		}
 		switch {
-		case len(defs) == 0 && len(f.Errors) > 0:
+		case len(defs) == 0 && len(lspRealErrors(f.Errors)) > 0:
 			out = append(out, noServer(orDefault(f.Lang, "go and typescript"), q))
 		case len(defs) == 0:
 			out = append(out, notFound)
@@ -315,6 +325,19 @@ func (r *lspRun) byName(verb string, names []string, limit int) []lspAnswer {
 			out = append(out, an)
 		default:
 			out = append(out, r.one(verb, q, f, defs[0], limit))
+		}
+	}
+	return out
+}
+
+// lspRealErrors keeps the errors that mean no server answered. A server that
+// ran and found nothing, but could not tell its project had loaded, is a
+// missing name, not a missing server.
+func lspRealErrors(errs []string) []string {
+	var out []string
+	for _, e := range errs {
+		if !strings.Contains(e, tsReadinessUnconfirmed) {
+			out = append(out, e)
 		}
 	}
 	return out
@@ -431,6 +454,9 @@ func (r *lspRun) one(verb, name string, f *symFact, d symDef, limit int) lspAnsw
 		}
 		an.Items = r.locItems(s, locs, d.Where)
 		an.Total = len(an.Items)
+		if len(an.Items) > limit {
+			an.Items = an.Items[:limit]
+		}
 		if len(an.Items) == 0 {
 			an.Message = "no implementations of " + name
 		}
@@ -522,16 +548,16 @@ func (r *lspRun) session(path string) (*lspSession, string) {
 	if s, ok := r.sessions[key]; ok {
 		return s, r.whys[key]
 	}
-	var s *lspSession
-	var why string
-	switch l.Special {
-	case "gopls":
-		s, why = r.openGopls(dir)
-	case "ts":
-		s, why = r.openTS(dir)
-	default:
-		s, why = openLSP(e.Code, l, dir)
+	start := func() (*lspSession, string) {
+		switch l.Special {
+		case "gopls":
+			return r.openGopls(dir)
+		case "ts":
+			return r.openTS(dir)
+		}
+		return openLSP(e.Code, l, dir)
 	}
+	s, why := start()
 	r.sessions[key], r.whys[key] = s, why
 	return s, why
 }
@@ -723,10 +749,10 @@ func (r *lspRun) symbols(arg string) lspAnswer {
 		if l := langOf(path); l != nil {
 			lang = l.ID
 		}
-		return noServer(lang, path).withWhy(why)
+		return noServerFile(lang, path).withWhy(why)
 	}
 	if !s.caps.DocSym {
-		return lspAnswer{Name: path, Status: "no_server", Items: []lspItem{}, Message: fmt.Sprintf("%s has no document symbols; use rg -n -w %s", s.bin, path)}
+		return lspAnswer{Name: path, Status: "no_server", Items: []lspItem{}, Message: fmt.Sprintf("%s has no document symbols; use %s", s.bin, symbolsHint(path))}
 	}
 	abs := filepath.Join(r.e.Code, filepath.FromSlash(path))
 	s.c.open(abs)

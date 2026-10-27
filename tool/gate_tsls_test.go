@@ -146,7 +146,7 @@ func TestTSFactsFromALanguageServerOverStdio(t *testing.T) {
 	old := tsReady
 	tsReady = 5 * time.Second
 	t.Cleanup(func() { tsReady = old })
-	t.Setenv("FAKE_LSP_COLD", "2") // the project is still loading: the first two answers are empty
+	t.Setenv("FAKE_LSP_COLD", "1") // the project is still loading: the first answer is empty
 	res, err := enrichGate(e.dir, e.code, e.src, "spec.md", e.sp)
 	if err != nil {
 		t.Fatal(err)
@@ -188,8 +188,8 @@ func TestTSFactsFromALanguageServerOverStdio(t *testing.T) {
 			asked++
 		}
 	}
-	if asked != 3 {
-		t.Errorf("createGatewaySchema was asked %d times, want 3 (two empty answers while the project loaded)", asked)
+	if asked != 2 {
+		t.Errorf("createGatewaySchema was asked %d times, want 2 (an empty answer, a readiness probe, the answer)", asked)
 	}
 	idx := func(m string) int {
 		for i, x := range methods {

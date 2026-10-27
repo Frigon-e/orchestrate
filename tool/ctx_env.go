@@ -70,6 +70,9 @@ type ctxEnv struct {
 }
 
 func newCtxEnv(code string, o ctxOpts) *ctxEnv {
+	tsChoiceMu.Lock()
+	tsChoiceMemo = map[string]tsChoice{}
+	tsChoiceMu.Unlock()
 	applyCtxLangs(o.Cfg.CtxLangs)
 	e := &ctxEnv{Code: code, ReadOnly: ctxReadOnly(), JB: jbcontextBin(), Gopls: goplsBin(), RG: envOr("ORCH_RG", "rg"), Policy: o.Cfg.CtxIndex,
 		CacheDir: ctxCacheDir(code), Skip: map[string]bool{}, sem: make(chan struct{}, ctxParallel), used: map[string]string{}}

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,9 +95,19 @@ func tsSymbols(q string, skip map[string]bool) []string {
 // the other worktrees of its repository (a linked worktree has no install of
 // its own), the checkout's own first.
 func pnpmStores(code string) []string {
+	roots := ctxRepoRoots(code)
 	var stores []string
-	for _, root := range ctxRepoRoots(code) {
-		stores = append(stores, pnpmStoresIn(root)...)
+	for i, root := range roots {
+		if i == 0 {
+			stores = append(stores, pnpmStoresIn(root)...)
+			continue
+		}
+		// The other worktrees can be dozens, each a full tree: look where an
+		// install lives (the root, or a project directory one or two levels down).
+		for _, pattern := range []string{"node_modules", "*/node_modules", "*/*/node_modules"} {
+			hits, _ := filepath.Glob(filepath.Join(root, pattern, ".pnpm"))
+			stores = append(stores, hits...)
+		}
 	}
 	return stores
 }
@@ -363,7 +374,11 @@ func (c *lspClient) call(method string, params any, limit time.Duration) (json.R
 	c.waits[id] = ch
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.waits, id); c.mu.Unlock() }()
-	c.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	req := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
+	if params != nil { // shutdown takes none; a null is rejected by some servers
+		req["params"] = params
+	}
+	c.send(req)
 	select {
 	case r := <-ch:
 		if r.err != nil {
@@ -377,8 +392,14 @@ func (c *lspClient) call(method string, params any, limit time.Duration) (json.R
 	}
 }
 
+// notify sends a notification; a nil params is left out (exit has none, and
+// tsgo rejects a null).
 func (c *lspClient) notify(method string, params any) {
-	c.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	m := map[string]any{"jsonrpc": "2.0", "method": method}
+	if params != nil {
+		m["params"] = params
+	}
+	c.send(m)
 }
 
 func fileURI(p string) string { return (&url.URL{Scheme: "file", Path: p}).String() }
@@ -550,6 +571,31 @@ func tslsBin(code string) string {
 }
 
 func tsServerChoice(code string) (string, string) {
+	key := strings.Join([]string{code, os.Getenv("ORCH_TSLS"), os.Getenv("PATH"), os.Getenv("ORCH_CTX_ROOT"), os.Getenv("ORCH_CTX_READONLY")}, "\x00")
+	tsChoiceMu.Lock()
+	m, ok := tsChoiceMemo[key]
+	tsChoiceMu.Unlock()
+	if ok {
+		return m.bin, m.why
+	}
+	bin, why := tsServerChoiceUncached(code)
+	tsChoiceMu.Lock()
+	tsChoiceMemo[key] = tsChoice{bin, why}
+	tsChoiceMu.Unlock()
+	return bin, why
+}
+
+type tsChoice struct{ bin, why string }
+
+// tsChoiceMemo holds the answers of one command: finding the server walks the
+// pnpm stores of every worktree, and a lookup asks several times. A new ctxEnv
+// (one per command) starts it afresh.
+var (
+	tsChoiceMu   sync.Mutex
+	tsChoiceMemo = map[string]tsChoice{}
+)
+
+func tsServerChoiceUncached(code string) (string, string) {
 	if p := os.Getenv("ORCH_TSLS"); p != "" {
 		if real, err := ctxServerBinary(code, p); err == nil {
 			return real, ""
@@ -659,6 +705,8 @@ var tsClientCapabilities = map[string]any{
 	"window": map[string]any{"workDoneProgress": true},
 }
 
+const tsReadinessUnconfirmed = "project readiness unconfirmed; empty response is not proof of absence"
+
 // tsReady bounds the wait for tsserver to load a project. It loads lazily
 // after the first file is opened and answers empty until then (about two
 // seconds on a large app). Zero skips the wait; tests set it so.
@@ -687,64 +735,102 @@ func runTSServer(jobs []tsJob, facts map[tsJob]*symFact, cacheDir, code string, 
 		}
 		return rootList[i] < rootList[j]
 	})
-	c, err := startLSP(bin, rootList[0], "--lsp", "--stdio")
-	if err != nil {
-		return "no TypeScript facts: " + err.Error()
+	// A name given without a file is looked up in every TypeScript project of
+	// the checkout, not only the first: one server, one workspace folder each.
+	var others []string
+	for _, r := range rootsOf(code, "typescript") {
+		abs := filepath.Join(code, filepath.FromSlash(strings.TrimSuffix(r.Dir, "/")))
+		if !slices.Contains(rootList, abs) {
+			others = append(others, abs)
+		}
+	}
+	sort.Strings(others)
+	allRoots := append(slices.Clone(rootList), others...)
+	startTS := func() (*lspClient, json.RawMessage, string) {
+		c, err := startLSP(bin, allRoots[0], "--lsp", "--stdio")
+		if err != nil {
+			return nil, nil, "no TypeScript facts: " + err.Error()
+		}
+		var folders []map[string]string
+		for _, r := range allRoots {
+			folders = append(folders, map[string]string{"uri": fileURI(r), "name": filepath.Base(r)})
+		}
+		raw, err := c.call("initialize", map[string]any{
+			"processId": os.Getpid(), "rootUri": fileURI(allRoots[0]), "rootPath": allRoots[0], "workspaceFolders": folders,
+			"clientInfo": map[string]any{"name": "orch"}, "capabilities": tsClientCapabilities,
+		}, tsRequestLimit)
+		if err != nil {
+			c.close()
+			return nil, nil, "no TypeScript facts: " + err.Error()
+		}
+		var init struct {
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		}
+		if json.Unmarshal(raw, &init) != nil || init.Capabilities == nil {
+			c.close()
+			return nil, nil, "no TypeScript facts: initialize: malformed capabilities result"
+		}
+		c.notify("initialized", map[string]any{})
+		for _, r := range allRoots {
+			if src := firstSource(r); src != "" {
+				c.open(src)
+			}
+		}
+		return c, raw, ""
+	}
+	c, _, note := startTS()
+	if c == nil {
+		return note
 	}
 	defer c.close()
-	var folders []map[string]string
-	for _, r := range rootList {
-		folders = append(folders, map[string]string{"uri": fileURI(r), "name": filepath.Base(r)})
-	}
-	raw, err := c.call("initialize", map[string]any{
-		"processId": os.Getpid(), "rootUri": fileURI(rootList[0]), "rootPath": rootList[0], "workspaceFolders": folders,
-		"clientInfo": map[string]any{"name": "orch"}, "capabilities": tsClientCapabilities,
-	}, tsRequestLimit)
-	if err != nil {
-		return "no TypeScript facts: " + err.Error()
-	}
-	var init struct {
-		Capabilities map[string]json.RawMessage `json:"capabilities"`
-	}
-	if json.Unmarshal(raw, &init) != nil || init.Capabilities == nil {
-		return "no TypeScript facts: initialize: malformed capabilities result"
-	}
-	c.notify("initialized", map[string]any{})
-	for _, r := range rootList {
-		if src := firstSource(r); src != "" {
-			c.open(src)
+	// A project answers with empty results until it has loaded. Rather than
+	// asking again and again, an empty answer makes the server's projects prove
+	// they loaded (their first file has an outline); after that an empty answer
+	// is a real absence.
+	loaded := map[string]bool{}
+	isLoaded := func(r string) bool {
+		if loaded[r] {
+			return true
 		}
+		return false
 	}
-	note, fails := "", 0
-	readyRoots := map[string]bool{}
-	deadlines := map[string]time.Time{}
-	for _, j := range jobs {
-		ready := readyRoots[j.root]
-		deadline := deadlines[j.root]
+	allLoaded := func() bool {
+		for _, r := range allRoots {
+			if !isLoaded(r) {
+				return false
+			}
+		}
+		return true
+	}
+	var deadline time.Time
+	confirm := func() {
 		if deadline.IsZero() {
 			deadline = time.Now().Add(tsReady)
-			deadlines[j.root] = deadline
 		}
+		for _, r := range allRoots {
+			if !isLoaded(r) && tsRootLoaded(c, r, deadline) {
+				loaded[r] = true
+			}
+		}
+	}
+	fails := 0
+	for _, j := range jobs {
 		if fails >= tsMaxFails {
 			break
 		}
 		f, err := tsFacts(c, code, j.sym)
-		// tsserver answers empty until its project has loaded: until a name
-		// has been found, an empty answer is asked again for a while.
-		for !ready && err == nil && len(f.Defs) == 0 && time.Now().Before(deadline) {
-			time.Sleep(500 * time.Millisecond)
+		if err == nil && len(f.Defs) == 0 && !allLoaded() {
+			confirm()
 			f, err = tsFacts(c, code, j.sym)
 		}
-		ready = ready || len(f.Defs) > 0
-		readyRoots[j.root] = ready
 		if err != nil {
 			if fails++; note == "" {
 				note = "TypeScript facts stopped: " + err.Error()
 			}
 			continue
 		}
-		if !ready && len(f.Defs) == 0 {
-			f.Errors = append(f.Errors, j.root+": workspace/symbol: project readiness unconfirmed; empty response is not proof of absence")
+		if len(f.Defs) == 0 && !allLoaded() {
+			f.Errors = append(f.Errors, j.root+": workspace/symbol: "+tsReadinessUnconfirmed)
 		}
 		facts[j] = &f
 		if symFactValid(&f, j.sym) {
@@ -753,6 +839,29 @@ func runTSServer(jobs []tsJob, facts map[tsJob]*symFact, cacheDir, code string, 
 		}
 	}
 	return note
+}
+
+// tsRootLoaded waits, until deadline, for the project of root to have loaded:
+// its first source file then has an outline. A project with no source file has
+// nothing to find and counts as loaded.
+func tsRootLoaded(c *lspClient, root string, deadline time.Time) bool {
+	src := firstSource(root)
+	if src == "" {
+		return true
+	}
+	for {
+		raw, err := c.call("textDocument/documentSymbol", map[string]any{"textDocument": map[string]any{"uri": fileURI(src)}}, tsRequestLimit)
+		if err != nil {
+			return false
+		}
+		if !lspEmpty(raw) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // dropGoMiss removes the Go "no symbol named" fact for a name that TypeScript did find.

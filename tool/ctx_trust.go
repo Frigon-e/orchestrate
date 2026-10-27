@@ -109,8 +109,12 @@ func ctxPathInRoot(code, path string) bool {
 	}
 	for _, r := range ctxRepoRoots(code) {
 		root := evalOr(r)
-		if top, err := git(root, "rev-parse", "--show-toplevel"); err == nil && top != "" {
-			root = evalOr(top)
+		// A directory with its own .git is a checkout root already; only others
+		// need git to find theirs (a call per worktree adds up on a big repo).
+		if _, err := os.Lstat(filepath.Join(root, ".git")); err != nil {
+			if top, err := git(root, "rev-parse", "--show-toplevel"); err == nil && top != "" {
+				root = evalOr(top)
+			}
 		}
 		rel, err := filepath.Rel(root, real)
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
