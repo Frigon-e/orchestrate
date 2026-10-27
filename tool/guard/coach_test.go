@@ -399,7 +399,7 @@ func TestParallelHooksKeepOneLineEachAndOneReminder(t *testing.T) {
 	}
 	box := newSandbox(t)
 	box.writeTranscript([][]spec{calls})
-	setEnv(t, map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": box.state})
+	setEnv(t, map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": box.state, "ORCH_TOOL_GUARD_SKIP": "search-first"})
 	var wg sync.WaitGroup
 	outs := make([]string, len(calls))
 	for j := range calls {
@@ -453,5 +453,20 @@ func TestStateFileKeepsThePythonShape(t *testing.T) {
 	os.WriteFile(filepath.Join(box.state, "coach", "s2.json"), []byte(py), 0o644)
 	if _, stdout := box.run(inProc{}, rg, "tu_0_0", runOpts{session: "s2"}); stdout != "" {
 		t.Errorf("a session that already heard concept-first heard it again: %q", stdout)
+	}
+}
+
+// With deny-search-first on, the first rg of a window gets no concept-first
+// reminder (the block says it), while symbol-via-lsp still fires.
+func TestSearchFirstReplacesConceptFirstReminder(t *testing.T) {
+	box := newSandbox(t)
+	box.writeTranscript([][]spec{{{"bash": "rg -n gateway src"}}, {{"bash": "rg -n FooBar src"}}})
+	_, out := box.run(inProc{}, spec{"bash": "rg -n gateway src"}, "tu_0_0", runOpts{env: map[string]string{"ORCH_TOOL_GUARD_SKIP": ""}})
+	if strings.Contains(out, "jbcontext") {
+		t.Errorf("concept-first fired: %s", out)
+	}
+	_, out = box.run(inProc{}, spec{"bash": "rg -n FooBar src"}, "tu_1_0", runOpts{env: map[string]string{"ORCH_TOOL_GUARD_SKIP": ""}})
+	if !strings.Contains(out, "orch lsp") {
+		t.Errorf("symbol-via-lsp did not fire: %s", out)
 	}
 }

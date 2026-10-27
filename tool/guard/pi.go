@@ -493,7 +493,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	}
 	var out PiResponse
 	// A search outside the repository is not guarded, so it gets no note.
-	if onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) {
+	if onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) && !rgCandidateLine(tool, input, cwd) {
 		marked := false
 		for _, part := range content {
 			marked = marked || strings.Contains(part, "Lookup order:")
@@ -514,7 +514,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	state := openState(session)
 	defer state.close()
 	turn := piTurn(ev)
-	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn)
+	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn, searchFirstActive())
 	if reminder != nil {
 		out.AppendText = append(out.AppendText, coachPrefix+coachText[*reminder])
 	}

@@ -276,3 +276,67 @@ func TestSearchFirstAllCapsWordsAreNotSymbols(t *testing.T) {
 		t.Errorf("MAX_RETRIES must stay a symbol: %d %q", code, msg)
 	}
 }
+
+func TestSearchFirstJudgesEveryRgSegmentAndNamesAllIdentifiers(t *testing.T) {
+	shortWait(t)
+	type want struct {
+		block bool
+		has   []string
+		lacks []string
+	}
+	cases := []struct {
+		name, line string
+		want       want
+	}{
+		{"mixed first segment", `cd REPO && rg -n "func.*applyRefund|refund_unmatched|refund.unmatched" internal/crm docs/crm | head -30; rg -n "MaxAttempts|NextRetry|RetryPolicy" internal/crm internal/platform --glob '!*_test.go' | head -30`,
+			want{true, []string{"jbcontext search", "For the names in it: orch lsp def applyRefund"}, nil}},
+		{"several names", `rg -n "MaxAttempts|NextRetry|RetryPolicy" internal`,
+			want{true, []string{"orch lsp def MaxAttempts NextRetry RetryPolicy", "orch lsp refs MaxAttempts"}, []string{"jbcontext search"}}},
+		{"func prefix", `rg 'func.*applyRefund'`, want{true, []string{"orch lsp def applyRefund"}, nil}},
+		{"type prefix", `rg 'type Gateway\b'`, want{true, []string{"orch lsp def Gateway"}, nil}},
+		{"qualified names", `rg 'pay\.Gateway|Stripe.StartCheckout' src`,
+			want{true, []string{"orch lsp def pay.Gateway Stripe.StartCheckout"}, []string{"jbcontext search"}}},
+		{"piped stdin", `git log | rg foo`, want{false, nil, nil}},
+		{"bare caps", `rg -n FAIL | rg PASS`, want{false, nil, nil}},
+		{"doc only", `rg -n 'ErrNotFound|ErrConflict' -g '*.md'`, want{false, nil, nil}},
+		{"second segment", `ls; rg -n FooBar src`, want{true, []string{"orch lsp def FooBar"}, nil}},
+		{"first not candidate, second is", `rg -F toast src; rg -n 'RetryPolicy' src`, want{true, []string{"orch lsp def RetryPolicy"}, nil}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := sfEnv(t, true)
+			code, msg := sfPre(t, repo, strings.ReplaceAll(c.line, "REPO", repo))
+			if (code == 2) != c.want.block {
+				t.Fatalf("exit %d, want block=%v: %q", code, c.want.block, msg)
+			}
+			for _, h := range c.want.has {
+				if !strings.Contains(msg, h) {
+					t.Errorf("reason lacks %q: %q", h, msg)
+				}
+			}
+			for _, l := range c.want.lacks {
+				if strings.Contains(msg, l) {
+					t.Errorf("reason has %q: %q", l, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestPiLadderNoteSkipsRgTheRuleCoversButKeepsOtherSearches(t *testing.T) {
+	repo := sfEnv(t, true)
+	hasLadder := func(command string) bool {
+		res := PiCoach(piEvent(t, map[string]any{"event": "tool_result", "session": "p1", "cwd": repo, "tool": "bash", "turn": 1,
+			"toolCallId": "c1", "input": map[string]any{"command": command}, "content": []string{"x"}}))
+		return strings.Contains(strings.Join(res.AppendText, "\n"), "Lookup order:")
+	}
+	if hasLadder("rg -n toast src") {
+		t.Error("ladder note on an rg the rule judged")
+	}
+	if !hasLadder("fd toast") {
+		t.Error("no ladder note on fd")
+	}
+	if !hasLadder("rg -F toast src") {
+		t.Error("no ladder note on an rg the rule did not judge")
+	}
+}

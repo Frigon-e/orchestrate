@@ -64,36 +64,33 @@ func conceptRg(args []string) bool {
 	return lower
 }
 
-// firstSegment is the first command of a line after a leading cd.
-func firstSegment(line string) (string, []string) {
-	listing := segments(line, true)
-	if len(listing) > 0 {
-		if name, _ := command(listing[0]); name == "cd" {
-			listing = listing[1:]
+// rgSegments are the args of every rg in a line (any segment, after a cd or a
+// pipe). An rg after a pipe with no path reads stdin, so it filters output and
+// is never a candidate.
+func rgSegments(line string) [][]string {
+	var out [][]string
+	for _, s := range segments(line, true) {
+		name, args := command(s)
+		if name != "rg" {
+			continue
 		}
+		if _, paths, _, _, _ := rgParts(args); s.stdin && len(paths) == 0 {
+			continue
+		}
+		out = append(out, args)
 	}
-	if len(listing) == 0 {
-		return "", nil
-	}
-	return command(listing[0])
+	return out
 }
 
-// rgCandidate is the args of an rg line the rule may apply to.
-func rgCandidate(line, cwd string) ([]string, bool) {
-	if found, ok := lookupShell(line); !ok || found.tool != "rg" {
-		return nil, false
-	}
-	name, args := firstSegment(line)
-	if name != "rg" {
-		return nil, false
-	}
+// rgCandidate: the rg args pass the exact-text, file, repository and doc exclusions.
+func rgCandidate(args []string, cwd string) bool {
 	for _, a := range args {
 		if a == "--" {
 			break
 		}
 		if a == "--files" || a == "--type-list" || a == "--fixed-strings" || a == "-F" ||
 			(flagWord.MatchString(a) && strings.Contains(a[1:], "F")) {
-			return nil, false
+			return false
 		}
 	}
 	_, paths, _, _, _ := rgParts(args)
@@ -106,42 +103,120 @@ func rgCandidate(line, cwd string) ([]string, bool) {
 			full = filepath.Join(cwd, full)
 		}
 		if info, err := os.Stat(full); err == nil && info.Mode().IsRegular() {
-			return nil, false
+			return false
 		}
 		if !insideRepository(cwd, p) {
-			return nil, false
+			return false
 		}
 	}
-	if len(paths) == 0 && !insideRepository(cwd, ".") {
-		return nil, false
-	}
-	return args, true
+	return len(paths) > 0 || insideRepository(cwd, ".")
 }
 
-// searchFirstReason is the block text for an rg line, with the rg pattern, or "".
-// It does not mark the window as blocked; the caller does that once it blocks.
+var (
+	nameRule      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	qualifiedName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$`)
+	defPrefix     = regexp.MustCompile(`^(?:func(?: |\\s[+*])\\\(.*?\\\)(?: |\\s[+*])|(?:func|type|const|var|class|def|interface)(?:\\s[+*]| |\.\*)+)`)
+	nameTrail     = regexp.MustCompile(`\\?\($`)
+)
+
+const maxNames = 6
+
+// splitAlternatives splits a pattern on its top-level |.
+func splitAlternatives(pattern string) []string {
+	var out []string
+	depth, from := 0, 0
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '\\':
+			i++
+		case '(', '[':
+			depth++
+		case ')', ']':
+			depth--
+		case '|':
+			if depth == 0 {
+				out = append(out, pattern[from:i])
+				from = i + 1
+			}
+		}
+	}
+	return append(out, pattern[from:])
+}
+
+// patternNames are the identifiers an rg pattern names, in order, without
+// duplicates and at most maxNames; allNames says every alternative is one.
+// symbolLike are the names that look like symbols rather than plain words: an
+// inner capital, an underscore or a definition prefix.
+func patternNames(pattern string) (names, symbolLike []string, allNames bool) {
+	text := strings.TrimSuffix(strings.TrimPrefix(conceptStrip.Replace(pattern), "^"), "$")
+	allNames = true
+	for _, alt := range splitAlternatives(text) {
+		stripped := defPrefix.ReplaceAllString(alt, "")
+		withPrefix := stripped != alt
+		stripped = strings.ReplaceAll(nameTrail.ReplaceAllString(stripped, ""), `\.`, ".")
+		// pkg.Name or Type.Method is a name orch lsp takes; refund.unmatched is a regex.
+		qualified := qualifiedName.MatchString(stripped) && upperLetter.MatchString(stripped)
+		if !nameRule.MatchString(stripped) && !qualified {
+			allNames = false
+			continue
+		}
+		if contains(names, stripped) || len(names) >= maxNames {
+			continue
+		}
+		names = append(names, stripped)
+		if withPrefix || qualified || strings.Contains(stripped, "_") || capital.MatchString(stripped[1:]) {
+			symbolLike = append(symbolLike, stripped)
+		}
+	}
+	return names, symbolLike, allNames
+}
+
+func allBare(names []string) bool {
+	for _, n := range names {
+		if !upperWord.MatchString(n) {
+			return false
+		}
+	}
+	return len(names) > 0
+}
+
+// searchFirstReason is the block text for the first rg in a line the rule
+// blocks, with that rg's pattern, or "". It does not mark the window as blocked;
+// the caller does that once it blocks.
 func searchFirstReason(line, cwd string, st *State, t tools) (string, string) {
 	if st.ConceptSeen || st.SearchFirstPrompt == st.Prompt+1 {
 		return "", ""
 	}
-	args, ok := rgCandidate(line, cwd)
-	if !ok {
+	for _, args := range rgSegments(line) {
+		if !rgCandidate(args, cwd) {
+			continue
+		}
+		if reason, pattern := searchFirstSegment(args, cwd, st, t); reason != "" {
+			return reason, pattern
+		}
+	}
+	return "", ""
+}
+
+func searchFirstSegment(args []string, cwd string, st *State, t tools) (string, string) {
+	pattern, paths, globs, types, word := rgParts(args)
+	if docOnly(globs, types, paths) {
 		return "", ""
 	}
-	pattern, _, _, _, _ := rgParts(args)
-	name := symbolName(args)
-	if upperWord.MatchString(name) {
-		name = "" // FAIL, TODO: exact text, not a symbol worth an lsp lookup
+	names, symbolLike, allNames := patternNames(pattern)
+	if word {
+		symbolLike = names
 	}
-	if name != "" {
-		if !t.orch {
-			return "", ""
-		}
-		return Marker + " (" + searchFirstName + "): rg finds text, not uses. For the symbol " + name +
-			" run orch lsp def " + name + " or orch lsp refs " + name + " (also callers, impls).\n" +
-			"If you need the text itself (strings, comments, config), run the same rg again; this guard blocks once per user message.", pattern
+	once := "this guard blocks once per user message."
+	if allNames && len(symbolLike) > 0 && !allBare(names) && t.orch {
+		return Marker + " (" + searchFirstName + "): rg finds text, not definitions or uses. Run: orch lsp def " + strings.Join(names, " ") +
+			" (several names in one call), or orch lsp refs " + names[0] + " for uses.\n" +
+			"If you need the text itself (strings, comments, config), run the same rg again; " + once, pattern
 	}
-	if !conceptRg(args) || !onPath("jbcontext") {
+	// A concept, or a mix of names and other text, goes to jbcontext; names alone
+	// that are not symbol-like (FAIL, toast) are exact text.
+	mixed := !allNames && len(names) > 0 && !allBare(names)
+	if !(conceptRg(args) || mixed) || !onPath("jbcontext") {
 		return "", ""
 	}
 	root := gitRoot(cwd)
@@ -159,9 +234,14 @@ func searchFirstReason(line, cwd string, st *State, t tools) (string, string) {
 	if !indexed {
 		return "", ""
 	}
+	extra := ""
+	if !allNames && t.orch && len(symbolLike) > 0 {
+		extra = "For the names in it: orch lsp def " + strings.Join(symbolLike, " ") + "\n"
+	}
 	return Marker + " (" + searchFirstName + "): this rg looks for where code lives, and no jbcontext or orch lsp lookup ran since the last user message.\n" +
 		"Ask jbcontext first: jbcontext search \"Code that <does what you are looking for>\" --limit 3 (one behavior per query; send several queries as parallel calls in one message).\n" +
-		"If you already know where it is or need exact text, run the same rg again; this guard blocks once per user message.", pattern
+		extra +
+		"If you already know where it is or need exact text, run the same rg again; " + once, pattern
 }
 
 const searchFirstPoll = 25 * time.Millisecond
@@ -190,10 +270,14 @@ func searchFirstActive() bool {
 	return !skip[searchFirstID] && !skip[searchFirstName]
 }
 
-// searchFirstRelevant: only these lines need the session state.
+// searchFirstRelevant: only these lines need the session state - an rg in any
+// segment, or a good lookup first.
 func searchFirstRelevant(line string) bool {
+	if len(rgSegments(line)) > 0 {
+		return true
+	}
 	found, ok := lookupShell(line)
-	return ok && (found.tool == "rg" || isGood(found.tool))
+	return ok && isGood(found.tool)
 }
 
 // searchFirstLog records a block of the rule, unless logging is off.
@@ -223,3 +307,17 @@ func ladderLog(harness, session, repo string) {
 }
 
 func nowTS() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000000Z") }
+
+// rgCandidateLine: a pi shell call holding an rg that deny-search-first judges, so
+// the rule's block already told the model where to look and the ladder note is noise.
+func rgCandidateLine(tool string, input map[string]any, cwd string) bool {
+	if tool != "bash" || !searchFirstActive() {
+		return false
+	}
+	for _, args := range rgSegments(jsString(input["command"])) {
+		if rgCandidate(args, cwd) {
+			return true
+		}
+	}
+	return false
+}

@@ -120,7 +120,8 @@ func (inProc) pre(t *testing.T, payload []byte, pathDir string, env map[string]s
 }
 
 func (inProc) coach(t *testing.T, payload []byte, stateDir string, env map[string]string) (int, string) {
-	e := map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": stateDir}
+	// The shared coach cases expect concept-first, which deny-search-first replaces.
+	e := map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": stateDir, "ORCH_TOOL_GUARD_SKIP": "search-first"}
 	for k, v := range env {
 		e[k] = v
 	}
@@ -185,7 +186,11 @@ func (goBinary) pre(t *testing.T, payload []byte, pathDir string, env map[string
 }
 
 func (goBinary) coach(t *testing.T, payload []byte, stateDir string, env map[string]string) (int, string) {
-	code, stdout, _ := execHook(t, childEnv(env, "ORCH_TOOL_GUARD_STATE_DIR="+stateDir), payload, guardBin, "coach")
+	e := map[string]string{"ORCH_TOOL_GUARD_SKIP": "search-first"}
+	for k, v := range env {
+		e[k] = v
+	}
+	code, stdout, _ := execHook(t, childEnv(e, "ORCH_TOOL_GUARD_STATE_DIR="+stateDir), payload, guardBin, "coach")
 	return code, stdout
 }
 

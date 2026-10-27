@@ -73,9 +73,10 @@ func isGood(tool string) bool   { return tool == "jbcontext" || strings.HasPrefi
 
 func strPtr(s string) *string { return &s }
 
-// step advances the state for one lookup and returns the reminder that fires,
+// step advances the state for one lookup and returns the reminder that fires
+// (skipConcept drops concept-first, which deny-search-first already covers),
 // and whether the reminder before it was followed.
-func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders bool) (*string, *bool) {
+func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders, skipConcept bool) (*string, *bool) {
 	var followed *bool
 	if reminders && s.Pending != nil && *s.Pending != "" {
 		var f bool
@@ -101,7 +102,7 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 	var candidates []string
 	if isSearch(tool) && !s.FirstSearchDone {
 		s.FirstSearchDone = true
-		if !s.ConceptSeen {
+		if !s.ConceptSeen && !skipConcept {
 			candidates = append(candidates, "concept-first")
 		}
 	}
@@ -444,7 +445,7 @@ func Coach(ev *Event, stdout io.Writer) error {
 		return err
 	}
 	defer f.Close()
-	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching)
+	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching, searchFirstActive())
 	if err := saveState(f, state); err != nil {
 		return err
 	}
