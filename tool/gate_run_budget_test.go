@@ -402,7 +402,6 @@ func TestGateRunBudgetDefaultCallsAndPrefixes(t *testing.T) {
 				t.Fatal(calls)
 			}
 			base := newGatePass("a", "package", "shared", "own", "TAG", "task", `{}`, nil)
-			base.ctxTool = true
 			before, err := gateAgentPass(h.repo, "pi", base)
 			if err != nil {
 				t.Fatal(err)

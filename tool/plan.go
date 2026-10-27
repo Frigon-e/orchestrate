@@ -346,7 +346,6 @@ func cmdPlan(a *app, args []string) error {
 	fs := a.flags("plan")
 	dry := fs.Bool("dry-run", false, "check the spec and show what would be created; write nothing")
 	degraded := fs.Bool("degraded", false, "allow degraded fallback profiles (ask the user first)")
-	noCtx := fs.Bool("no-ctx", false, "do not add the code-built facts section to the briefs")
 	skipGate := fs.Bool("skip-gate", false, "plan without a passed `orch gate` (only with the user's agreement)")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
@@ -486,7 +485,6 @@ func cmdPlan(a *app, args []string) error {
 			continue
 		}
 		o := withDegraded(sp.taskOpts(p, rel, baseBranch), *degraded)
-		o.noCtx = *noCtx
 		if intBranch != "" {
 			o.base = intBranch
 			if p.kind == "ship" {

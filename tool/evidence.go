@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// These records are an additive contract, not a replacement for ctxView or the
+// These records are an additive contract, not a replacement for the
 // legacy gate JSON. Nested value objects (ranges, counts and routes) inherit the
 // containing record's version. Subject identity reuses A2's gateSubject verbatim.
 const evidenceSchemaVersion = 1
@@ -75,7 +75,7 @@ type evidenceLookup struct {
 	Counts          lookupCounts         `json:"counts"`
 	Unit            string               `json:"unit"`
 	ExecutionStatus lookupExecution      `json:"execution_status"`
-	// Status uses ctxView's existing vocabulary, and is absent when no backend
+	// Status uses the lookup status vocabulary (ok, empty, partial, failed), and is absent when no backend
 	// ran. ExecutionStatus separately distinguishes unrequested/unavailable.
 	Status    string            `json:"status,omitempty"` // ok, empty, partial, failed
 	CountKind evidenceCountKind `json:"count_kind"`

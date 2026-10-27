@@ -61,50 +61,36 @@ actors and next actions remain visible even when a higher-priority state wins.
 Only a current, subject-bound `pass` whose recorded inputs still reduce to
 pass can authorize `orch plan`. Default `orch gate` stdout is the v2 TOON
 selection; `--human` selects readable JSON and `--json` selects machine JSON of
-the same facts. This does not change `orch ctx` output or its legacy JSON
-contract.
+the same facts.
 
 `--runner pi:<model>,claude:haiku:low` overrides gate choices for one run;
 `--degraded` permits approved weaker choices.
 
 ## Context tools for passes
 
-Gate agents use plain shell lookups, not a server or generated adapter: `jbcontext
-search`, `orch lsp`, `rg` and `fd`.
-`--ctx-tool on|off` defaults to on: a read-only notice is first in the shared
-prompt prefix, `ORCH_CTX_ROOT` pins lookups to the code checkout, and a PATH
-shim resolves `orch` to this binary. `--ctx-shell ctx-only` is the default for
-Pi: native `read` plus a shell limited to one lookup command per call. Pi starts with
-read alone; the loaded guard enables bash and acknowledges activation. If the
-extension cannot be written or loaded, the pass is an execution failure, never
-an open-shell fallback. `--ctx-shell open` restores Pi's native read/search
-tools and unrestricted bash. Claude ignores this setting and adds Bash with the
-`Bash(jbcontext search:*)`, `Bash(orch lsp:*)`, `Bash(rg:*)` and `Bash(fd:*)`
-permissions, plus an `orch ctx-only-check` PreToolUse hook that applies Pi's
-ctx-only refusal to every Bash call. Send independent lookups as parallel calls in one message; read
-what they return before searching again. With ctx off, the original read
-and search tools remain and the ctx notice/env are absent.
+Gate passes get no lookup CLI and no shell: pi runs with `read,grep,find,ls`
+and Claude with its native `Read,Grep,Glob`. The gate gathers its own facts
+(enrichment) and puts them in the prompt. `ORCH_CTX_ROOT` and
+`ORCH_CTX_READONLY` still pin retrieval to the code checkout where it runs.
 
 Repository context files are never loaded: pi gets `--no-context-files`;
 Claude uses `--settings '{"claudeMdExcludes":["**"]}'` instead of `--bare`, so
 disabling CLAUDE.md discovery does not disable subscription authentication.
-The checklist stays in the task text, not in a context file. `ctx_tool` and
-the effective `ctx_shell` (`open` with ctx off) are in gate/experiment
-records, reports, and compare output. Old records without `ctx_shell` still
-display `open`.
+The checklist stays in the task text, not in a context file. Records written
+while `--ctx-tool` and `--ctx-shell` existed still load, and their `ctx_tool`
+and `ctx_shell` still show in reports and compare output; new records carry
+neither.
 
-Every runner, including ctx-off runs, gets a post-pass unchanged-checkout
+Every runner gets a post-pass unchanged-checkout
 check against the pre-pass baseline: Git status, diff and untracked-file
 content hashes. A change discards model results, cancels pending/in-flight
 passes, sets state to `stale` (or `error` if the subject cannot be checked),
 and puts a loud warning in stdout/report. The record names changed files and
 passes in flight, not a proven culprit. Files are never reverted. Ignored
 files and writes outside the checkout are not covered; edits restored before
-the check can also escape detection. Pi's default ctx-only shell and Claude's
-ctx-only hook block unrelated commands, pipes and redirects. With `--ctx-shell open`, its shell is
-unrestricted and can write ignored/outside files or use the network. Native
-read can still read outside the repo in either mode. The guard, prompt, pinned
-read-only ctx mode and post-pass check are not an operating-system sandbox.
+the check can also escape detection. Passes have no shell, but native read can
+still read outside the repo. The prompt and the post-pass check are not an
+operating-system sandbox.
 
 ## Options and experiments
 

@@ -44,8 +44,8 @@ func TestPlanSubjectApprovalLegacyRefused(t *testing.T) {
 	if err := writeGate(dir, &legacy); err != nil {
 		t.Fatal(err)
 	}
-	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "Historical result: **pass** (legacy record, not a v2 state)", "off (legacy)")
-	code, out := h.run("plan", "spec.md", "--dry-run", "--no-ctx")
+	wantContains(t, string(mustRead(t, filepath.Join(dir, "report.md"))), "Historical result: **pass** (legacy record, not a v2 state)")
+	code, out := h.run("plan", "spec.md", "--dry-run")
 	if code != 1 {
 		t.Fatalf("legacy approval authorized planning: exit %d\n%s", code, out)
 	}
@@ -114,7 +114,7 @@ func TestGateSubjectContentAndModes(t *testing.T) {
 				if !gatePassed(h.a.siteRoot(t), h.repo, src) {
 					t.Fatal("unchanged subject lost approval")
 				}
-				h.must("plan", "spec.md", "--dry-run", "--no-ctx")
+				h.must("plan", "spec.md", "--dry-run")
 				switch kind {
 				case "body", "commit":
 					writeFiles(t, h.repo, map[string]string{repo.path: repo.after})
@@ -150,7 +150,7 @@ func TestGateSubjectContentAndModes(t *testing.T) {
 				if gatePassed(h.a.siteRoot(t), h.repo, src) {
 					t.Fatal("changed subject reused approval")
 				}
-				code, out := h.run("plan", "spec.md", "--no-ctx")
+				code, out := h.run("plan", "spec.md")
 				if code != 1 {
 					t.Fatalf("stale approval authorized planning: %d\n%s", code, out)
 				}
@@ -183,7 +183,7 @@ func TestGateSubjectRepoAndWorktreeIdentity(t *testing.T) {
 	if gatePassed(root, wt, src) {
 		t.Fatal("linked worktree reused approval")
 	}
-	code, out := h.run("plan", filepath.Join(wt, "spec.md"), "--dry-run", "--no-ctx")
+	code, out := h.run("plan", filepath.Join(wt, "spec.md"), "--dry-run")
 	if code != 1 {
 		t.Fatalf("worktree approved: %d\n%s", code, out)
 	}
@@ -191,7 +191,7 @@ func TestGateSubjectRepoAndWorktreeIdentity(t *testing.T) {
 	// A review in the linked worktree is consumed against that worktree, even
 	// when the command starts in the main checkout.
 	saveSubjectApproval(t, h, wt)
-	h.must("plan", filepath.Join(wt, "spec.md"), "--dry-run", "--no-ctx")
+	h.must("plan", filepath.Join(wt, "spec.md"), "--dry-run")
 }
 
 func TestGateSubjectRuntimeArtifacts(t *testing.T) {
@@ -253,16 +253,16 @@ func TestGateSubjectRecordsReviewAndReusesApproval(t *testing.T) {
 	h := setup(t)
 	dir := h.gateRepo(1)
 	h.fakePi(gatePasses(nil))
-	h.must("gate", "spec.md", "--ctx-shell", "open")
+	h.must("gate", "spec.md")
 	rec := readRecord(t, dir)
-	if !rec.Subject.valid() || rec.ReviewPolicy == nil || rec.ReviewPolicy.CtxShell != "open" || rec.CtxShell != "open" {
+	if !rec.Subject.valid() || rec.ReviewPolicy == nil || rec.ReviewPolicy.CtxShell != "" || rec.CtxShell != "" {
 		t.Fatalf("unbound review: %+v", rec)
 	}
 	src := mustRead(t, filepath.Join(h.repo, "spec.md"))
 	if !gatePassed(h.a.siteRoot(t), h.repo, src) {
 		t.Fatal("actual review not reusable")
 	}
-	h.must("plan", "spec.md", "--dry-run", "--no-ctx")
+	h.must("plan", "spec.md", "--dry-run")
 	if err := os.WriteFile(filepath.Join(h.repo, "unreadable"), []byte("private"), 0000); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestGateSubjectInvalidAndFullSpecIdentity(t *testing.T) {
 			if gatePassed(h.a.siteRoot(t), h.repo, src) {
 				t.Fatal("invalid binding authorized planning")
 			}
-			code, out := h.run("plan", "spec.md", "--dry-run", "--no-ctx")
+			code, out := h.run("plan", "spec.md", "--dry-run")
 			if code != 1 {
 				t.Fatalf("invalid approval: %d %s", code, out)
 			}
@@ -329,17 +329,16 @@ func TestGateSubjectRuntimeReview(t *testing.T) {
 	h.gateRepo(1)
 	dir := gateDir(h.a.siteRoot(t), specHash(mustRead(t, filepath.Join(h.repo, "spec.md"))))
 	h.fakePi(gatePasses(nil))
-	h.must("gate", "spec.md", "--ctx-tool", "off", "--ctx-shell", "ctx-only")
+	h.must("gate", "spec.md")
 	rec := readRecord(t, dir)
-	// ctx-only has no effect when the ctx tool is off. Record the effective
-	// policy rather than falsely claiming that the shell was restricted.
-	if rec.ReviewPolicy == nil || rec.CtxShell != "open" || rec.ReviewPolicy.CtxShell != "open" || rec.ReviewPolicy.CtxTool != "off" {
+	// The review policy no longer records any ctx setting.
+	if rec.ReviewPolicy == nil || rec.CtxShell != "" || rec.ReviewPolicy.CtxShell != "" || rec.ReviewPolicy.CtxTool != "" {
 		t.Fatalf("effective review policy: %+v", rec.ReviewPolicy)
 	}
 	if !rec.Subject.valid() || rec.Subject.RuntimePath != ".gate-runtime" {
 		t.Fatalf("runtime binding: %+v", rec.Subject)
 	}
-	h.must("plan", "spec.md", "--dry-run", "--no-ctx")
+	h.must("plan", "spec.md", "--dry-run")
 }
 
 func TestCheckoutIgnoredSpecialFiles(t *testing.T) {

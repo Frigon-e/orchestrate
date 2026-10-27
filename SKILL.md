@@ -116,15 +116,10 @@ the reuse checklist: `references/gate.md`. Model roles and connector health:
 Send independent lookups as parallel calls in one message. `grep` (also
 `egrep`, `fgrep`, `ag`, `git grep`), a bare `cat FILE` and `sed -n` over one
 file stay blocked; plain `rg` is allowed, and plain `find` only when `fd` is
-not installed. `orch ctx find|sym|text|batch` remain
-for scripts and the gate planner but are not what agents are taught; `orch ctx
-brief` still writes task briefs. Check `status` (`ok|empty|partial|failed`),
-`count_kind`, scope and cuts on ctx output: a missing server is not zero
-callers. Repo-local servers need `ctx_trust = ["/absolute/repo"]` in user
-config; `ctx_deny` wins.
-`orch ctx status` shows the index and `orch ctx refresh` updates it; `orch
-plan` writes facts into briefs (`--no-ctx` skips them); `orch doctor` reports
-readiness.
+not installed. A missing language server is not zero callers (`orch lsp` exits
+2). Repo-local servers need `ctx_trust = ["/absolute/repo"]` in user config;
+`ctx_deny` wins. `orch doctor` reports retrieval readiness (index, watch,
+tools).
 
 What makes a brief work (template: `references/task-template.md`):
 - **Intent** in the user's words. The lead falls back on it when the spec

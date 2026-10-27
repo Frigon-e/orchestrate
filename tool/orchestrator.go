@@ -27,7 +27,6 @@ func cmdNew(a *app, args []string) error {
 	base := fs.String("base", "", "base branch (default: repo config, else the current branch)")
 	deps := fs.String("depends", "", "comma-separated task ids that must be done first")
 	degraded := fs.Bool("degraded", false, "allow a degraded fallback profile (ask the user first)")
-	noCtx := fs.Bool("no-ctx", false, "do not add the code-built facts section")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -45,7 +44,7 @@ func cmdNew(a *app, args []string) error {
 			depList = append(depList, d)
 		}
 	}
-	path, err := newTask(s, taskOpts{id: pos[0], kind: *kind, harness: *harness, model: *model, effort: *effort, base: *base, deps: depList, degraded: *degraded, noCtx: *noCtx})
+	path, err := newTask(s, taskOpts{id: pos[0], kind: *kind, harness: *harness, model: *model, effort: *effort, base: *base, deps: depList, degraded: *degraded})
 	if err != nil {
 		return err
 	}
@@ -63,7 +62,6 @@ type taskOpts struct {
 	owns                                   []string
 	degraded                               bool
 	integration, specHash                  string // set by orch plan
-	noCtx                                  bool   // --no-ctx: no "Facts gathered by code" section
 }
 
 // newTask scaffolds task.md for one task and returns its path.
@@ -148,11 +146,6 @@ func newTask(s site, o taskOpts) (string, error) {
 	}
 	for name, body := range o.fill {
 		text = fillSection(text, name, body)
-	}
-	if !o.noCtx {
-		if facts := taskFacts(s, o); facts != "" {
-			text = strings.Replace(text, "\n# Acceptance\n", "\n# Facts gathered by code\n\n"+facts+"\n\n# Acceptance\n", 1)
-		}
 	}
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		return "", err

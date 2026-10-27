@@ -9,7 +9,7 @@ no inherited model choices, even when a command supplies a runner override.
 
 ```toml
 [roles.gate]
-# Pi gate passes default to ctx-only with ctx enabled; CLI --ctx-shell open opts out.
+# Gate passes get no lookup CLI or shell; the gate gathers its own facts.
 use = [
   { harness = "pi", model = "openrouter/~deepseek/deepseek-flash-latest" },
   { harness = "claude", model = "haiku", effort = "low" },
@@ -359,8 +359,7 @@ permissions and disabled slash commands. The strict empty server configuration
 excludes ambient servers, and the gate runs no ctx server. Tool-less tasks stay
 tool-less even with ctx enabled. The ctx tool, shell modes, repository-context
 exclusion and the unchanged-checkout check are in `gate.md` (Context tools for
-passes); the shim, environment and guard rules are in `context.md`.
+passes); the guard rules are in `context.md`.
 
-`--ctx-tool on --ctx-shell ctx-only` is the default and no config key changes
-it. Keep gate state artifacts outside the code checkout or ignored: the
+Keep gate state artifacts outside the code checkout or ignored: the
 unchanged-checkout scan does not exempt non-ignored orch artifacts.

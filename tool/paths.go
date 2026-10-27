@@ -71,9 +71,9 @@ type userConfig struct {
 	// AllowedWhenLimited adds models to the list only while a harness is
 	// limited, for example Haiku while pi is down.
 	AllowedWhenLimited []limitedAllow `toml:"allowed_when_limited"`
-	// CtxLangs adds or overrides languages for `orch ctx` (see ctx_lang.go).
+	// CtxLangs adds or overrides languages for `orch lsp` and retrieval (see code_lang.go).
 	CtxLangs []langCfg `toml:"ctx_langs"`
-	// CtxIndex is the policy for the jbcontext index behind `orch ctx`: full
+	// CtxIndex is the policy for the jbcontext index behind retrieval: full
 	// (the default: build the index when a repo has none and refresh a stale
 	// one), incremental (refresh an existing index only, never a first full
 	// index) or off (never call jbcontext). CtxDeny lists repositories (paths)

@@ -132,7 +132,7 @@ for (const c of JSON.parse(process.argv[1])) {
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), out }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, cases)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_CTX_ONLY_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off",
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_LOOKUP_READY=", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off",
 		"ORCH_GUARD_BIN=" + guardBin(t), "ORCH_TOOL_GUARD_STATE_DIR=" + filepath.Join(dir, "state"), "ORCH_TOOL_GUARD_SKIP=search-first"}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
@@ -235,9 +235,8 @@ func TestCtxReminderDecisionTable(t *testing.T) {
 		{Name: "builtin find", Tool: "find", Input: map[string]any{"pattern": "*.go"}, Blocks: "builtin-find", Needs: ladder},
 		{Name: "builtin ls", Tool: "ls", Input: map[string]any{"path": "."}, Remind: true},
 		// Everything else stays quiet.
-		{Name: "orch ctx text", Tool: "bash", Input: bash(`orch ctx text Gateway`)},
-		{Name: "orch ctx find", Tool: "bash", Input: bash(`orch ctx find "Code that saves a card"`)},
-		{Name: "orch ctx batch quoted grep", Tool: "bash", Input: bash(`orch ctx batch -q "text:grep glob=internal/**"`)},
+		{Name: "orch lsp def", Tool: "bash", Input: bash(`orch lsp def Gateway`)},
+		{Name: "orch lsp symbols", Tool: "bash", Input: bash(`orch lsp symbols internal/gateway.go`)},
 		{Name: "go test", Tool: "bash", Input: bash(`go test ./...`)},
 		{Name: "plain ls", Tool: "bash", Input: bash(`ls`)},
 		{Name: "echo quoted rg", Tool: "bash", Input: bash(`echo "rg"`)},
@@ -477,7 +476,7 @@ func TestCtxReminderGuardDenyGrepRg(t *testing.T) {
 		{Name: "cat f | rg TODO", Tool: "bash", Input: bash(`cat f.go | rg TODO`), Remind: true},
 		{Name: "grep stdin", Tool: "bash", Input: bash(`grep foo`), Remind: true},
 		{Name: "echo quoted grep", Tool: "bash", Input: bash(`echo "grep"`)},
-		{Name: "orch ctx text grep", Tool: "bash", Input: bash(`orch ctx text grep --glob internal/**`)},
+		{Name: "orch lsp def grep", Tool: "bash", Input: bash(`orch lsp def grep`)},
 	}
 	got := runCtxReminder(t, nil, cases)
 	reminded, quiet, blocked := checkReminder(t, got, cases)
@@ -624,25 +623,6 @@ func TestCtxReminderGuardBuiltinSearch(t *testing.T) {
 		checkReminder(t, got, off)
 	})
 
-	t.Run("silent in the ctx-only gate shell", func(t *testing.T) {
-		cases := []reminderCase{
-			{Name: "grep", Tool: "grep", Input: map[string]any{"pattern": "Gateway"}},
-			{Name: "find", Tool: "find", Input: map[string]any{"pattern": "*.go"}},
-		}
-		got := runCtxReminder(t, []string{"ORCH_CTX_ONLY_READY=/tmp/ready"}, cases)
-		if len(got.Handlers) != 0 {
-			t.Fatalf("the extension acted inside the ctx-only shell: %v", got.Handlers)
-		}
-		for _, c := range cases {
-			if reason := got.Out[c.Name].Block; reason != "" {
-				t.Errorf("%q was blocked inside the ctx-only shell: %s", c.Name, reason)
-			}
-			if added := got.Out[c.Name].Added; added != "" {
-				t.Errorf("%q got a reminder inside the ctx-only shell: %q", c.Name, added)
-			}
-		}
-	})
-
 }
 
 func TestCtxReminderBuiltinRepositoryBoundary(t *testing.T) {
@@ -680,7 +660,7 @@ func TestCtxReminderBuiltinRepositoryBoundary(t *testing.T) {
 // Without orch on PATH every rule still blocks, pointing at the built-ins, and
 // no note is appended because there is nothing to name. rg is the exception:
 // with no orch it is the preferred grep, so it is never blocked.
-func TestCtxReminderSilentInCtxOnlyShellAndGuardsWithoutOrch(t *testing.T) {
+func TestCtxReminderGuardsWithoutOrch(t *testing.T) {
 	t.Run("no orch on PATH", func(t *testing.T) {
 		cases := []reminderCase{
 			{Name: "find | grep", Tool: "bash", Input: bash(`find . -name "*.go" | grep Gateway`), Blocks: "find-chains", Needs: []string{"grep", "find"}},
@@ -700,13 +680,6 @@ func TestCtxReminderSilentInCtxOnlyShellAndGuardsWithoutOrch(t *testing.T) {
 			t.Errorf("a block reason named orch ctx although orch is not on PATH: %q", got.Out["find | grep"].Block)
 		}
 	})
-	t.Run("ctx-only gate shell", func(t *testing.T) {
-		cases := []reminderCase{{Name: "rg", Tool: "bash", Input: bash(`rg -n Gateway .`)}}
-		got := runCtxReminder(t, []string{"ORCH_CTX_ONLY_READY=/tmp/ready"}, cases)
-		if len(got.Handlers) != 0 || got.Out["rg"].Added != "" || got.Out["rg"].Block != "" {
-			t.Fatalf("extension acted inside the ctx-only shell: %v %+v", got.Handlers, got.Out["rg"])
-		}
-	})
 }
 
 // A blocked command stays blocked on every retry, so the model learns not to
@@ -720,7 +693,7 @@ func TestCtxReminderLoopProtectionAndSwitches(t *testing.T) {
 			{Name: "grep dir", Tool: "bash", Input: bash(`grep -rn Foo internal/`), Blocks: "grep-rg", Needs: ladder},
 			{Name: "grep dir retry", Tool: "bash", Input: bash(`grep -rn Foo internal/`), Blocks: "grep-rg", Needs: ladder},
 			{Name: "grep dir third", Tool: "bash", Input: bash(`grep -rn Foo internal/`), Blocks: "grep-rg", Needs: ladder, Repeat: true},
-			{Name: "orch ctx call", Tool: "bash", Input: bash(`orch ctx text Gateway`)},
+			{Name: "orch lsp call", Tool: "bash", Input: bash(`orch lsp def Gateway`)},
 			{Name: "cat one file", Tool: "bash", Input: bash(`cat notes.txt`), Blocks: "cat-head-tail", Needs: []string{"read"}},
 		}
 		got := runCtxReminder(t, nil, cases)

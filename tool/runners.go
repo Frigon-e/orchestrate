@@ -447,7 +447,6 @@ func runClaude(repo string, p profile, pass gatePass, session string) (string, e
 	cmd := processCommandContext(ctx, runnerBinary("claude"), append(args, pass.prompt)...)
 	defer cmd.Cancel()
 	cmd.Dir = repo
-	cmd.Env = agentEnv(nil, pass.cli.Env)
 	// Saving output as it arrives also makes the existing stall detector usable.
 	f, err := os.Create(filepath.Join(session, "claude.json"))
 	if err != nil {

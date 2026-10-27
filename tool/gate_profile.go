@@ -95,8 +95,8 @@ type sessionProfile struct {
 	Repeated    []pathCount    `json:"repeated_reads"`
 	SpecReads   int            `json:"spec_reads"`
 	// Shell splits the bash calls by what they ran (see shellKind);
-	// BatchLookups counts the -q lookups inside orch ctx batch calls; the
-	// reads are split by whether they named a range.
+	// BatchLookups is read-only legacy: the -q lookups counted inside
+	// orch ctx batch calls before that command was removed; the reads are split by whether they named a range.
 	Shell               map[string]int `json:"shell,omitempty"`
 	BatchLookups        int            `json:"batch_lookups,omitempty"`
 	RangedReads         int            `json:"ranged_reads"`
@@ -169,26 +169,12 @@ func (p sessionProfile) totalReads() (int, bool) {
 
 var (
 	shellWord = regexp.MustCompile(`[A-Za-z0-9_.-]+`)
-	// pipedRe finds a pipe, a list separator or &&; 2>&1 is not one.
-	pipedRe     = regexp.MustCompile(`[|;]|&&`)
-	batchLookup = regexp.MustCompile(`(^|\s)-q\s`)
 )
 
-// shellKind names what a bash command ran: orch ctx (batch, another lookup, or
-// either one piped into another tool), a raw search, a raw read of file text, or
-// something else.
+// shellKind names what a bash command ran: a raw search, a raw read of file
+// text, or something else.
 func shellKind(cmd string) string {
 	c := strings.TrimSpace(cmd)
-	if strings.Contains(c, "orch ctx") {
-		kind := "orch ctx"
-		if strings.Contains(c, "orch ctx batch") {
-			kind = "orch ctx batch"
-		}
-		if pipedRe.MatchString(c) {
-			kind += " piped"
-		}
-		return kind
-	}
 	for _, seg := range regexp.MustCompile(`&&|\|\||[|;]`).Split(c, -1) {
 		switch w := shellWord.FindString(strings.TrimSpace(seg)); w {
 		case "grep", "egrep", "fgrep", "rg", "find", "fd", "ls", "tree":
@@ -217,11 +203,7 @@ func profileSession(dir, specRel string) (sessionProfile, bool) {
 				}
 				p.Calls[b.Name]++
 				if b.Name == "bash" && b.Arguments.Command != "" {
-					kind := shellKind(b.Arguments.Command)
-					p.Shell[kind]++
-					if kind == "orch ctx batch" || kind == "orch ctx batch piped" {
-						p.BatchLookups += max(len(batchLookup.FindAllString(b.Arguments.Command, -1)), 1)
-					}
+					p.Shell[shellKind(b.Arguments.Command)]++
 				}
 				if b.Name == "read" {
 					if b.Arguments.Offset > 0 || b.Arguments.Limit > 0 {
@@ -289,13 +271,9 @@ func (p sessionProfile) String() string {
 		rep = append(rep, fmt.Sprintf("%s x%d", r.Path, r.Count))
 	}
 	var shell []string
-	for _, k := range []string{"orch ctx batch", "orch ctx", "orch ctx batch piped", "orch ctx piped", "shell search", "shell read", "shell other"} {
+	for _, k := range []string{"shell search", "shell read", "shell other"} {
 		if n := p.Shell[k]; n > 0 {
-			if k == "orch ctx batch" {
-				shell = append(shell, fmt.Sprintf("%s %d (%d lookups)", k, n, p.BatchLookups))
-			} else {
-				shell = append(shell, fmt.Sprintf("%s %d", k, n))
-			}
+			shell = append(shell, fmt.Sprintf("%s %d", k, n))
 		}
 	}
 	out := fmt.Sprintf("requests %d; calls: %s; result chars %d; largest: %s; read more than once: %s; spec reads %d",

@@ -14,7 +14,7 @@ import (
 
 // orch lsp answers symbol questions by name in one call: definition,
 // references, callers, implementations, a file outline and hover. Definitions
-// and references come from the same path as `orch ctx sym` (ctxEnv.Symbols:
+// and references come from the same path as the shared code engine (codeEnv.Symbols:
 // gopls, the TypeScript server, the registry languages' servers, then the
 // declaration scan); callers, implementations of types, outlines and hover ask
 // a language server directly, one server per language and project root for the
@@ -134,7 +134,7 @@ func cmdLsp(a *app, args []string) error {
 	case limit < 1:
 		return &exitError{code: 2, msg: "--limit must be at least 1"}
 	}
-	e, err := ctxEnvFor(a)
+	e, err := codeEnvFor(a)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func lspRender(verb string, an lspAnswer) string {
 
 // lspRun is one orch lsp call: the environment and the servers started so far.
 type lspRun struct {
-	e        *ctxEnv
+	e        *codeEnv
 	sessions map[string]*lspSession
 	whys     map[string]string
 }
@@ -784,7 +784,7 @@ func (r *lspRun) repoFile(p string) (string, *lspAnswer) {
 		p = rel
 	}
 	rp, ok := repoPath(p)
-	if !ok || !ctxWithinRoot(r.e.Code, rp) {
+	if !ok || !withinRoot(r.e.Code, rp) {
 		return fail(p + ": not a file inside the repository")
 	}
 	return rp, nil

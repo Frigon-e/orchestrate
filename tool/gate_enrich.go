@@ -552,7 +552,7 @@ func enrichGate(dir, code, src, rel string, sp *spec) (*enrichResult, error) {
 
 	// Code search: one jbcontext call per card, a few at a time.
 	cfg, _ := loadConfig(code)
-	env := newCtxEnv(code, ctxOpts{Cfg: cfg, Skip: []string{rel}})
+	env := newCodeEnv(code, codeOpts{Cfg: cfg, Skip: []string{rel}})
 	if why := env.jbMissing(); why != "" {
 		for i := range items {
 			items[i].CodeReview = "Code search did not run: " + why

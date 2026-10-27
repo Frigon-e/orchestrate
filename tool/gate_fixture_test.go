@@ -123,7 +123,7 @@ func TestFixtureGateTrust(t *testing.T) {
 					t.Fatal("dirty control lost approval")
 				}
 				writeFiles(t, h.repo, map[string]string{f.path: strings.Replace(before, f.old, f.current, 1)})
-				code, out := h.run("plan", "spec.md", "--no-ctx")
+				code, out := h.run("plan", "spec.md")
 				if code != 1 || !strings.Contains(out, "stale approval") || len(allTasks(h.a.siteRoot(t))) != 0 {
 					t.Fatalf("stale dirty checkout approved: %d %s", code, out)
 				}

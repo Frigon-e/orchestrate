@@ -127,8 +127,6 @@
     { "name": "echo quoted grep", "situation": "fd-rg", "rule": "", "command": "echo \"grep\"" },
     { "name": "fd alone", "situation": "fd-rg", "rule": "", "command": "fd gateway" },
     { "name": "plain ls", "situation": "fd-rg", "rule": "", "command": "ls" },
-    { "name": "orch ctx text", "situation": "fd-rg", "rule": "", "command": "orch ctx text Gateway" },
-    { "name": "orch ctx batch quoted grep", "situation": "fd-rg", "rule": "", "command": "orch ctx batch -q \"text:grep glob=internal/**\"" },
     { "name": "fd-rg ag dir", "situation": "fd-rg", "rule": "grep-rg", "command": "ag Foo internal/" },
     { "name": "fd-rg git grep", "situation": "fd-rg", "rule": "grep-rg", "command": "git grep -n x" },
     { "name": "fd-rg tail -f", "situation": "fd-rg", "rule": "", "command": "tail -f app.log" },

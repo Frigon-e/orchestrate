@@ -195,14 +195,6 @@ func lookupShell(line string) (lookup, bool) {
 		return lookup{"jbcontext", first(positionals(args[1:], jbValue)), false}, true
 	case name == "orch" && len(args) >= 2 && args[0] == "lsp" && !strings.HasPrefix(args[1], "-"):
 		return lookup{"lsp:" + args[1], strings.Join(positionals(args[2:], lspValue), " "), false}, true
-	case name == "orch" && len(args) >= 2 && args[0] == "ctx" && !strings.HasPrefix(args[1], "-"):
-		var words []string
-		for _, w := range args[2:] {
-			if !strings.HasPrefix(w, "-") {
-				words = append(words, w)
-			}
-		}
-		return lookup{"ctx:" + args[1], strings.Join(words, " "), false}, true
 	case name == "rg":
 		pattern, _, _, _, _ := rgParts(args)
 		return lookup{"rg", pattern, symbolRg(args)}, true

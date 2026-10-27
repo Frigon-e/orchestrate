@@ -33,7 +33,7 @@ type lspServer interface {
 // serverFor picks the adapter of a language: gopls for Go, the native
 // TypeScript server for TypeScript, the registry's list otherwise (also for a
 // language whose servers the user configured).
-func serverFor(e *ctxEnv, l *langDef) lspServer {
+func serverFor(e *codeEnv, l *langDef) lspServer {
 	switch {
 	case l.native() && l.ID == "go":
 		return goplsServer{bin: e.Gopls}

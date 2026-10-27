@@ -1160,23 +1160,11 @@ func benchShellCount(p sessionProfile, count int) int {
 }
 
 // benchToolRows count what the agents called, from the exploration profile of
-// each group: orch ctx against the raw shell and the native read tool.
+// each group: the raw shell against the native read tool.
 var benchToolRows = []struct {
 	name  string
 	count func(sessionProfile) int
 }{
-	{"orch ctx calls", func(p sessionProfile) int {
-		return benchShellCount(p, p.Shell["orch ctx batch"]+p.Shell["orch ctx"]+p.Shell["orch ctx batch piped"]+p.Shell["orch ctx piped"])
-	}},
-	{"orch ctx lookups (a batch counts each -q)", func(p sessionProfile) int {
-		if p.Shell["orch ctx batch"]+p.Shell["orch ctx batch piped"] > 0 && p.BatchLookups == 0 {
-			return -1
-		}
-		return benchShellCount(p, p.BatchLookups+p.Shell["orch ctx"]+p.Shell["orch ctx piped"])
-	}},
-	{"orch ctx piped into another tool", func(p sessionProfile) int {
-		return benchShellCount(p, p.Shell["orch ctx piped"]+p.Shell["orch ctx batch piped"])
-	}},
 	{"Raw shell search (grep, rg, find, ls)", func(p sessionProfile) int { return benchShellCount(p, p.Shell["shell search"]) }},
 	{"Raw shell read (sed, cat, head, tail)", func(p sessionProfile) int { return benchShellCount(p, p.Shell["shell read"]) }},
 	{"Other shell calls", func(p sessionProfile) int { return benchShellCount(p, p.Shell["shell other"]) }},

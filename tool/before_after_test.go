@@ -77,23 +77,6 @@ func beforeAfterJSON(t *testing.T, text string) map[string]any {
 	return v
 }
 
-// Legacy ctx JSON exposes definition headers/reference summaries in parts.raw.
-// Inspect that decoded field, not the command's default text rendering.
-func beforeAfterRaw(result map[string]any) string {
-	var lines []string
-	parts, _ := result["parts"].([]any)
-	for _, part := range parts {
-		p, _ := part.(map[string]any)
-		raw, _ := p["raw"].([]any)
-		for _, line := range raw {
-			if text, ok := line.(string); ok {
-				lines = append(lines, text)
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 func beforeAfterEmit(t *testing.T, name, side, result string) {
 	t.Helper()
 	b, _ := json.Marshal(map[string]string{"scenario": name, "side": side, "result": result})
@@ -102,7 +85,7 @@ func beforeAfterEmit(t *testing.T, name, side, result string) {
 
 func beforeAfterGate(t *testing.T, h *harness, bin string, before bool, extra ...string) (int, map[string]any) {
 	t.Helper()
-	args := append([]string{"gate", "spec.md", "--ctx-tool", "off"}, extra...)
+	args := append([]string{"gate", "spec.md"}, extra...)
 	var code int
 	var out string
 	if before {
@@ -210,7 +193,7 @@ func TestBeforeAfter(t *testing.T) {
 					h.git("worktree", "add", "-q", "--detach", wt, "HEAD")
 					spec = filepath.Join(wt, "spec.md")
 				}
-				code, out := beforeAfterCLI(t, h, bin, "plan", spec, "--no-ctx")
+				code, out := beforeAfterCLI(t, h, bin, "plan", spec)
 				if before {
 					if code != 0 || len(allTasks(h.a.siteRoot(t))) != 1 {
 						t.Fatalf("baseline approval not reusable: %d %s", code, out)
@@ -228,7 +211,7 @@ func TestBeforeAfter(t *testing.T) {
 		cases = append(cases, beforeAfterCase{"verify-mutates-" + mutation, func(t *testing.T, h *harness, bin string, before bool) string {
 			h.setCheck("true")
 			h.commitSpec(intSpec())
-			code, out := beforeAfterCLI(t, h, bin, "plan", "spec.md", "--skip-gate", "--no-ctx")
+			code, out := beforeAfterCLI(t, h, bin, "plan", "spec.md", "--skip-gate")
 			if code != 0 {
 				t.Fatal(out)
 			}
@@ -252,154 +235,6 @@ func TestBeforeAfter(t *testing.T) {
 			}
 			return "refused; integration HEAD and marker unchanged"
 		}})
-	}
-	for _, f := range portabilityFixtures {
-		if f.name == "go" {
-			continue
-		}
-		f := f
-		for _, kind := range []string{"excluded-hits", "changed-body", "wrong-receiver", "missing-server", "failed-backend", "fifth-definition"} {
-			cases = append(cases, beforeAfterCase{f.name + "-" + kind, func(t *testing.T, _ *harness, bin string, before bool) string {
-				h := fixtureRepo(t, f.name)
-				switch kind {
-				case "excluded-hits":
-					var raw strings.Builder
-					for range 2105 {
-						raw.WriteString(fixtureMatch(f.test, 1, "Normalize test"))
-					}
-					raw.WriteString(fixtureMatch(f.path, f.line, "Normalize production"))
-					raw.WriteString(fixtureSummary)
-					fixtureRG(t, h, raw.String())
-					code, out := beforeAfterCLI(t, h, bin, "ctx", "text", "Normalize", "--json")
-					v := beforeAfterJSON(t, out)
-					if code != 0 {
-						t.Fatal(out)
-					}
-					if before {
-						if strings.Contains(out, f.path) {
-							t.Fatalf("baseline unexpectedly retained production: %v", v)
-						}
-						return "BAD: 2105 excluded hits hide production"
-					}
-					r, _ := v["result"].(map[string]any)
-					if r["total"] != float64(1) || !strings.Contains(out, f.path) {
-						t.Fatalf("AFTER production lost: %v", v)
-					}
-					return "1 production hit retained after 2105 tests"
-				case "changed-body":
-					original := string(mustRead(t, filepath.Join(h.repo, f.path)))
-					current := strings.Replace(original, f.old, f.current, 1)
-					writeFiles(t, h.repo, map[string]string{f.path: current})
-					b, _ := json.Marshal(map[string]any{"type": "search_result", "results": []any{map[string]any{"result": map[string]any{"sourcePosition": map[string]string{"relativePath": f.path}}, "content": original, "contentStartLine": 1}}})
-					jb := fakeRunner(t, "jbcontext", "case \"$1\" in status) echo '{\"type\":\"status_result\",\"indices\":[]}';; search) printf '%s' '"+string(b)+"';; esac")
-					t.Setenv("ORCH_JBCONTEXT", jb)
-					code, out := beforeAfterCLI(t, h, bin, "ctx", "find", "Code that normalizes a file name", "--json")
-					v := beforeAfterJSON(t, out)
-					if code != 0 {
-						t.Fatal(out)
-					}
-					if before {
-						if strings.Contains(out, f.current) {
-							t.Fatalf("baseline unexpectedly refreshed body: %v", v)
-						}
-						return "BAD: stale indexed body rendered"
-					}
-					if !strings.Contains(out, f.current) {
-						t.Fatalf("AFTER stale body: %v", v)
-					}
-					return "current checkout body rendered"
-				case "failed-backend":
-					t.Setenv("ORCH_RG", fakeRunner(t, "rg", "echo failed >&2; exit 2"))
-					code, out := beforeAfterCLI(t, h, bin, "ctx", "text", "Normalize", "--json")
-					v := beforeAfterJSON(t, out)
-					if before {
-						if code != 0 {
-							t.Fatalf("baseline unexpectedly fails: %d %v", code, v)
-						}
-						return "BAD: failed rg returned exit 0"
-					}
-					r, _ := v["result"].(map[string]any)
-					if code != 1 || r["status"] != "failed" {
-						t.Fatalf("AFTER failure hidden: %d %v", code, v)
-					}
-					return "exit 1; status failed, not zero"
-				case "wrong-receiver", "missing-server", "fifth-definition":
-					symbol := "Normalize"
-					extra := []string{}
-					if kind == "wrong-receiver" {
-						symbol = "Wrong.Normalize"
-					}
-					raw := fixtureDeclaration(t, h, f)
-					if kind == "fifth-definition" {
-						raw = ""
-						for _, dir := range []string{"aa", "ab", "ac", "ad", "ae"} {
-							path := dir + "/reader" + f.ext
-							body := "def Normalize(value):\n    return value.strip()\n"
-							if f.name == "ts" {
-								body = "export function Normalize(value: string) { return value.trim(); }\n"
-							}
-							if err := os.MkdirAll(filepath.Join(h.repo, dir), 0755); err != nil {
-								t.Fatal(err)
-							}
-							writeFiles(t, h.repo, map[string]string{path: body})
-							raw += fixtureMatch(path, 1, strings.Split(body, "\n")[0])
-						}
-						raw += fixtureSummary
-						extra = []string{"--in", "ae"}
-					}
-					fixtureRG(t, h, raw)
-					args := append([]string{"ctx", "sym", symbol, "--json"}, extra...)
-					code, out := beforeAfterCLI(t, h, bin, args...)
-					v := beforeAfterJSON(t, out)
-					if code != 0 {
-						t.Fatal(out)
-					}
-					r, _ := v["result"].(map[string]any)
-					if before {
-						if r["status"] != nil {
-							t.Fatalf("baseline unexpectedly has truth status: %v", v)
-						}
-						if kind == "fifth-definition" {
-							if r["shown"] != float64(0) {
-								t.Fatalf("baseline fifth definition unexpectedly retained: %v", v)
-							}
-							return "BAD: scoped fifth definition hidden (shown 0)"
-						}
-						if r["total"] != float64(2) {
-							t.Fatalf("baseline symbol fixture changed: %v", v)
-						}
-						if kind == "wrong-receiver" {
-							if r["query"] != "Wrong.Normalize" || strings.Contains(beforeAfterRaw(r), "candidate (identity not verified)") {
-								t.Fatalf("baseline receiver response changed: %v", r)
-							}
-							return "BAD: 2 definitions for nonexistent receiver, no identity warning"
-						}
-						if !strings.Contains(beforeAfterRaw(r), "used by 0") {
-							t.Fatalf("baseline unexpectedly avoids false zero: %v", r)
-						}
-						return "BAD: missing server has no partial status; by-name zero references"
-					}
-					if r["status"] != "partial" {
-						t.Fatalf("missing server not partial: %v", v)
-					}
-					errors, _ := r["errors"].([]any)
-					if r["count_kind"] == "exact" || (kind == "missing-server" && len(errors) == 0) {
-						t.Fatalf("missing server count uncertainty not recorded: %v", r)
-					}
-					if kind == "wrong-receiver" && !strings.Contains(beforeAfterRaw(r), "candidate (identity not verified)") {
-						t.Fatalf("wrong receiver not marked candidate: %v", v)
-					}
-					if kind == "missing-server" && strings.Contains(beforeAfterRaw(r), "used by 0") {
-						t.Fatalf("missing server became zero references: %v", r)
-					}
-					if kind == "fifth-definition" && (r["shown"] != float64(1) || r["total"] != float64(1) || !strings.Contains(out, "ae/reader")) {
-						t.Fatalf("fifth definition hidden: %v", v)
-					}
-					return "partial; candidate identity/counts explicit"
-				}
-				return ""
-			}})
-		}
 	}
 	for _, kind := range []string{"exact-duplicate-questions", "related-questions-and-authority"} {
 		cases = append(cases, beforeAfterCase{kind, func(t *testing.T, h *harness, bin string, before bool) string {

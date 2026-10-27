@@ -121,9 +121,6 @@ func fakeGatePaneVerbs(path string, args []string) (int, bool) {
 		if b, err := os.ReadFile(filepath.Join(panes, args[2]+".env")); err == nil {
 			pi.Env = append(os.Environ(), "PI_CACHE_RETENTION="+strings.TrimSpace(string(b)))
 		}
-		if b, err := os.ReadFile(filepath.Join(panes, args[2]+".ready")); err == nil {
-			pi.Env = agentEnv(pi.Env, []string{"ORCH_CTX_ONLY_READY=" + string(b)})
-		}
 		// <state>.budget holds "soft:N" or "hard:N": the pass first makes N turns
 		// of tool calls and then waits to be told to answer.
 		if b, err := os.ReadFile(path + ".budget"); err == nil && strings.Contains(string(prompt), "GATE-GROUP") {
@@ -261,9 +258,6 @@ func fakeGatePaneVerbs(path string, args []string) (int, bool) {
 		session, _ := os.ReadFile(filepath.Join(panes, args[2]+".session"))
 		prompt, _ := os.ReadFile(filepath.Join(panes, args[2]+".prompt"))
 		pi := exec.Command(envOr("ORCH_PI", "pi"), "-p", string(prompt))
-		if b, err := os.ReadFile(filepath.Join(panes, args[2]+".ready")); err == nil {
-			pi.Env = agentEnv(nil, []string{"ORCH_CTX_ONLY_READY=" + string(b)})
-		}
 		out, _ := pi.Output()
 		msg, _ := json.Marshal(map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": string(out)}}}})
 		f, _ := os.OpenFile(filepath.Join(string(session), "session.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
@@ -327,14 +321,11 @@ func fakePaneLaunch(path, pane, cmd, file string, logCall func(map[string]any)) 
 	kind, _ := os.ReadFile(capture + ".kind")
 	rawArgs, _ := os.ReadFile(capture + ".args")
 	rawEnv, _ := os.ReadFile(capture + ".env")
-	envF, readyF := filepath.Join(panes, pane+".env"), filepath.Join(panes, pane+".ready")
+	envF := filepath.Join(panes, pane+".env")
 	os.Remove(envF)
-	os.Remove(readyF)
 	for _, kv := range strings.Split(string(rawEnv), "\x00") {
 		if v, ok := strings.CutPrefix(kv, "PI_CACHE_RETENTION="); ok {
 			os.WriteFile(envF, []byte(v), 0o644)
-		} else if v, ok := strings.CutPrefix(kv, "ORCH_CTX_ONLY_READY="); ok {
-			os.WriteFile(readyF, []byte(v), 0o644)
 		}
 	}
 	name := ""
@@ -665,34 +656,6 @@ func TestGateAgentStartNamesAreValidAndPromptFilesShareTheirPrefix(t *testing.T)
 	}
 }
 
-// Pane passes call orch ctx through the pane's own PATH, so a pane run with the
-// ctx tool stops before any pass when orch is not on PATH, and says how to fix it.
-func TestGatePaneRunNeedsOrchOnPath(t *testing.T) {
-	h := setup(t)
-	h.gateRepo(1)
-	h.sessionPi(gatePasses(nil))
-	var keep []string
-	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(d, "orch")); err != nil {
-			keep = append(keep, d)
-		}
-	}
-	t.Setenv("PATH", strings.Join(keep, string(os.PathListSeparator)))
-	code, out := h.run("gate", "spec.md")
-	if code == 0 {
-		t.Fatalf("exit %d: %s", code, out)
-	}
-	wantContains(t, out, "orch is not on PATH", "ln -s /skill/scripts/orch ~/.local/bin/orch")
-	if n := len(h.gateCalls("pane", "run")); n != 0 {
-		t.Fatalf("%d passes started without orch on PATH", n)
-	}
-	for _, args := range [][]string{{"--ctx-tool", "off"}, {"--dry-run"}} {
-		if code, out := h.run(append([]string{"gate", "spec.md"}, args...)...); strings.Contains(out, "orch is not on PATH") {
-			t.Errorf("%v needs no orch on PATH: exit %d %s", args, code, out)
-		}
-	}
-}
-
 // A launcher whose agent herdr never sees (pi died at once, a bad argument)
 // fails the pass after gateStartWait instead of waiting for the pass timeout.
 func TestGatePaneAgentThatNeverAppearsFailsThePass(t *testing.T) {
@@ -882,8 +845,8 @@ func TestGatePaneLoadsHerdrExtensionOnlyWhenItExists(t *testing.T) {
 	h.sessionPi(gatePasses(nil))
 	h.must("gate", "spec.md")
 	for _, c := range h.gateCalls("agent", "start") {
-		if got := flagValue(c.Args, "-e"); !strings.HasSuffix(got, "orch-ctx-only.ts") {
-			t.Fatalf("expected only the ctx guard, not the missing herdr extension: %v", c.Args)
+		if got := flagValue(c.Args, "-e"); got != "" {
+			t.Fatalf("expected no extension while the herdr extension is missing: %v", c.Args)
 		}
 	}
 
@@ -959,146 +922,5 @@ func TestGateStalledGroupPassSucceedsOnTheRetry(t *testing.T) {
 				t.Errorf("the group pass ran %d times, want 2", n)
 			}
 		})
-	}
-}
-
-// The tool guard is the code under test in a guarded gate run, so an open-shell pi
-// pass must load the checkout's own copy, in the pane and headless alike. The
-// ctx-only shell restricts commands itself and ctx off has no orch ctx to name.
-func TestGatePiLoadsToolGuardOnlyInOpenShell(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{"open", []string{"--ctx-shell", "open"}, true},
-		{"ctx-only", nil, false},
-		{"ctx-off", []string{"--ctx-tool", "off"}, false},
-	}
-	for _, mode := range []string{"pane", "headless"} {
-		for _, c := range cases {
-			t.Run(mode+"/"+c.name, func(t *testing.T) {
-				h := setup(t)
-				h.gateRepo(1)
-				if mode == "headless" {
-					t.Setenv("HERDR_ENV", "")
-				}
-				t.Setenv("ORCH_TOOL_GUARD_SKIP", "pattern")
-				h.sessionPi(gatePasses(nil))
-				h.must(append([]string{"gate", "spec.md"}, c.args...)...)
-				var lines [][]string
-				if mode == "pane" {
-					for _, call := range h.gateCalls("agent", "start") {
-						lines = append(lines, call.Args)
-					}
-				} else {
-					for _, l := range strings.Split(strings.TrimSpace(string(mustRead(t, filepath.Join(h.tmp, "fakepi", "calls.log")))), "\n") {
-						if strings.HasPrefix(l, "-p --session-dir ") { // later lines are prompt text
-							lines = append(lines, strings.Fields(l))
-						}
-					}
-				}
-				if len(lines) == 0 {
-					t.Fatal("no pi starts recorded")
-				}
-				for _, args := range lines {
-					loaded := false
-					for i, a := range args {
-						if a == "-e" && i+1 < len(args) && filepath.Base(args[i+1]) == "orch-ctx-reminder.ts" {
-							loaded = true
-							if !filepath.IsAbs(args[i+1]) || strings.Contains(args[i+1], ".pi/agent/extensions") {
-								t.Errorf("guard path %q is not the binary's own copy", args[i+1])
-							}
-							if !strings.Contains(args[i+1], "cli-") {
-								t.Errorf("guard path %q is not next to the ctx shim", args[i+1])
-							}
-						}
-					}
-					if loaded != c.want {
-						t.Errorf("guard loaded = %v, want %v: %v", loaded, c.want, args)
-					}
-					if !slices.Contains(args, "--no-extensions") {
-						t.Errorf("--no-extensions dropped: %v", args)
-					}
-				}
-				if mode != "pane" {
-					return
-				}
-				exported := false
-				for _, call := range h.gateCalls("pane", "run") {
-					if strings.Contains(fmt.Sprint(call.Extra["script"]), "\nexport ORCH_TOOL_GUARD_SKIP='pattern'\n") {
-						exported = true
-					}
-				}
-				if exported != c.want {
-					t.Errorf("guard env exported to the pane = %v, want %v", exported, c.want)
-				}
-			})
-		}
-	}
-}
-
-// A headless pi inherits orch's environment; a pane's pi gets the knobs through
-// its launcher (paneLaunchScript). Both read them from the pass's CtxCLI env.
-func TestGuardKnobsReachBothPiPaths(t *testing.T) {
-	h := setup(t)
-	t.Setenv("ORCH_TOOL_GUARD", "off")
-	t.Setenv("ORCH_TOOL_GUARD_SKIP", "find")
-	t.Setenv("ORCH_TOOL_GUARD_STATE_DIR", "/tmp/guard-state")
-	p, err := gateAgentPass(h.repo, "pi", gatePass{name: "a", shared: "s", task: "t", prompt: "st", ctxTool: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := agentEnv(nil, p.cli.Env)
-	for _, want := range []string{"ORCH_TOOL_GUARD=off", "ORCH_TOOL_GUARD_SKIP=find", "ORCH_TOOL_GUARD_STATE_DIR=/tmp/guard-state"} {
-		if !slices.Contains(env, want) || !slices.Contains(p.cli.Env, want) {
-			t.Errorf("%s missing from the pass env", want)
-		}
-	}
-	only, err := gateAgentPass(h.repo, "pi", gatePass{name: "a", shared: "s", task: "t", prompt: "st", ctxTool: true, ctxOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(guardEnv(only.cli.Env)) != 0 {
-		t.Errorf("ctx-only pass exports guard env: %v", only.cli.Env)
-	}
-}
-
-// A user environment that still sets a removed guard switch is ignored: the
-// pass env does not carry it.
-func TestGuardEnvDropsRemovedSwitches(t *testing.T) {
-	got := guardEnv([]string{"ORCH_TOOL_GUARD_HINT=pattern", "ORCH_TOOL_GUARD_LOG=/tmp/x", "ORCH_CTX_PROFILE=lean", "ORCH_TOOL_GUARD=off", "ORCH_TOOL_GUARD_SKIP=find", "ORCH_TOOL_GUARD_STATE_DIR=/s", "HOME=/h"})
-	want := []string{"ORCH_TOOL_GUARD=off", "ORCH_TOOL_GUARD_SKIP=find", "ORCH_TOOL_GUARD_STATE_DIR=/s"}
-	if !slices.Equal(got, want) {
-		t.Errorf("guardEnv = %v, want %v", got, want)
-	}
-}
-
-// ORCH_TSLS is the user's TypeScript server override; the pane shell needs it
-// for orch ctx, and only when orch itself has it set.
-func TestTSLSReachesPaneEnv(t *testing.T) {
-	h := setup(t)
-	t.Setenv("ORCH_TOOL_GUARD", "off")
-	t.Setenv("ORCH_TSLS", "/opt/tsgo/bin/tsgo")
-	p, err := gateAgentPass(h.repo, "pi", gatePass{name: "a", shared: "s", task: "t", prompt: "st", ctxTool: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"ORCH_TSLS=/opt/tsgo/bin/tsgo", "ORCH_TOOL_GUARD=off"} {
-		if !slices.Contains(p.cli.Env, want) {
-			t.Errorf("%s missing from the pass env: %v", want, p.cli.Env)
-		}
-	}
-	// Unset: absent. t.Setenv restores the variable; Unsetenv makes it unset now.
-	t.Setenv("ORCH_TSLS", "")
-	os.Unsetenv("ORCH_TSLS")
-	p, err = gateAgentPass(h.repo, "pi", gatePass{name: "a", shared: "s", task: "t", prompt: "st", ctxTool: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, kv := range p.cli.Env {
-		if strings.HasPrefix(kv, "ORCH_TSLS=") {
-			t.Errorf("unset ORCH_TSLS exported: %q", kv)
-		}
 	}
 }

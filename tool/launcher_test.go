@@ -51,7 +51,7 @@ func TestVersionFastPathNoInitialization(t *testing.T) {
 // Exercise the user-facing launcher with a complete temporary copy of tool/,
 // not the shared cache or checkout. The real Go tool builds every binary;
 // a thin wrapper records rebuilds and simulates a toolchain identity change.
-func TestCtxCLILauncherFingerprint(t *testing.T) {
+func TestLauncherFingerprint(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestCtxCLILauncherFingerprint(t *testing.T) {
 		t.Fatalf("launcher through a symlink: %q != %q", got, first)
 	}
 	launch = path
-	policy := filepath.Join(tool, "pi_ctx_only.ts")
+	policy := filepath.Join(tool, "ask.html.tmpl")
 	st, err := os.Stat(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestCtxCLILauncherFingerprint(t *testing.T) {
 			t.Fatalf("append %s: %v %v", path, writeErr, closeErr)
 		}
 	}
-	appendFile(policy, "\n// launcher fingerprint regression\n")
+	appendFile(policy, "\n<!-- launcher fingerprint regression -->\n")
 	if err := os.Chtimes(policy, st.ModTime(), st.ModTime()); err != nil {
 		t.Fatal(err)
 	}
@@ -159,23 +159,21 @@ func TestCtxCLILauncherFingerprint(t *testing.T) {
 	}
 	run("--version", 2) // An mtime-only change must not invalidate content.
 	if second == first {
-		t.Fatal("embedded policy change did not change the version")
+		t.Fatal("embedded asset change did not change the version")
 	}
-	appendFile(filepath.Join(tool, "ask.html.tmpl"), "\n<!-- launcher fingerprint regression -->\n")
-	run("--version", 3) // Every embedded asset, not only the TS policy.
 	extra := filepath.Join(tool, "launcher_removable.go")
 	if err := os.WriteFile(extra, []byte("package main\nconst launcherRemovable = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("version", 4)
+	run("version", 3)
 	if err := os.Remove(extra); err != nil {
 		t.Fatal(err)
 	}
-	run("--version", 5) // Deletion is invisible to the old newer-than test.
+	run("--version", 4) // Deletion is invisible to the old newer-than test.
 	t.Setenv("ORCH_TEST_TOOLCHAIN", "changed")
-	last := run("version", 6)
-	if got := run("--version", 6); got != last {
+	last := run("version", 5)
+	if got := run("--version", 5); got != last {
 		t.Fatalf("unchanged toolchain rebuilt: %q != %q", got, last)
 	}
-	t.Logf("temporary tool/ launcher: unchanged and mtime-only trees reused cache; policy, template, added/deleted source and toolchain changes rebuilt (%d builds)", 6)
+	t.Logf("temporary tool/ launcher: unchanged and mtime-only trees reused cache; embedded asset, added/deleted source and toolchain changes rebuilt (%d builds)", 5)
 }

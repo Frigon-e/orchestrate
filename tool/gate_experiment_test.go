@@ -137,7 +137,7 @@ func TestGatePaneLauncherLeavesTheCacheSettingAlone(t *testing.T) {
 	h := setup(t)
 	h.gateRepo(1)
 	h.sessionPi(gatePasses(nil))
-	h.must("gate", "spec.md", "--ctx-tool", "off")
+	h.must("gate", "spec.md")
 	runs := h.gateCalls("pane", "run")
 	if len(runs) != 3 {
 		t.Fatalf("pane run calls = %d, want one per pass", len(runs))
@@ -312,21 +312,16 @@ func TestGateDropsTheSessionsOfPassesThatSucceeded(t *testing.T) {
 	}
 }
 
-func TestSessionProfileSeparatesOrchCtxFromRawShellAndRangedReads(t *testing.T) {
+func TestSessionProfileSeparatesRawShellAndRangedReads(t *testing.T) {
 	cases := map[string]string{
-		`orch ctx batch -q "find:a" -q "text:b"`:   "orch ctx batch",
-		`orch ctx text foo --compact`:              "orch ctx",
-		`orch ctx text foo | head -20`:             "orch ctx piped",
-		`orch ctx batch -q "text:b" | head`:        "orch ctx batch piped",
-		`grep -rn Gateway internal | head -40`:     "shell search",
-		`cd internal && rg -n Gateway`:             "shell search",
-		`sed -n '1,40p' internal/a.go`:             "shell read",
-		`head -80 a.go`:                            "shell read",
-		`go test ./...`:                            "shell other",
-		`ls internal/crm | tail -5`:                "shell search",
-		`orch ctx batch -q "text:b" 2>&1`:          "orch ctx batch",
-		`echo hi`:                                  "shell other",
-		`orch ctx find "Code that lists gateways"`: "orch ctx",
+		`grep -rn Gateway internal | head -40`: "shell search",
+		`cd internal && rg -n Gateway`:         "shell search",
+		`sed -n '1,40p' internal/a.go`:         "shell read",
+		`head -80 a.go`:                        "shell read",
+		`go test ./...`:                        "shell other",
+		`ls internal/crm | tail -5`:            "shell search",
+		`echo hi`:                              "shell other",
+		`orch lsp def Gateway`:                 "shell other",
 	}
 	for cmd, want := range cases {
 		if got := shellKind(cmd); got != want {
@@ -341,23 +336,34 @@ func TestSessionProfileSeparatesOrchCtxFromRawShellAndRangedReads(t *testing.T) 
 		return fmt.Sprintf(`{"type":"message","message":{"role":"assistant","content":[%s]}}`, strings.Join(parts, ","))
 	}
 	writeFiles(t, dir, map[string]string{"s.jsonl": strings.Join([]string{
-		asst(call("bash", `{"command":"orch ctx batch -q \"find:a\" -q \"text:b\" -q \"sym:c\""}`), call("bash", `{"command":"grep -rn x ."}`)),
+		asst(call("bash", `{"command":"orch lsp def Gateway"}`), call("bash", `{"command":"grep -rn x ."}`)),
 		asst(call("read", `{"path":"a.go","offset":10,"limit":40}`), call("read", `{"path":"b.go"}`), call("read", `{"path":"c.go","limit":30}`)),
 	}, "\n") + "\n"})
 	p, ok := profileSession(dir, "")
-	if !ok || p.Shell["orch ctx batch"] != 1 || p.Shell["shell search"] != 1 || p.BatchLookups != 3 || p.RangedReads != 2 || p.WholeReads != 1 {
+	if !ok || p.Shell["shell other"] != 1 || p.Shell["shell search"] != 1 || p.RangedReads != 2 || p.WholeReads != 1 {
 		t.Fatalf("profile = %+v %v", p, ok)
 	}
-	wantContains(t, p.String(), "bash: orch ctx batch 1 (3 lookups), shell search 1", "reads: 2 ranged, 1 whole file")
+	wantContains(t, p.String(), "bash: shell search 1, shell other 1", "reads: 2 ranged, 1 whole file")
 }
 
-func TestBenchToolRowsCountOrchCtxAgainstRawShell(t *testing.T) {
+// A profile recorded while orch ctx existed still loads and its counters still
+// print; the bench rows no longer count orch ctx.
+func TestBenchToolRowsCountRawShellAndKeepOldProfiles(t *testing.T) {
+	var legacy sessionProfile
+	if err := json.Unmarshal([]byte(`{"requests":3,"shell":{"orch ctx batch":2,"shell search":2},"batch_lookups":7,"ranged_reads":2,"whole_reads":1}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Shell["orch ctx batch"] != 2 || legacy.BatchLookups != 7 {
+		t.Fatalf("old counters lost: %+v", legacy)
+	}
 	r := &benchRun{Groups: map[string]benchGroup{
-		"g1": {Exploration: &sessionProfile{Calls: map[string]int{"bash": 5, "read": 3}, Shell: map[string]int{"orch ctx batch": 2, "orch ctx": 1, "shell search": 2}, BatchLookups: 7, RangedReads: 2, WholeReads: 1}},
-		"g2": {Exploration: &sessionProfile{Calls: map[string]int{"bash": 1, "read": 0}, Shell: map[string]int{"orch ctx piped": 1}, readBreakdownKnown: true}},
+		"g1": {Exploration: &sessionProfile{Calls: map[string]int{"bash": 5, "read": 3}, Shell: map[string]int{"shell search": 2}, RangedReads: 2, WholeReads: 1}},
 	}}
-	want := map[string]float64{"orch ctx calls": 4, "orch ctx lookups (a batch counts each -q)": 9, "orch ctx piped into another tool": 1, "Raw shell search (grep, rg, find, ls)": 2, "Native reads": 3, "Native reads with a range": 2}
+	want := map[string]float64{"Raw shell search (grep, rg, find, ls)": 2, "Native reads": 3, "Native reads with a range": 2}
 	for _, m := range benchToolRows {
+		if strings.Contains(m.name, "orch ctx") {
+			t.Errorf("row %q still counts orch ctx", m.name)
+		}
 		got := benchToolSum(r, nil, m.count)
 		if w, ok := want[m.name]; ok {
 			if got == nil || *got != w {

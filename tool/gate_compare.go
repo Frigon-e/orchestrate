@@ -108,6 +108,15 @@ func legacyCtxProfile(rec *gateRecord) string {
 	return "; ctx_profile: " + rec.CtxProfile
 }
 
+// legacyCtxSettings names the ctx settings an old record ran with. The switches
+// are gone, so a new record has none and shows nothing.
+func legacyCtxSettings(rec *gateRecord) string {
+	if rec.CtxTool == "" {
+		return ""
+	}
+	return fmt.Sprintf("ctx_tool: %s; ctx_shell: %s%s%s", rec.CtxTool, orDefault(rec.CtxShell, "open"), legacyContextFiles(rec), legacyCtxProfile(rec))
+}
+
 // legacyContextFiles names the context-files setting an old record ran with.
 // The switch is gone, so a new record has none and shows nothing.
 func legacyContextFiles(rec *gateRecord) string {
@@ -127,7 +136,9 @@ func legacyCache(rec *gateRecord) string {
 
 func describeExperiment(w io.Writer, label, name string, rec *gateRecord, dir string) {
 	fmt.Fprintf(w, "experiment %s: %s (%sgroups %s)\n", label, name, legacyCache(rec), strings.Join(rec.Only, ", "))
-	fmt.Fprintf(w, "  ctx_tool: %s; ctx_shell: %s%s%s\n", orDefault(rec.CtxTool, "off (legacy)"), orDefault(rec.CtxShell, "open"), legacyContextFiles(rec), legacyCtxProfile(rec))
+	if l := legacyCtxSettings(rec); l != "" {
+		fmt.Fprintf(w, "  %s\n", l)
+	}
 	if warning := treeWarning(rec); warning != "" {
 		fmt.Fprintf(w, "  %s\n", warning)
 	}

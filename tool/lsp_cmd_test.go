@@ -34,7 +34,7 @@ func TestLspHelpAndUsageErrors(t *testing.T) {
 }
 
 func TestLspDefRefsNamesAmbiguityAndNotFound(t *testing.T) {
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	def := c.must("lsp", "def", "Stripe.StartCheckout")
 	wantContains(t, def, "pay/pay.go:7 Method: func (s *Stripe) StartCheckout(ctx int) error")
 	if strings.Contains(def, "##") || strings.Contains(def, c.repo) {
@@ -74,7 +74,7 @@ func TestLspDefRefsNamesAmbiguityAndNotFound(t *testing.T) {
 }
 
 func TestLspJSONAndReadOnlyRoot(t *testing.T) {
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	t.Setenv("ORCH_CTX_ROOT", evalOr(c.repo))
 	out := c.must("lsp", "refs", "Stripe.StartCheckout", "--json")
 	var got struct {
@@ -95,7 +95,7 @@ func TestLspJSONAndReadOnlyRoot(t *testing.T) {
 }
 
 func TestLspMissingGoplsIsNoServerNotZero(t *testing.T) {
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	t.Setenv("ORCH_GOPLS", c.jbDir+"/no-such-gopls")
 	code, out := c.run("lsp", "refs", "Handle")
 	if code != 2 || !strings.Contains(out, "no language server for go; use rg -n -w Handle") {

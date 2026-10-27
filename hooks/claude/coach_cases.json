@@ -62,14 +62,6 @@
    }
   },
   {
-   "name": "orch ctx text",
-   "bash": "orch ctx text Foo",
-   "lookup": {
-    "tool": "ctx:text",
-    "query": "Foo"
-   }
-  },
-  {
    "name": "orch other",
    "bash": "orch status",
    "lookup": null

@@ -247,7 +247,7 @@ func cmdDoctor(a *app, args []string) error {
 		}
 	}
 	defer func() {
-		fmt.Fprintln(a.out, ctxReadiness(newCtxEnv(s.repo, ctxOpts{Cfg: s.cfg})))
+		fmt.Fprintln(a.out, retrievalReadiness(newCodeEnv(s.repo, codeOpts{Cfg: s.cfg})))
 		printRoleReadiness(a.out, s)
 		fmt.Fprintln(a.out, benchDoctorLine())
 	}()

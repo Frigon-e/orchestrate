@@ -13,7 +13,7 @@ import (
 // fakeGoplsEnv is the ctx harness with a fake gopls whose `serve` mode is the
 // python fake language server (testdata/fake-lsp.py), logging what it is told.
 type fakeGoplsEnv struct {
-	*ctxHarness
+	*codeHarness
 	log string
 }
 
@@ -22,7 +22,7 @@ func newFakeGoplsEnv(t *testing.T) *fakeGoplsEnv {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is needed for the fake language server")
 	}
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	logF := filepath.Join(t.TempDir(), "server.log")
 	os.WriteFile(logF, nil, 0o644)
 	fake, _ := filepath.Abs("testdata/fake-lsp.py")
@@ -31,12 +31,12 @@ func newFakeGoplsEnv(t *testing.T) *fakeGoplsEnv {
 	t.Setenv("ORCH_GOPLS", wrapper)
 	t.Setenv("FAKE_LSP_LOG", logF)
 	t.Setenv("FAKE_LSP_REPO", evalOr(c.repo))
-	return &fakeGoplsEnv{ctxHarness: c, log: logF}
+	return &fakeGoplsEnv{codeHarness: c, log: logF}
 }
 
 func (w *fakeGoplsEnv) events(method string) []map[string]any {
 	var out []map[string]any
-	for _, l := range strings.Split(w.ctxHarness.log(w.log), "\n") {
+	for _, l := range strings.Split(w.codeHarness.log(w.log), "\n") {
 		var m map[string]any
 		if json.Unmarshal([]byte(l), &m) == nil && m["method"] == method {
 			out = append(out, m)
@@ -75,7 +75,7 @@ func TestLspGoNameResolvesOnTheServeSession(t *testing.T) {
 	if n := len(w.events("workspace/symbol")); n != 1 {
 		t.Errorf("workspace/symbol asked %d times on the session, want 1", n)
 	}
-	if cli := w.ctxHarness.log(w.gCall); cli != "" {
+	if cli := w.codeHarness.log(w.gCall); cli != "" {
 		t.Errorf("the command line gopls ran: %q", cli)
 	}
 	code, out := w.run("lsp", "def", "zzzNone")
@@ -104,7 +104,7 @@ func TestLspImplsAcceptsLimit(t *testing.T) {
 }
 
 func TestLspSymbolsHintIsAnOutlineSearchNotThePathAsAWord(t *testing.T) {
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	t.Setenv("ORCH_GOPLS", filepath.Join(c.jbDir, "no-such-gopls"))
 	code, out := c.run("lsp", "symbols", "pay/pay.go")
 	if code != 2 {
@@ -119,12 +119,12 @@ func TestLspSymbolsHintIsAnOutlineSearchNotThePathAsAWord(t *testing.T) {
 // tsRepo is the ctx harness repo with two TypeScript projects, web/a and web/b,
 // and the fake TypeScript server, whose project loads only once a file of the
 // project named by needsOpen is opened. WebThing is declared in web/b.
-func tsRepo(t *testing.T, needsOpen string) (*ctxHarness, string) {
+func tsRepo(t *testing.T, needsOpen string) (*codeHarness, string) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is needed for the fake language server")
 	}
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	for _, p := range []string{"a", "b"} {
 		os.MkdirAll(filepath.Join(c.repo, "web", p, "src"), 0o755)
 		os.WriteFile(filepath.Join(c.repo, "web", p, "tsconfig.json"), []byte("{}"), 0o644)
@@ -222,7 +222,7 @@ func TestLspSymbolsRetriesAnOutlineThatIsEmptyWhileTheServerWarmsUp(t *testing.T
 	t.Setenv("FAKE_LSP_LOG", logF)
 	abs, _ := filepath.Abs("testdata/fake-pyls.py")
 	t.Setenv("ORCH_PYLS", "python3 "+abs)
-	r := &lspRun{e: newCtxEnv(code, ctxOpts{}), sessions: map[string]*lspSession{}, whys: map[string]string{}}
+	r := &lspRun{e: newCodeEnv(code, codeOpts{}), sessions: map[string]*lspSession{}, whys: map[string]string{}}
 	defer r.close()
 	an := r.symbols("shop/cart.py")
 	if an.Status != "ok" || len(an.Items) != 1 || an.Items[0].Name != "build_cart" || an.Items[0].Line != 6 {
@@ -231,7 +231,7 @@ func TestLspSymbolsRetriesAnOutlineThatIsEmptyWhileTheServerWarmsUp(t *testing.T
 }
 
 func TestLspHoverWithoutAServerSuggestsReadingTheLine(t *testing.T) {
-	c := newCtxHarness(t)
+	c := newCodeHarness(t)
 	t.Setenv("ORCH_GOPLS", filepath.Join(c.jbDir, "no-such-gopls"))
 	code, out := c.run("lsp", "hover", "pay/pay.go:7:18")
 	if code != 2 {

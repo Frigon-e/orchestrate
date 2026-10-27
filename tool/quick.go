@@ -122,7 +122,7 @@ func cmdQuick(a *app, args []string) error {
 	}
 
 	check := s.cfg.Check
-	path, err := newTask(s, taskOpts{noCtx: true, id: id, kind: "ship", harness: c.profile.Harness, model: c.profile.Model, effort: c.effort, owns: owns,
+	path, err := newTask(s, taskOpts{id: id, kind: "ship", harness: c.profile.Harness, model: c.profile.Model, effort: c.effort, owns: owns,
 		fill: map[string]string{
 			"Intent":     request,
 			"Scope":      "In: " + strings.Join(owns, ", ") + "\nOut: every other file. This is a quick job: it owns only the files above.",

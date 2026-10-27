@@ -14,16 +14,8 @@ import (
 	"time"
 )
 
-// fakeCtxOnlyActivation models a successfully loaded guard, not model output.
-// Tests of extension-load failure deliberately omit this acknowledgement.
-const fakeCtxOnlyActivation = `[ -n "$ORCH_CTX_ONLY_READY" ] && printf 'ctx-only\n' > "$ORCH_CTX_ONLY_READY"
-`
-
 func fakeRunner(t *testing.T, name, script string) string {
 	t.Helper()
-	if name == "pi" {
-		script = fakeCtxOnlyActivation + script
-	}
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -285,7 +277,7 @@ func TestClaudeOnlyGateRecordsRunnerAndReadOnlyTools(t *testing.T) {
 	t.Setenv("ORCH_CLAUDE", bin)
 	t.Setenv("ORCH_PI", filepath.Join(h.tmp, "missing-pi"))
 	t.Setenv("HERDR_ENV", "")
-	out := h.must("gate", "spec.md", "--ctx-tool", "off")
+	out := h.must("gate", "spec.md")
 	rec := readRecord(t, gdir)
 	if rec.State != "pass" || len(rec.PassRunners) != 3 {
 		t.Fatalf("%s: %s %v", out, rec.State, rec.PassRunners)
