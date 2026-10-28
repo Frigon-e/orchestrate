@@ -130,7 +130,8 @@ One line per state change: `orch report [--key <slug>] <state> "<line>"`.
 **Long commands.** Before a command that may run longer than `stall_minutes`
 (a full test suite, a build), report `working` and say what runs and how long
 it should take. The watcher reads a silent lead with an unchanged worktree as
-stalled.
+stalled. A tool call still running (no result yet in the transcript) is not
+counted as stalled until it has run longer than 3x `stall_minutes`.
 
 **Know your limit.** You are often a smaller model than the one that wrote
 your brief, and a model cannot reliably tell when a problem is too hard for

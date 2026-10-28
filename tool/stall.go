@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // A stalled lead is busy but not getting anywhere. `quiet` catches an idle
@@ -119,6 +120,90 @@ func loopingCall(sigs []string) (name string, n int, ok bool) {
 	return "", 0, false
 }
 
+// inFlightSince returns the start time (unix seconds) of the newest tool call
+// in the transcript tail that has no result yet. Claude pairs tool_use blocks
+// in assistant lines with tool_result blocks in user lines; pi pairs toolCall
+// blocks in assistant messages with toolResult messages.
+func inFlightSince(harness, session string) (start int64, ok bool) {
+	if harness != "claude" && harness != "pi" {
+		return 0, false
+	}
+	path := sessionPath(harness, session)
+	if path == "" {
+		return 0, false
+	}
+	open := map[string]int64{}
+	for _, line := range bytes.Split(readTail(path, 1<<20), []byte("\n")) {
+		if !bytes.Contains(line, []byte(`"tool_use"`)) && !bytes.Contains(line, []byte(`"toolCall"`)) &&
+			!bytes.Contains(line, []byte(`"tool_result"`)) && !bytes.Contains(line, []byte(`"toolResult"`)) {
+			continue
+		}
+		var e struct {
+			Type        string `json:"type"`
+			IsSidechain bool   `json:"isSidechain"`
+			Timestamp   string `json:"timestamp"`
+			Message     struct {
+				Role       string          `json:"role"`
+				ToolCallID string          `json:"toolCallId"`
+				Content    json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
+			continue
+		}
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			ToolUseID string `json:"tool_use_id"`
+		}
+		_ = json.Unmarshal(e.Message.Content, &blocks) // content may be a plain string
+		switch {
+		case harness == "claude" && e.Type == "assistant":
+			ts, err := time.Parse(time.RFC3339Nano, e.Timestamp)
+			if err != nil {
+				continue
+			}
+			for _, b := range blocks {
+				if b.Type == "tool_use" {
+					open[b.ID] = ts.Unix()
+				}
+			}
+		case harness == "claude" && e.Type == "user":
+			for _, b := range blocks {
+				if b.Type == "tool_result" {
+					delete(open, b.ToolUseID)
+				}
+			}
+		case harness == "pi" && e.Type == "message" && e.Message.Role == "assistant":
+			ts, err := time.Parse(time.RFC3339Nano, e.Timestamp)
+			if err != nil {
+				continue
+			}
+			for _, b := range blocks {
+				if b.Type == "toolCall" {
+					open[b.ID] = ts.Unix()
+				}
+			}
+		case harness == "pi" && e.Type == "message" && e.Message.Role == "toolResult":
+			delete(open, e.Message.ToolCallID)
+		}
+	}
+	for _, s := range open {
+		if s > start {
+			start = s
+		}
+		ok = true
+	}
+	return start, ok
+}
+
+// toolInFlight reports a tool call that started less than 3x stall_minutes
+// ago and has no result yet: the lead is busy, not stalled.
+func toolInFlight(ol openLead, ag herdrAgent, now, mins int64) bool {
+	start, ok := inFlightSince(ol.lead.Harness, sessionOf(ag, ol.lead))
+	return ok && now-start < 3*mins*60
+}
+
 // stallCheck runs for a lead whose agent is working. It emits `stalled` when
 // nothing has changed or been reported for stall_minutes, and `looping` when
 // the transcript repeats one tool call while the worktree stands still. Each
@@ -133,7 +218,8 @@ func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, 
 		}
 	}
 	progressAt := max(st.FPSince, st.LastReport, ol.lead.SpawnedAt)
-	if mins := int64(cfg.StallMinutes); !st.StallAlerted && now-progressAt >= mins*60 {
+	mins := int64(cfg.StallMinutes)
+	if !st.StallAlerted && now-progressAt >= mins*60 && !toolInFlight(ol, ag, now, mins) {
 		st.StallAlerted = true
 		msg := fmt.Sprintf("no report and no change to the worktree for %dm", (now-progressAt)/60)
 		_ = a.appendStatus(ol.dir, "note", "stalled: "+msg, "", "orch")
