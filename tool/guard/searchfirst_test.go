@@ -9,23 +9,70 @@ import (
 	"time"
 )
 
-func TestConceptRg(t *testing.T) {
-	concept := []string{"seed|demo", "verify|verif", "toast", "edge", "carbon|Carbon|oxide|Oxide", "minecraft|MINECRAFT",
-		"not checked|unchecked|not verified", "Command-line tools"}
-	notConcept := []string{"FAIL", "RESULT|FAIL|SUMMARY", "wave 2b|wave 3", "hideBelow|stack|mobile", "^## ", `func Poll|ErrPollTimeout`,
-		"<DataTable", "review_status|ReviewStatus", `content\.New\(`}
-	for _, p := range concept {
-		if !conceptRg([]string{p, "src"}) {
-			t.Errorf("%q should be concept", p)
+// The patterns are the ones the first version of the rule blocked in a day of
+// real sessions; most were exact-text searches the model then simply retried.
+func TestSearchFirstRoutesRealPatterns(t *testing.T) {
+	shortWait(t)
+	lsp := map[string]string{ // pattern -> the orch lsp def names
+		`ctxEnvFor|ctxReadiness|func `: "ctxEnvFor ctxReadiness",
+		`\bctxEnv\b|ctxOpts|ctxWithinRoot|ctxReadiness|newCtxEnv|ctxEnvFor`: "ctxEnv ctxOpts ctxWithinRoot ctxReadiness newCtxEnv ctxEnvFor",
+		`paneOrchOnPath`: "paneOrchOnPath",
+		`cardDoc`:        "cardDoc",
+		`claimLease|ClaimLease`:                                "claimLease ClaimLease",
+		`StatusBadge|statusVariant|statusTone|StatusDot`:       "StatusBadge statusVariant statusTone StatusDot",
+		`StateCard`:                                            "StateCard",
+		`createFileRoute`:                                      "createFileRoute",
+		`toMatchScreenshot`:                                    "toMatchScreenshot",
+		`dbtest\.New|NewWorld\(|crmtest\.New`:                  "dbtest.New NewWorld crmtest.New",
+		`func TestCtxServerOverridesPATHAndSymlinks`:           "TestCtxServerOverridesPATHAndSymlinks",
+		`stackTitle`:                                           "stackTitle",
+		`PencilIcon`:                                           "PencilIcon",
+		`type Gateway\b`:                                       "Gateway",
+		`MaxAttempts|MAX_ATTEMPTS`:                             "MaxAttempts MAX_ATTEMPTS",
+		`func.*applyRefund`:                                    "applyRefund",
+	}
+	jb := []string{
+		`exempt|allow|skip|ignore|only instruction|must change instruction`,
+		`refund_before_payment|unknown_payment|out_of_order|known gap|refund-before|RefundBefore|refund before`,
+		`refund retry`,
+	}
+	pass := []string{
+		`dialog-bg`, `theme`, `rivertest`, `^package`, `env|Env`, `fake.?wings|fakewings`,
+		`CtxTool|CtxShell|gateReviewPolicy|gateReviewPolicyVersion|CtxProfile|ctxTool|ctxOnly|\.cli\b|cli\.`,
+		`ReceivedAt|received_at`, `no space|WALL|Efficacy|Killed|Lived`,
+		`ctxOnlyNotice|ctxCLINotice|ctxBudgetHint|CtxCLI|ctxOnlyReady|ORCH_CTX_ONLY|ctx-only|ctx_only`,
+		`staff:invite|SetupLink|setup`, `toolbar=|<DataTable|onSearchChange`, `Not run`, `^done`, `^func Test`,
+		`@xl|@max-xl|@3xl|@5xl|@md|container|stack|whitespace|priority|fold`, `DEVSTACK_ADMIN_URL`,
+		`^export|^function|^const [A-Z_]+ =`, `toMatchScreenshot|@vitest/browser|vitest/browser|browser:`, `error`,
+		`Notes|Survival|2FA|servers owned|columnheader|toHaveClass`, `SHOTS_DIR`, `DEVSTACK_ADMIN_URL|ADMIN_URL`,
+		`Driver struct`, `RateLimit|ratelimit`, `admin|seed|password`, `RefundRetryIn|RefundWindow|refund_unmatched|dispute`,
+		`gateway_events|staff_alerts`, `rate|429|throttl|RATE`, `RATE_LIMIT|Too Many Attempts|TooManyAttempts`,
+		`PaymentsEventFailed|PaymentsEventProcessed|RefundUnmatchedKey|attempts`, `func Benchmark|func Test`,
+		`query-boundary|QueryBoundary`, `wrap|stackPart|label`, `dev:seed|DevSeed`, `customers\.New\(|customers\.Deps\{`,
+		`make run-crm|devstack|storefront:dev-key`, `icon-xs|size-6\b|\b24 ?px|row-actions|RowAction`, `flush`,
+		`<SectionCard|</SectionCard|<DataTable|<Dialog |<Sheet |<Tabs|<TabsContent|<form|ListPage`,
+		`tax_rates_no_overlap|EXCLUDE`, `theme.json|theme.css|503|ServiceUnavailable`, `ssh|rsync|HOST|known_hosts`,
+		`node`, `MAX_RETRIES`, `FAIL`, `RESULT|FAIL|SUMMARY`, `wave 2b|wave 3`, `Command-line tools`,
+	}
+	run := func(p string) (int, string) {
+		repo := sfEnv(t, true)
+		return sfPre(t, repo, "rg -n '"+strings.ReplaceAll(p, "'", `'\''`)+"' src")
+	}
+	for p, names := range lsp {
+		code, msg := run(p)
+		if code != 2 || !strings.Contains(msg, "Run: orch lsp def "+names+" (") || strings.Contains(msg, "jbcontext search") {
+			t.Errorf("%s: want orch lsp def %s, got %d %q", p, names, code, msg)
 		}
 	}
-	for _, p := range notConcept {
-		if conceptRg([]string{p, "src"}) {
-			t.Errorf("%q should not be concept", p)
+	for _, p := range jb {
+		if code, msg := run(p); code != 2 || !strings.Contains(msg, "jbcontext search") {
+			t.Errorf("%s: want jbcontext, got %d %q", p, code, msg)
 		}
 	}
-	if conceptRg([]string{"toast", "-g", "*.md"}) {
-		t.Error("a doc-only target is not a code search")
+	for _, p := range pass {
+		if code, msg := run(p); code != 0 {
+			t.Errorf("%s: want pass, got %q", p, msg)
+		}
 	}
 }
 
@@ -76,7 +123,7 @@ func sfLog(t *testing.T) string {
 func TestSearchFirstBlocksOncePerPromptAndRearms(t *testing.T) {
 	repo := sfEnv(t, true)
 	Coach(sfEvent(t, repo, "UserPromptSubmit"), &bytes.Buffer{})
-	code, msg := sfPre(t, repo, "rg -n toast src")
+	code, msg := sfPre(t, repo, "rg -n 'refund retry' src")
 	if code != 2 || !strings.Contains(msg, "deny-search-first") || !strings.Contains(msg, "jbcontext search") {
 		t.Fatalf("first concept rg: %d %q", code, msg)
 	}
@@ -84,24 +131,24 @@ func TestSearchFirstBlocksOncePerPromptAndRearms(t *testing.T) {
 		t.Error("em dash in reason")
 	}
 	log := sfLog(t)
-	if !strings.Contains(log, `"tool":"blocked:rg"`) || !strings.Contains(log, `"reminder":"search-first"`) || !strings.Contains(log, `"query":"toast"`) {
+	if !strings.Contains(log, `"tool":"blocked:rg"`) || !strings.Contains(log, `"reminder":"search-first"`) || !strings.Contains(log, `"query":"refund retry"`) {
 		t.Fatalf("log row: %s", log)
 	}
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 0 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 		t.Fatal("the retry was blocked")
 	}
 	if code, _ := sfPre(t, repo, "rg -n other src"); code != 0 {
 		t.Fatal("a later rg in the same window was blocked")
 	}
 	Coach(sfEvent(t, repo, "UserPromptSubmit"), &bytes.Buffer{})
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 2 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 2 {
 		t.Fatal("a new prompt did not re-arm the rule")
 	}
 }
 
 func TestSearchFirstFollowThroughIsLogged(t *testing.T) {
 	repo := sfEnv(t, true)
-	if code, _ := sfPre(t, repo, "rg -n toast"); code != 2 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry'"); code != 2 {
 		t.Fatal("not blocked")
 	}
 	post := piEvent(t, map[string]any{"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": repo, "tool_name": "Bash",
@@ -139,14 +186,14 @@ func TestSearchFirstStaysOutOfTheWay(t *testing.T) {
 	if code, _ := sfPre(t, repo, `jbcontext search "x"`); code != 0 {
 		t.Fatal("jbcontext blocked")
 	}
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 0 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 		t.Fatal("blocked after a jbcontext call in the same window")
 	}
 }
 
 func TestSearchFirstNeedsAnIndexedRepoForConcepts(t *testing.T) {
 	repo := sfEnv(t, false)
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 0 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 		t.Fatal("blocked in a repo jbcontext has not indexed")
 	}
 }
@@ -157,7 +204,7 @@ func TestSearchFirstSkipAndGuardOff(t *testing.T) {
 		for k, v := range env {
 			t.Setenv(k, v)
 		}
-		if code, _ := sfPre(t, repo, "rg -n toast src"); code != 0 {
+		if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 			t.Errorf("%v: blocked", env)
 		}
 	}
@@ -167,10 +214,38 @@ func TestSearchFirstProbeRunsOncePerRepo(t *testing.T) {
 	repo := sfEnv(t, false)
 	n := 0
 	jbIndexedProbe = func(string) bool { n++; return false }
-	sfPre(t, repo, "rg -n toast src")
-	sfPre(t, repo, "rg -n edge src")
+	sfPre(t, repo, "rg -n 'refund retry' src")
+	sfPre(t, repo, "rg -n 'edge case' src")
 	if n != 1 {
 		t.Fatalf("probe ran %d times", n)
+	}
+}
+
+// The probe takes seconds, so its answer holds across sessions until it is stale.
+func TestSearchFirstProbeAnswerIsSharedAcrossSessions(t *testing.T) {
+	repo := sfEnv(t, false)
+	n := 0
+	jbIndexedProbe = func(string) bool { n++; return true }
+	for _, session := range []string{"a", "b"} {
+		ev := piEvent(t, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": session, "cwd": repo,
+			"tool_input": map[string]any{"command": "rg -n 'refund retry' src"}})
+		if code := Pre(ev, &bytes.Buffer{}); code != 2 {
+			t.Fatalf("session %s: exit %d", session, code)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("probe ran %d times for two sessions", n)
+	}
+	path := filepath.Join(StateDir(), "jbindex.json")
+	stale := []byte(`{"` + repo + `":{"indexed":true,"at":"2000-01-01T00:00:00Z"}}`)
+	if err := os.WriteFile(path, stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ev := piEvent(t, map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "c", "cwd": repo,
+		"tool_input": map[string]any{"command": "rg -n 'refund retry' src"}})
+	Pre(ev, &bytes.Buffer{})
+	if n != 2 {
+		t.Fatalf("a stale answer was not probed again: %d probes", n)
 	}
 }
 
@@ -181,24 +256,24 @@ func TestPiSearchFirstBlocksOncePerPrompt(t *testing.T) {
 			"input": map[string]any{"command": command}, "resultHook": true}))
 	}
 	PiCoach(piEvent(t, map[string]any{"event": "before_agent_start", "session": "p1", "cwd": repo}))
-	if res := run("rg -n toast src"); !res.Block || !strings.Contains(res.Reason, "deny-search-first") {
+	if res := run("rg -n 'refund retry' src"); !res.Block || !strings.Contains(res.Reason, "deny-search-first") {
 		t.Fatalf("first: %+v", res)
 	}
 	if !strings.Contains(sfLog(t), `"harness":"pi"`) {
 		t.Fatalf("no pi row: %s", sfLog(t))
 	}
-	if res := run("rg -n toast src"); res.Block {
+	if res := run("rg -n 'refund retry' src"); res.Block {
 		t.Fatal("retry blocked")
 	}
 	PiCoach(piEvent(t, map[string]any{"event": "before_agent_start", "session": "p1", "cwd": repo}))
-	if res := run("rg -n toast src"); !res.Block {
+	if res := run("rg -n 'refund retry' src"); !res.Block {
 		t.Fatal("not re-armed")
 	}
 	PiCoach(piEvent(t, map[string]any{"event": "before_agent_start", "session": "p1", "cwd": repo}))
 	if res := run(`jbcontext search "x"`); res.Block {
 		t.Fatal("jbcontext blocked")
 	}
-	if res := run("rg -n toast src"); res.Block {
+	if res := run("rg -n 'refund retry' src"); res.Block {
 		t.Fatal("blocked after jbcontext in the window")
 	}
 }
@@ -218,7 +293,7 @@ func TestSearchFirstWaitsForAConcurrentSiblingLookup(t *testing.T) {
 		code, _ := sfPre(t, repo, `jbcontext search "toast"`)
 		done <- code
 	}()
-	if code, msg := sfPre(t, repo, "rg -n toast src"); code != 0 {
+	if code, msg := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 		t.Errorf("rg with a concurrent jbcontext sibling was blocked: %q", msg)
 	}
 	if <-done != 0 {
@@ -227,20 +302,20 @@ func TestSearchFirstWaitsForAConcurrentSiblingLookup(t *testing.T) {
 
 	repo = sfEnv(t, true)
 	sfPre(t, repo, `jbcontext search "toast"`)
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 0 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 0 {
 		t.Error("rg after an earlier jbcontext was blocked")
 	}
 
 	repo = sfEnv(t, true)
 	start := time.Now()
-	if code, _ := sfPre(t, repo, "rg -n toast src"); code != 2 {
+	if code, _ := sfPre(t, repo, "rg -n 'refund retry' src"); code != 2 {
 		t.Error("control: nothing concurrent must block")
 	}
 	if time.Since(start) < searchFirstWait {
 		t.Error("the block did not wait for a sibling")
 	}
 	start = time.Now()
-	sfPre(t, repo, "rg -n toast src")
+	sfPre(t, repo, "rg -n 'refund retry' src")
 	if time.Since(start) >= searchFirstWait {
 		t.Error("the retry waited again")
 	}
@@ -258,7 +333,7 @@ func TestPiSearchFirstWaitsForAConcurrentSiblingLookup(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		done <- run(`jbcontext search "toast"`)
 	}()
-	if res := run("rg -n toast src"); res.Block {
+	if res := run("rg -n 'refund retry' src"); res.Block {
 		t.Errorf("rg with a concurrent jbcontext sibling was blocked: %q", res.Reason)
 	}
 	<-done
@@ -272,8 +347,9 @@ func TestSearchFirstAllCapsWordsAreNotSymbols(t *testing.T) {
 			t.Errorf("%s blocked: %q", p, msg)
 		}
 	}
-	if code, msg := sfPre(t, repo, "rg -n MAX_RETRIES src"); code != 2 || !strings.Contains(msg, "orch lsp def MAX_RETRIES") {
-		t.Errorf("MAX_RETRIES must stay a symbol: %d %q", code, msg)
+	// An ALL_CAPS name is as often an env var, which orch lsp cannot find.
+	if code, msg := sfPre(t, repo, "rg -n MAX_RETRIES src"); code != 0 {
+		t.Errorf("MAX_RETRIES blocked: %q", msg)
 	}
 }
 
@@ -289,7 +365,7 @@ func TestSearchFirstJudgesEveryRgSegmentAndNamesAllIdentifiers(t *testing.T) {
 		want       want
 	}{
 		{"mixed first segment", `cd REPO && rg -n "func.*applyRefund|refund_unmatched|refund.unmatched" internal/crm docs/crm | head -30; rg -n "MaxAttempts|NextRetry|RetryPolicy" internal/crm internal/platform --glob '!*_test.go' | head -30`,
-			want{true, []string{"jbcontext search", "For the names in it: orch lsp def applyRefund"}, nil}},
+			want{true, []string{"orch lsp def MaxAttempts NextRetry RetryPolicy"}, []string{"jbcontext search"}}},
 		{"several names", `rg -n "MaxAttempts|NextRetry|RetryPolicy" internal`,
 			want{true, []string{"orch lsp def MaxAttempts NextRetry RetryPolicy", "orch lsp refs MaxAttempts"}, []string{"jbcontext search"}}},
 		{"func prefix", `rg 'func.*applyRefund'`, want{true, []string{"orch lsp def applyRefund"}, nil}},
@@ -330,7 +406,7 @@ func TestPiLadderNoteSkipsRgTheRuleCoversButKeepsOtherSearches(t *testing.T) {
 			"toolCallId": "c1", "input": map[string]any{"command": command}, "content": []string{"x"}}))
 		return strings.Contains(strings.Join(res.AppendText, "\n"), "Lookup order:")
 	}
-	if hasLadder("rg -n toast src") {
+	if hasLadder("rg -n 'refund retry' src") {
 		t.Error("ladder note on an rg the rule judged")
 	}
 	if !hasLadder("fd toast") {

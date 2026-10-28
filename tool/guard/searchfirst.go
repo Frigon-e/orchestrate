@@ -2,17 +2,20 @@ package guard
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// deny-search-first: the first rg of a user prompt that looks like a "where does
-// this live" search is blocked once and points at jbcontext or orch lsp. The
-// retry passes, so exact-text searches lose one call at most.
+// deny-search-first: the first rg of a user prompt that clearly looks for where
+// code lives is blocked once and points at jbcontext or orch lsp. The retry
+// passes, so a misjudged exact-text search loses one call. Anything that may be
+// exact text passes: a block the model only retries teaches it nothing.
 
 const (
 	searchFirstID   = "search-first"
@@ -20,48 +23,66 @@ const (
 )
 
 var (
-	conceptWord  = regexp.MustCompile(`^[A-Za-z]+(?:[ -][A-Za-z]+)*$`)
 	conceptStrip = strings.NewReplacer(`\b`, "", `\<`, "", `\>`, "")
 	lowerLetter  = regexp.MustCompile(`[a-z]`)
 	upperLetter  = regexp.MustCompile(`[A-Z]`)
-	upperWord    = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
+	constName    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	phraseRule   = regexp.MustCompile(`^[a-z]+(?:-[a-z]+)*(?: [a-z]+(?:-[a-z]+)*)+$`)
 	indexedLine  = regexp.MustCompile(`(?m)^  - revision `)
 )
 
-// jbIndexedProbe says whether jbcontext has the repository indexed; tests replace it.
+// jbIndexedProbe says whether jbcontext has the repository indexed; tests
+// replace it. jbcontext status takes about 4 seconds.
 var jbIndexedProbe = func(root string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "jbcontext", "status", "--project-path", root).Output()
 	return err == nil && indexedLine.Match(out)
 }
 
-// conceptWordOK: letters and single spaces or hyphens, capitals only first or all of it.
-func conceptWordOK(alt string) bool {
-	if !conceptWord.MatchString(alt) {
-		return false
-	}
-	if upperLetter.MatchString(alt[1:]) && strings.ToUpper(alt) != alt {
-		return false
-	}
-	return true
+// How long a probe answer holds for every session. Indexing is rare and the
+// probe slow; a repository indexed later is noticed within the shorter wait.
+const (
+	jbIndexedTTL    = 24 * time.Hour
+	jbNotIndexedTTL = time.Hour
+)
+
+type jbIndexEntry struct {
+	Indexed bool      `json:"indexed"`
+	At      time.Time `json:"at"`
 }
 
-// conceptRg: an rg whose pattern is plain words, a topic rather than a symbol or exact text.
-func conceptRg(args []string) bool {
-	pattern, paths, globs, types, _ := rgParts(args)
-	if docOnly(globs, types, paths) {
-		return false
+// jbIndexed says whether jbcontext has root indexed: the session's answer, else
+// a fresh one any session saved in jbindex.json, else a probe.
+func jbIndexed(st *State, root string) bool {
+	if v, ok := st.JBIndexed[root]; ok {
+		return v
 	}
-	text := strings.TrimSuffix(strings.TrimPrefix(conceptStrip.Replace(pattern), "^"), "$")
-	lower := false
-	for _, alt := range strings.Split(text, "|") {
-		if !conceptWordOK(alt) {
-			return false
+	path := filepath.Join(StateDir(), "jbindex.json")
+	cache := map[string]jbIndexEntry{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &cache)
+	}
+	e, ok := cache[root]
+	ttl := jbNotIndexedTTL
+	if e.Indexed {
+		ttl = jbIndexedTTL
+	}
+	if !ok || time.Since(e.At) > ttl {
+		e = jbIndexEntry{jbIndexedProbe(root), time.Now()}
+		cache[root] = e
+		if data, err := json.Marshal(cache); err == nil && os.MkdirAll(filepath.Dir(path), 0o777) == nil {
+			tmp := path + "." + strconv.Itoa(os.Getpid())
+			if os.WriteFile(tmp, data, 0o644) == nil {
+				_ = os.Rename(tmp, path)
+			}
 		}
-		lower = lower || lowerLetter.MatchString(alt)
 	}
-	return lower
+	if st.JBIndexed == nil {
+		st.JBIndexed = map[string]bool{}
+	}
+	st.JBIndexed[root] = e.Indexed
+	return e.Indexed
 }
 
 // rgSegments are the args of every rg in a line (any segment, after a cd or a
@@ -143,41 +164,53 @@ func splitAlternatives(pattern string) []string {
 	return append(out, pattern[from:])
 }
 
-// patternNames are the identifiers an rg pattern names, in order, without
-// duplicates and at most maxNames; allNames says every alternative is one.
-// symbolLike are the names that look like symbols rather than plain words: an
-// inner capital, an underscore or a definition prefix.
-func patternNames(pattern string) (names, symbolLike []string, allNames bool) {
-	text := strings.TrimSuffix(strings.TrimPrefix(conceptStrip.Replace(pattern), "^"), "$")
-	allNames = true
-	for _, alt := range splitAlternatives(text) {
-		stripped := defPrefix.ReplaceAllString(alt, "")
-		withPrefix := stripped != alt
-		stripped = strings.ReplaceAll(nameTrail.ReplaceAllString(stripped, ""), `\.`, ".")
-		// pkg.Name or Type.Method is a name orch lsp takes; refund.unmatched is a regex.
-		qualified := qualifiedName.MatchString(stripped) && upperLetter.MatchString(stripped)
-		if !nameRule.MatchString(stripped) && !qualified {
-			allNames = false
-			continue
-		}
-		if contains(names, stripped) || len(names) >= maxNames {
-			continue
-		}
-		names = append(names, stripped)
-		if withPrefix || qualified || strings.Contains(stripped, "_") || capital.MatchString(stripped[1:]) {
-			symbolLike = append(symbolLike, stripped)
-		}
-	}
-	return names, symbolLike, allNames
-}
+// altKind is what one alternative of an rg pattern looks for.
+type altKind int
 
-func allBare(names []string) bool {
-	for _, n := range names {
-		if !upperWord.MatchString(n) {
-			return false
-		}
+const (
+	altText   altKind = iota // maybe exact text: an anchor, punctuation, a digit, sentence case
+	altSymbol                // an identifier: an inner capital, pkg.Name, or a bounded name after func or type
+	altConst                 // ALL_CAPS: a constant, or an env var orch lsp cannot find
+	altWord                  // lowercase: a word, a snake_case column or key, a hyphenated class
+	altPhrase                // lowercase words with a space: a description of behavior
+	altNone                  // a definition prefix with no name (func )
+)
+
+// classifyAlt is the kind of one alternative and, for a symbol or a constant,
+// the name orch lsp takes.
+func classifyAlt(raw string) (altKind, string) {
+	alt := conceptStrip.Replace(raw)
+	if strings.HasPrefix(alt, "^") || strings.HasSuffix(alt, "$") {
+		return altText, ""
 	}
-	return len(names) > 0
+	if phraseRule.MatchString(alt) {
+		return altPhrase, ""
+	}
+	stripped := defPrefix.ReplaceAllString(alt, "")
+	withPrefix := stripped != alt
+	if withPrefix && strings.TrimSpace(stripped) == "" {
+		return altNone, ""
+	}
+	// func Test without a boundary lists every test; type Gateway\b names one.
+	bounded := strings.HasSuffix(raw, `\b`) || strings.HasSuffix(raw, `\>`) || nameTrail.MatchString(stripped)
+	stripped = strings.ReplaceAll(nameTrail.ReplaceAllString(stripped, ""), `\.`, ".")
+	switch {
+	case qualifiedName.MatchString(stripped) && upperLetter.MatchString(stripped):
+		// pkg.Name or Type.Method is a name orch lsp takes; refund.unmatched is a regex.
+		return altSymbol, stripped
+	case strings.HasPrefix(stripped, "-") || !nameRule.MatchString(strings.ReplaceAll(stripped, "-", "_")):
+		return altText, ""
+	case constName.MatchString(stripped):
+		return altConst, stripped
+	case strings.Contains(stripped, "-"):
+		return altWord, ""
+	case lowerLetter.MatchString(stripped) && upperLetter.MatchString(stripped[1:]), withPrefix && bounded:
+		return altSymbol, stripped
+	case !upperLetter.MatchString(stripped):
+		return altWord, ""
+	}
+	// One capitalized word (Driver, Notes) is as often UI text as a type.
+	return altText, ""
 }
 
 // searchFirstReason is the block text for the first rg in a line the rule
@@ -199,44 +232,46 @@ func searchFirstReason(line, cwd string, st *State, t tools) (string, string) {
 }
 
 func searchFirstSegment(args []string, cwd string, st *State, t tools) (string, string) {
-	pattern, paths, globs, types, word := rgParts(args)
+	pattern, paths, globs, types, _ := rgParts(args)
 	if docOnly(globs, types, paths) {
 		return "", ""
 	}
-	names, symbolLike, allNames := patternNames(pattern)
-	if word {
-		symbolLike = names
+	var names []string
+	kinds := map[altKind]int{}
+	for _, alt := range splitAlternatives(pattern) {
+		kind, name := classifyAlt(alt)
+		kinds[kind]++
+		if name != "" && !contains(names, name) && len(names) < maxNames {
+			names = append(names, name)
+		}
 	}
 	once := "this guard blocks once per user message."
-	if allNames && len(symbolLike) > 0 && !allBare(names) && t.orch {
+	if kinds[altText] > 0 {
+		return "", ""
+	}
+	// Identifiers alone go to orch lsp; a plain word among them may be text.
+	if kinds[altPhrase] == 0 {
+		if kinds[altSymbol] == 0 || kinds[altWord] > 0 || !t.orch {
+			return "", ""
+		}
 		return Marker + " (" + searchFirstName + "): rg finds text, not definitions or uses. Run: orch lsp def " + strings.Join(names, " ") +
 			" (several names in one call), or orch lsp refs " + names[0] + " for uses.\n" +
 			"If you need the text itself (strings, comments, config), run the same rg again; " + once, pattern
 	}
-	// A concept, or a mix of names and other text, goes to jbcontext; names alone
-	// that are not symbol-like (FAIL, toast) are exact text.
-	mixed := !allNames && len(names) > 0 && !allBare(names)
-	if !(conceptRg(args) || mixed) || !onPath("jbcontext") {
+	// A description of behavior goes to jbcontext.
+	if !onPath("jbcontext") {
 		return "", ""
 	}
 	root := gitRoot(cwd)
 	if root == "" {
 		return "", ""
 	}
-	indexed, known := st.JBIndexed[root]
-	if !known {
-		indexed = jbIndexedProbe(root)
-		if st.JBIndexed == nil {
-			st.JBIndexed = map[string]bool{}
-		}
-		st.JBIndexed[root] = indexed
-	}
-	if !indexed {
+	if !jbIndexed(st, root) {
 		return "", ""
 	}
 	extra := ""
-	if !allNames && t.orch && len(symbolLike) > 0 {
-		extra = "For the names in it: orch lsp def " + strings.Join(symbolLike, " ") + "\n"
+	if t.orch && kinds[altSymbol] > 0 {
+		extra = "For the names in it: orch lsp def " + strings.Join(names, " ") + "\n"
 	}
 	return Marker + " (" + searchFirstName + "): this rg looks for where code lives, and no jbcontext or orch lsp lookup ran since the last user message.\n" +
 		"Ask jbcontext first: jbcontext search \"Code that <does what you are looking for>\" --limit 3 (one behavior per query; send several queries as parallel calls in one message).\n" +
