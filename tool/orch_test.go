@@ -181,6 +181,16 @@ func fakeHerdr(path string, args []string) int {
 		}
 		delete(st.Workspaces, ws)
 		return print(map[string]any{"result": map[string]any{"type": "worktree_removed", "workspace_id": ws}})
+	case "workspace list":
+		if st.Down {
+			fmt.Fprintln(os.Stderr, "connection refused")
+			return 1
+		}
+		var wss []map[string]any
+		for id, p := range st.Workspaces {
+			wss = append(wss, map[string]any{"workspace_id": id, "worktree": map[string]any{"checkout_path": p}})
+		}
+		return print(map[string]any{"result": map[string]any{"workspaces": wss}})
 	case "pane current":
 		return print(map[string]any{"result": map[string]any{"pane": map[string]any{"agent_session": map[string]any{"value": st.Session}}}})
 	case "pane rename", "agent wait", "agent focus":

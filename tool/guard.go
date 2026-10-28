@@ -202,6 +202,18 @@ func cmdDoctor(a *app, args []string) error {
 		add("warn", "config", "repo bench_suite ignored", "use --bench-suite or bench_suite in the user config")
 	}
 
+	if items, err := pruneScan(s, staleRule{}); err == nil {
+		n := 0
+		for _, it := range items {
+			if it.keep == "" {
+				n++
+			}
+		}
+		if n > 0 {
+			add("warn", "worktrees", fmt.Sprintf("%d merged, clean orch worktrees can be removed", n), "run: orch prune")
+		}
+	}
+
 	leads := myLeads(openLeads(s.root), me)
 	if len(leads) > 0 && watcherAlive(s.root, me) == 0 {
 		add("error", "watcher", fmt.Sprintf("%d lead(s) in flight and no watcher is running", len(leads)), "start `orch watch` with the Monitor tool")

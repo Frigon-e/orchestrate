@@ -323,7 +323,12 @@ a lead's pane.
   keeps both, says why and what to run, and never forces (`--force` skips
   the done check, not these guards). `orch respawn` reuses the worktree
   and branch. Outside Herdr the brief still tells the lead to run `git
-  worktree add` itself, and `orch close` removes nothing.
+  worktree add` itself, and `orch close` removes nothing. `orch prune`
+  lists older leftovers (merged, clean, no open lead or Herdr workspace;
+  integration branches kept) and `orch prune --apply` removes them, never
+  forcing. `--stale[=DAYS]` (default 30) also drops the worktree, never the
+  branch, of a clean unmerged branch idle for DAYS while the base branch
+  moved on.
 - Per-repo settings, notes and locks live in
   `<repo>/.agents/orchestrate.toml`; the board prints the notes and held
   locks, and says when a repo has no file. Each brief tells the lead which

@@ -41,6 +41,7 @@ Orchestrator:
   orch models
   orch triage <id>... [--force] | orch triage report
   orch doctor    (also checks the machine setup: links, hooks, tools, Claude trust)
+  orch prune [--apply] [--stale[=DAYS]]   (list, or remove, old merged and clean orch worktrees; --stale also drops idle unmerged ones but keeps their branch)
   orch sweep <topic-dir> [--roots name=dir] [--min-passes 2] [--final settle]
   orch audit [<id>] [--system S] [--since 6h] [--problems]
   orch hold [on <reason> | off]
@@ -114,6 +115,7 @@ var commands = map[string]func(*app, []string) error{
 	"hold":              cmdHold,
 	"unfreeze":          cmdUnfreeze,
 	"doctor":            cmdDoctor,
+	"prune":             cmdPrune,
 	"spawn":             cmdSpawn,
 	"send":              cmdSend,
 	"status":            cmdStatus,
