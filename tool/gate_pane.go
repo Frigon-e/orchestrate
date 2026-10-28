@@ -191,7 +191,7 @@ var (
 // message. pi sits idle at its prompt while it loads its extensions and before
 // it sends the prompt from its launch arguments, so an idle agent with no
 // answer yet is still starting, not finished.
-func waitPaneTurn(ctx context.Context, pane, session, transcript string) error {
+func waitPaneTurn(ctx context.Context, pane, session, transcript string, old map[string]bool) error {
 	deadline := time.Now().Add(gateStartWait)
 	seen := false
 	for {
@@ -206,7 +206,7 @@ func waitPaneTurn(ctx context.Context, pane, session, transcript string) error {
 				return nil
 			}
 		}
-		if paneAnswered(session, transcript) {
+		if paneAnswered(session, transcript, old) {
 			return nil
 		}
 		if gone && seen {
@@ -227,11 +227,17 @@ func waitPaneTurn(ctx context.Context, pane, session, transcript string) error {
 
 // paneAnswered reports whether a pass's session already holds an assistant
 // message: the claude transcript when there is one, else the newest pi session
-// file under session.
-func paneAnswered(session, transcript string) bool {
+// file under session that is not in old (files a previous run left behind).
+func paneAnswered(session, transcript string, old map[string]bool) bool {
 	path := transcript
 	if path == "" {
-		files, _ := filepath.Glob(filepath.Join(session, "*.jsonl"))
+		var files []string
+		all, _ := filepath.Glob(filepath.Join(session, "*.jsonl"))
+		for _, f := range all {
+			if !old[filepath.Base(f)] {
+				files = append(files, f)
+			}
+		}
 		if len(files) == 0 {
 			return false
 		}
@@ -250,6 +256,16 @@ func paneAnswered(session, transcript string) bool {
 		}
 	})
 	return answered
+}
+
+// sessionFiles names the *.jsonl files already in session.
+func sessionFiles(session string) map[string]bool {
+	old := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(session, "*.jsonl"))
+	for _, f := range files {
+		old[filepath.Base(f)] = true
+	}
+	return old
 }
 
 // runPanePass runs one pass as a real pi agent in *pane and returns its reply:
@@ -318,13 +334,14 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 		return "", "", err
 	}
 	start := time.Now()
+	old := sessionFiles(session)
 	// The pane's shell types one short line: the long command and its
 	// environment stay in the launcher (see paneLaunchScript).
 	if _, err = herdrCmd(herdrTimeout, "pane", "run", *pane, "sh "+shellQuote(launcher)); err != nil {
 		leavePane(pane, repo, true)
 		return "", "", fmt.Errorf("%s did not start: %v", choice.Harness, err)
 	}
-	if serr := waitPaneTurn(passContext(p), *pane, session, transcript); serr != nil {
+	if serr := waitPaneTurn(passContext(p), *pane, session, transcript, old); serr != nil {
 		leavePane(pane, repo, true)
 		if passContext(p).Err() != nil {
 			return "", "", passContext(p).Err()

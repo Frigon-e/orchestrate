@@ -183,6 +183,18 @@ func costNote(cost float64, missing int) string {
 
 // sessionTokens sums the usage of the assistant messages in the pi session
 // files (jsonl) under dir. It reports false when none recorded any usage.
+// passSessionDir is where invocation n (1-based) of a pass in this process keeps
+// its session files. The first invocation starts from an empty directory so
+// files a cancelled earlier run of the same spec left behind are never read.
+func passSessionDir(gdir, pass string, n int) string {
+	dir := filepath.Join(gdir, "sessions", passFile(pass))
+	if n <= 1 {
+		_ = os.RemoveAll(dir)
+		return dir
+	}
+	return filepath.Join(dir, fmt.Sprintf("attempt-%d", n))
+}
+
 func sessionTokens(dir string) (passTokens, bool) {
 	var t passTokens
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -1416,10 +1428,7 @@ func runGatePasses(dir, code, model string, passes []gatePass, rec *gateRecord, 
 						fallback := lastRoute != "" && lastRoute != choice.String()
 						lastRoute = choice.String()
 						invocations[q.name]++
-						prepared.sessionDir = filepath.Join(dir, "sessions", passFile(q.name))
-						if n := invocations[q.name]; n > 1 {
-							prepared.sessionDir = filepath.Join(prepared.sessionDir, fmt.Sprintf("attempt-%d", n))
-						}
+						prepared.sessionDir = passSessionDir(dir, q.name, invocations[q.name])
 						return runBudgetedGatePass(rec.Budget, prepared, repair, fallback, func(attempt gatePass) (string, string, error) {
 							return opts.guard.run(q.name, func() (string, string, error) {
 								if pool != nil {
