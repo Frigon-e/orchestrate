@@ -989,6 +989,9 @@ type watchSeen struct {
 	LoopAlerted  string `json:"loop_alerted,omitempty"`
 	// RungFor is the oldest unread message the doorbell was rung again for.
 	RungFor string `json:"rung_for,omitempty"`
+	// Claude limit detection: see limits.go.
+	LimitCheck int64  `json:"limit_check,omitempty"`
+	LimitStamp string `json:"limit_stamp,omitempty"`
 }
 
 func cmdWatch(a *app, args []string) error {
@@ -1176,6 +1179,22 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 		}
 		st.Herdr = "gone"
 		return emitted
+	}
+	if ol.lead.Harness == "claude" && now-st.LimitCheck >= 60 {
+		st.LimitCheck = now
+		after := st.LimitStamp
+		if after == "" {
+			after = time.Unix(ol.lead.SpawnedAt, 0).UTC().Format(time.RFC3339)
+		}
+		if found, ok := claudeLimitSince(sessionOf(ag, ol.lead), after); ok {
+			st.LimitStamp = found.Stamp
+			if found.ResetsAt > now {
+				reason := "claude " + found.Type + " limit (auto, from transcript)"
+				if wrote, err := autoLimit("claude", found.ResetsAt, reason, now); err == nil && wrote {
+					emit(fmt.Sprintf("limit: claude %s limit until %s; recorded in health (auto). Clear early with: orch health set claude ok", found.Type, time.Unix(found.ResetsAt, 0).Format("15:04")))
+				}
+			}
+		}
 	}
 	if ag.Status == "blocked" && st.Herdr != "blocked" {
 		emit("ui-blocked: waiting at a prompt in its pane; run orch peek " + id + ". If it shows a usage or credit limit, run: orch health set " + ol.lead.Harness + " limited --for <duration>")

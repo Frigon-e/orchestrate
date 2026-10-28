@@ -54,8 +54,10 @@ entry point for generation commands. API Decider calls use the API wrapper.
 
 ## When a provider is down
 
-Provider failures are local to the run. They do not write health state. Mark a
-persistent limit explicitly with `orch health set <lane> limited --for 3h` and
+Transport and provider failures are local to the run. The one exception is a
+Claude quota rejection with a reset time, which `orch watch` records as an
+`(auto)` `claude` entry that expires at the reset; a manual entry always wins.
+Mark a persistent limit explicitly with `orch health set <lane> limited --for 3h` and
 clear it with `orch health set <lane> ok` after recovery. The lanes are
 `claude`, `pi:openrouter`, `pi:anthropic`, and `pi:openai`. A `pi` limit covers
 all pi children; an OpenAI limit does not disable Claude or OpenRouter.

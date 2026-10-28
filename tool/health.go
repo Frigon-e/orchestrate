@@ -11,8 +11,8 @@ import (
 )
 
 // Provider health is per machine, not per repo: a Claude usage limit stops
-// every repo's leads. A person sets it with `orch health set`, because no API
-// reports a subscription limit; the watcher only hints at it.
+// every repo's leads. A person sets it with `orch health set`, and the watcher
+// also records a Claude subscription rejection that carries a reset time.
 var harnesses = []string{"claude", "pi"}
 
 // Lanes follow connectors. Parent limits cover their child lanes.
@@ -90,6 +90,43 @@ type healthEntry struct {
 	Since  int64  `json:"since"`
 	Until  int64  `json:"until,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Source is "auto" for an entry the watcher wrote; empty means a person set it.
+	Source string `json:"source,omitempty"`
+}
+
+// withHealthLock serializes read-modify-write of the health file.
+func withHealthLock(fn func() error) error {
+	path := healthPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return withFlock(path+".lock", fn)
+}
+
+// autoLimit records a limit the watcher saw. A person's active entry wins, and
+// the same Until twice is a no-op. It reports whether it wrote.
+func autoLimit(laneName string, until int64, reason string, now int64) (bool, error) {
+	wrote := false
+	err := withHealthLock(func() error {
+		cur := loadHealth(time.Unix(now, 0))
+		since := now
+		if e, ok := cur[laneName]; ok {
+			if e.Source != "auto" || e.Until == until {
+				return nil
+			}
+			since = e.Since
+		}
+		cur[laneName] = healthEntry{State: "limited", Since: since, Until: until, Reason: reason, Source: "auto"}
+		if err := saveHealth(cur); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
+	})
+	if wrote {
+		logEvent(filepath.Dir(healthPath()), auditEvent{At: now, System: "health", Task: laneName, Result: "problem", Text: laneName + " " + healthEntry{State: "limited", Since: now, Until: until, Reason: reason, Source: "auto"}.String()})
+	}
+	return wrote, err
 }
 
 func healthPath() string {
@@ -136,6 +173,9 @@ func (e healthEntry) String() string {
 	if e.Reason != "" {
 		s += " (" + e.Reason + ")"
 	}
+	if e.Source == "auto" {
+		s += " (auto)"
+	}
 	return s
 }
 
@@ -166,20 +206,27 @@ func cmdHealth(a *app, args []string) error {
 		return &exitError{code: 2, msg: "usage: orch health [set <claude|pi|pi:provider|pi:openrouter:anthropic|pi-anthropic> ok|limited [--for DURATION] [--reason TEXT]]"}
 	}
 	pos[1] = canonicalLane(pos[1])
-	if pos[2] == "ok" {
-		delete(cur, pos[1])
-	} else {
-		e := healthEntry{State: "limited", Since: a.now().Unix(), Reason: strings.TrimSpace(*reason)}
-		if *forDur != "" {
-			d, err := time.ParseDuration(*forDur)
-			if err != nil || d <= 0 {
-				return fail("--for %q is not a duration such as 90m or 3h", *forDur)
-			}
-			e.Until = a.now().Add(d).Unix()
+	var dur time.Duration
+	if pos[2] == "limited" && *forDur != "" {
+		d, err := time.ParseDuration(*forDur)
+		if err != nil || d <= 0 {
+			return fail("--for %q is not a duration such as 90m or 3h", *forDur)
 		}
-		cur[pos[1]] = e
+		dur = d
 	}
-	if err := saveHealth(cur); err != nil {
+	if err := withHealthLock(func() error {
+		cur = loadHealth(a.now())
+		if pos[2] == "ok" {
+			delete(cur, pos[1])
+		} else {
+			e := healthEntry{State: "limited", Since: a.now().Unix(), Reason: strings.TrimSpace(*reason)}
+			if dur > 0 {
+				e.Until = a.now().Add(dur).Unix()
+			}
+			cur[pos[1]] = e
+		}
+		return saveHealth(cur)
+	}); err != nil {
 		return err
 	}
 	if pos[2] == "ok" {

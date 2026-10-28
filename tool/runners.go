@@ -244,7 +244,8 @@ func providerDown(err error) bool {
 	return false
 }
 
-// A provider failure is run-local. It never writes the person's health file.
+// Transport and provider failures stay run-local. Only a Claude quota rejection
+// with a reset time, seen by the watcher, writes health.
 // Each pass gets at most one retry on the next usable choice.
 func (r *roleRun) run(fn func(profile) (string, string, error)) (string, string, profile, error) {
 	return r.runAfter("", fn)

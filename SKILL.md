@@ -240,7 +240,9 @@ a lead's pane.
   run `orch health set <claude|pi:provider|pi:openrouter:anthropic> limited --for <duration> --reason "..."`.
   `pi` remains the parent of all pi connectors; `pi-anthropic` aliases direct
   `pi:anthropic`. The user's say-so is the signal; a `ui-blocked` line that
-  shows a limit is a hint. `orch new`, `orch plan` and `spawn` refuse that lane,
+  shows a limit is a hint. The watcher also records a Claude subscription
+  rejection that carries a reset time (marked `(auto)`, expires at the reset);
+  a manual entry always wins. `orch new`, `orch plan` and `spawn` refuse that lane,
   and `orch status` and `orch dispatch` say what to use now. Park by
   default: a dispatch profile marked `degraded = true` is a weaker
   stand-in, and you use it (`--degraded`) only after the user agrees. Never
