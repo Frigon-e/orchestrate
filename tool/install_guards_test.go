@@ -16,8 +16,15 @@ func installGuards(t *testing.T, home string, args ...string) (string, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The guard build keeps the real Go caches: under the throwaway HOME it would
+	// download modules again, and their read-only files break TempDir cleanup.
+	caches, err := exec.Command("go", "env", "GOMODCACHE", "GOCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := strings.Fields(string(caches))
 	cmd := exec.Command(script, args...)
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = append(os.Environ(), "HOME="+home, "GOMODCACHE="+dirs[0], "GOCACHE="+dirs[1])
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
