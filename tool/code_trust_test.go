@@ -169,6 +169,10 @@ func TestCtxServerOverridesPATHAndSymlinks(t *testing.T) {
 	}
 	external := filepath.Join(outside, "external-probe")
 	ctxProbeServer(t, external, marker)
+	// tsgo on PATH must report TypeScript 7 or newer to be a candidate.
+	if err := os.WriteFile(external, []byte("#!/bin/sh\nprintf ran > '"+marker+"'\n[ \"$1\" = --version ] && echo 'Version 7.0.0' && exit 0\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("ORCH_PROBE_LS", external+" --stdio")
 	if bin, args, ok, _ := langServerReason(c.repo, l); !ok || bin != external || strings.Join(args, " ") != "--stdio" {
 		t.Fatalf("external env server rejected: %s %v %v", bin, args, ok)
