@@ -170,6 +170,8 @@ type lead struct {
 	// WorkspaceID is the Herdr workspace orch made for a ship lead's worktree.
 	// Empty on scouts and on leads whose worktree the lead made itself.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Subs are the helper panes the lead started with `orch sub`.
+	Subs []subAgent `json:"subs,omitempty"`
 }
 
 // orchID names the orchestrator running this command by its Herdr pane, so

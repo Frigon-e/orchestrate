@@ -63,6 +63,21 @@ files by hand: it selects only tests that reference changed code. Do not run
 the full suite; `--all` exists but needs the
 user's say-so.
 
+## Helper agents
+
+A ship lead in a Herdr worktree can start helpers as extra panes in its own
+workspace: `orch sub start <name> --harness claude|pi --model M
+[--effort E] "<prompt>"`. Use one for reads, research, or edits inside your
+owned paths. Helpers work in your checkout, so you stay responsible for it,
+and `orch verify` judges the combined tree. They do not report to the
+orchestrator and must not commit or run orch commands. Read the answer with
+`orch sub read <name>`, list them with `orch sub list [--all]` and close one
+with `orch sub close <name>`. `orch close` and `orch respawn` close any left
+open. There is no cap: the first 3 stack in your tab and more open in overflow
+tabs of the same workspace, but each helper costs tokens, so start only what
+you need. A helper that needs its own branch is not supported; that is a task
+for a separate lead.
+
 ## Context budget
 
 A lead runs long, so what it reads early is paid for on every later turn and

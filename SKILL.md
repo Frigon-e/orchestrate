@@ -337,6 +337,7 @@ a lead's pane.
   `claude_args` and `pi_args` (extra CLI flags for leads), `triage_mode` (shadow, enforce or off), `quick_mode` (same values; for `orch quick`), `triage_model`, `weak_models`, `ctx_index` (`full`, the default, builds a missing jbcontext index and refreshes a stale one; `incremental` only refreshes; `off` never calls jbcontext), `ctx_deny` (repos that never use jbcontext) and `dispatch`
   rules (a profile may set `degraded = true` for a weaker fallback). orch refuses them in a repo file, so a commit can't change how
   leads launch.
+- A ship lead can start helper panes in its worktree with `orch sub start|list|read|close` (no cap; past 3 they open in overflow tabs of the same workspace, and each costs tokens, so start only what is needed) (see `references/lead.md`, "Helper agents"); `orch close` and `orch respawn` close them first, and the board shows `+N` on the lead's AGENT column.
 - Run state lives next to the repo's Herdr worktrees:
   `<herdr worktrees dir>/<repo>/.orchestrate/<id>/`. It holds task.md,
   lead.json (with the owning orchestrator pane), status.log, inbox/ and

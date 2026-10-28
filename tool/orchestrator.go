@@ -693,6 +693,9 @@ type row struct {
 	Context   int     `json:"context,omitempty"`
 	Decisions []entry `json:"decisions"`
 	Degraded  bool    `json:"degraded,omitempty"`
+	// Subs counts the lead's open helper panes; SubList names them.
+	Subs    int        `json:"subs,omitempty"`
+	SubList []subAgent `json:"sub_list,omitempty"`
 }
 
 func leadRows(root string, includeClosed bool) []row {
@@ -736,6 +739,10 @@ func leadRows(root string, includeClosed bool) []row {
 				r.Herdr = ag.Status
 				r.Context = contextTokens(ag.Agent, sessionOf(ag, l))
 			}
+		}
+		if l != nil {
+			r.SubList = openSubs(l)
+			r.Subs = len(r.SubList)
 		}
 		if r.State == "" {
 			r.State = "draft"
@@ -948,7 +955,12 @@ func (a *app) board(s site, rows []row) string {
 				ctx += "!"
 			}
 		}
-		out = append(out, fmt.Sprintf("%-20s %-5s %-16s %-8s %5s %6s  %s", r.ID, r.Kind, short(r.Agent, 16), r.Herdr, ctx, a.age(r.LastAt), short(r.Last, 70)))
+		agent := short(r.Agent, 16)
+		if r.Subs > 0 {
+			suffix := fmt.Sprintf("+%d", r.Subs)
+			agent = short(r.Agent, 16-len(suffix)) + suffix
+		}
+		out = append(out, fmt.Sprintf("%-20s %-5s %-16s %-8s %5s %6s  %s", r.ID, r.Kind, agent, r.Herdr, ctx, a.age(r.LastAt), short(r.Last, 70)))
 		for _, d := range r.Decisions {
 			key := ""
 			if d.Key != "" {
@@ -1332,6 +1344,9 @@ func cmdClose(a *app, args []string) error {
 
 // closeLead closes the lead's pane, frees its locks and logs note.
 func (a *app) closeLead(dir string, l *lead, note string) error {
+	if err := a.closeSubs(dir, l); err != nil {
+		return err
+	}
 	exists, err := paneExists(l.PaneID)
 	if err != nil {
 		return err

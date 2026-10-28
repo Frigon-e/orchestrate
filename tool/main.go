@@ -66,6 +66,7 @@ Lead:
   orch report [--dir D] [--key K] <state> <text...>
   orch inbox [--dir D]
   orch lock acquire|release <name> [--dir D] [--wait S]
+  orch sub start <name> --harness claude|pi --model M [--effort E] "<prompt>" | sub list [--all] | sub read <name> [--lines N] | sub close <name>
 Hooks:
   orch hook pretool|stop|session-start
 `
@@ -130,6 +131,7 @@ var commands = map[string]func(*app, []string) error{
 	"lock":              cmdLock,
 	"report":            cmdReport,
 	"inbox":             cmdInbox,
+	"sub":               cmdSub,
 	"hook":              cmdHook,
 	"lookup-only-check": cmdLookupOnlyCheck, // hidden: the Claude gate pass Bash hook
 }
