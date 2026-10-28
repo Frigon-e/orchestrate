@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // setupFindings checks the machine setup a lead run depends on: installed
@@ -153,6 +156,42 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 		}
 	}
 	return fs
+}
+
+// claudeAuthFindings warns when `<bin> auth status` says Claude Code is not
+// signed in. Only the loggedIn field is read; nothing else is kept or shown.
+func claudeAuthFindings(bin string, run func(name string, args ...string) ([]byte, error)) []finding {
+	const fix = "run: claude auth login"
+	out, err := run(bin, "auth", "status")
+	if err != nil {
+		reason := "command error"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "timed out"
+		}
+		return []finding{{"warn", "setup", "claude auth status failed: " + reason, fix}}
+	}
+	var st struct {
+		LoggedIn *bool `json:"loggedIn"`
+	}
+	if json.Unmarshal(out, &st) != nil || st.LoggedIn == nil {
+		return []finding{{"warn", "setup", "claude auth status gave unreadable output", "run: claude auth status"}}
+	}
+	if !*st.LoggedIn {
+		return []finding{{"warn", "setup", "claude is not signed in", fix}}
+	}
+	return nil
+}
+
+// runClaudeAuth runs a command for claudeAuthFindings with a 5 second limit
+// and returns stdout only.
+func runClaudeAuth(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return out, err
 }
 
 // staleGuard says why hooks/bin/orch-guard is out of date, or "" when it is current

@@ -285,8 +285,9 @@ a lead's pane.
   `orch hold on <reason>` is the manual safe stop: running leads finish,
   nothing new starts. When state looks wrong or confusing, run
   `orch doctor` first: it lists each inconsistency with its fix and changes
-  nothing. It also checks the installed links, hooks and Claude trust. Prefer stopping to improvising when a state is one you do not
-  recognise.
+  nothing. It also checks the installed links, hooks and Claude trust, and
+  warns when Claude is not signed in. Prefer stopping to improvising when a
+  state is one you do not recognise.
 - Leads queue non-blocking questions with the `question` state; they do
   not wake you. `orch status` shows them under "open decisions" with the
   count of blocking and queued. Do not interrupt the user for a queued

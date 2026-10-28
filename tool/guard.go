@@ -193,6 +193,11 @@ func cmdDoctor(a *app, args []string) error {
 			add(f.severity, f.where, f.msg, f.fix)
 		}
 	}
+	if bin := runnerBinary("claude"); installed("claude") {
+		for _, f := range claudeAuthFindings(bin, runClaudeAuth) {
+			add(f.severity, f.where, f.msg, f.fix)
+		}
+	}
 	if s.cfg.benchSuiteIgnored {
 		add("warn", "config", "repo bench_suite ignored", "use --bench-suite or bench_suite in the user config")
 	}

@@ -268,3 +268,32 @@ func TestSetupFindingsPiExtension(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeAuthFindings(t *testing.T) {
+	fake := func(out string, err error) func(string, ...string) ([]byte, error) {
+		return func(string, ...string) ([]byte, error) { return []byte(out), err }
+	}
+	cases := []struct {
+		name string
+		run  func(string, ...string) ([]byte, error)
+		want string
+	}{
+		{"logged in", fake(`{"loggedIn":true,"authMethod":"x"}`, nil), ""},
+		{"signed out", fake(`{"loggedIn":false}`, nil), "not signed in"},
+		{"run error", fake("", os.ErrNotExist), "failed"},
+		{"invalid json", fake("not json", nil), "unreadable"},
+		{"missing field", fake(`{"authMethod":"x"}`, nil), "unreadable"},
+	}
+	for _, c := range cases {
+		fs := claudeAuthFindings("claude", c.run)
+		if c.want == "" {
+			if len(fs) != 0 {
+				t.Errorf("%s: want no findings, got %v", c.name, fs)
+			}
+			continue
+		}
+		if len(fs) != 1 || !hasMsg(fs, "warn", c.want) || fs[0].where != "setup" {
+			t.Errorf("%s: want one setup warn containing %q, got %v", c.name, c.want, fs)
+		}
+	}
+}
