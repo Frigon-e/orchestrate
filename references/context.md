@@ -73,12 +73,13 @@ lsp_hint = "install zls"
 `ctx_index` in the user config sets the policy: `full` (default) builds a missing
 index (15 minutes at most) and refreshes a stale one, `incremental` only
 refreshes an existing index, `off` never calls jbcontext; it applies to `orch gate
-enrich`. Agents call `jbcontext search` directly, so orch-guard keeps the index
-recent instead: each user prompt (Claude and pi) starts `jbcontext index
---only-incremental --silent` for its checkout in the background, at most every 10
-minutes per checkout (`ORCH_JB_REFRESH=off` turns it off; read-only retrieval
-skips it). jbcontext is for finding where code lives, so an index a few commits
-behind is fine; the watch daemon is not needed. `orch doctor` prints a
+enrich`. Agents call `jbcontext search` directly, so the index is kept recent
+per harness. For Claude, `jbcontext setup-agent` installs SessionStart and
+SessionEnd hooks that run `jbcontext index --only-incremental --silent`. It has
+no setup for pi, so orch-guard does the same on each pi prompt, in the
+background, at most every 10 minutes per checkout (`ORCH_JB_REFRESH=off` turns
+it off; read-only retrieval skips it). jbcontext is for finding where code
+lives, so an index a few commits behind is fine; the watch daemon is not needed. `orch doctor` prints a
 `retrieval:` line with the index and the tools, and the `jbcontext index
 --project-path <repo>` to run when a repository has no index. jbcontext
 calls are limited to 5 in flight (`ORCH_JB_SLOTS`, 1-32), a 429 is retried 3 times

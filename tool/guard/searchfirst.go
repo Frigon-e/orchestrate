@@ -88,7 +88,7 @@ func jbIndexed(st *State, root string) bool {
 	return e.Indexed
 }
 
-// jbRefreshEvery: a prompt starts a jbcontext refresh of its checkout at most this often.
+// jbRefreshEvery: a pi prompt starts a jbcontext refresh of its checkout at most this often.
 const jbRefreshEvery = 10 * time.Minute
 
 // jbRefreshStart starts the refresh and leaves it running; tests replace it.
@@ -102,9 +102,10 @@ var jbRefreshStart = func(root string) {
 }
 
 // jbRefresh starts a background incremental jbcontext index of the checkout
-// holding cwd, so jbcontext search answers for a recent HEAD; nothing else
-// refreshes it. jbcontext itself skips a repository with no index. Off with
-// ORCH_JB_REFRESH=off, and in read-only retrieval.
+// holding cwd, so jbcontext search answers for a recent HEAD. Only pi calls it:
+// jbcontext setup-agent gives Claude its own SessionStart and SessionEnd index
+// hooks and has none for pi. jbcontext itself skips a repository with no index.
+// Off with ORCH_JB_REFRESH=off, and in read-only retrieval.
 func jbRefresh(cwd string) {
 	if os.Getenv("ORCH_JB_REFRESH") == "off" || os.Getenv("ORCH_CTX_READONLY") != "" || os.Getenv("ORCH_CTX_ROOT") != "" || !onPath("jbcontext") {
 		return

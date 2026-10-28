@@ -398,7 +398,6 @@ func writeReminder(stdout io.Writer, eventName, kind string) {
 }
 
 func coachPrompt(ev *Event, stdout io.Writer) error {
-	jbRefresh(ev.Str("cwd"))
 	if os.Getenv("ORCH_LOOKUP_COACH") == "off" {
 		return nil
 	}

@@ -222,9 +222,10 @@ func TestSearchFirstProbeRunsOncePerRepo(t *testing.T) {
 	}
 }
 
-// A prompt in either harness refreshes its checkout's jbcontext index in the
-// background, at most once per jbRefreshEvery for each checkout.
-func TestPromptRefreshesTheIndexOncePerCheckout(t *testing.T) {
+// A pi prompt refreshes its checkout's jbcontext index in the background, at
+// most once per jbRefreshEvery for each checkout. Claude prompts leave it to
+// jbcontext's own session hooks.
+func TestPiPromptRefreshesTheIndexOncePerCheckout(t *testing.T) {
 	repo := sfEnv(t, true)
 	t.Setenv("ORCH_JB_REFRESH", "")
 	other, _ := filepath.EvalSymlinks(t.TempDir())
@@ -239,7 +240,11 @@ func TestPromptRefreshesTheIndexOncePerCheckout(t *testing.T) {
 	pi := func(cwd string) {
 		PiCoach(piEvent(t, map[string]any{"event": "before_agent_start", "session": "p1", "cwd": cwd}))
 	}
-	claude(filepath.Join(repo, "."))
+	claude(repo)
+	if len(started) != 0 {
+		t.Fatalf("a Claude prompt started a refresh: %v", started)
+	}
+	pi(filepath.Join(repo, "."))
 	pi(repo)
 	pi(other) // a worktree is its own checkout
 	if want := []string{repo, other}; !reflect.DeepEqual(started, want) {
@@ -253,6 +258,7 @@ func TestPromptRefreshesTheIndexOncePerCheckout(t *testing.T) {
 		}
 	}
 	claude(repo)
+	pi(repo)
 	t.Setenv("ORCH_JB_REFRESH", "off")
 	pi(other)
 	if len(started) != 3 || started[2] != repo {
