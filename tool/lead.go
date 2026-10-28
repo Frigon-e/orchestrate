@@ -78,7 +78,7 @@ func cmdReport(a *app, args []string) error {
 		// These are logged but never wake the orchestrator; say so, so a lead
 		// that needs an answer does not wait on one. working is routine and
 		// stays quiet.
-		fmt.Fprintln(a.out, "the orchestrator is not woken by "+state+"; use needs-decision, blocked, done or failed to reach it")
+		fmt.Fprintln(a.out, "the orchestrator is not woken by "+state+"; use needs-decision, blocked, escalate, done or failed to reach it")
 	}
 	return nil
 }

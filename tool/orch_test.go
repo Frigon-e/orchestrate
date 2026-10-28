@@ -528,7 +528,7 @@ func TestLifecycle(t *testing.T) {
 	if _, ok := h.fakeState().Panes["wt1:p1"]; ok {
 		t.Fatal("pane still open after close")
 	}
-	if out := h.must("watch", "--once"); !strings.Contains(out, "no open leads") {
+	if out := h.must("watch", "--once"); out != "" {
 		t.Fatalf("watch with no leads printed %q", out)
 	}
 }
@@ -1687,6 +1687,139 @@ func TestWatchCheckpointTimeout(t *testing.T) {
 	code, out = h.run("watch", "--timeout", "5", "--interval", "0.05")
 	if code != 0 || !strings.Contains(out, "orch: t1 failed: tests do not build") {
 		t.Fatalf("checkpoint with an event = %d %q", code, out)
+	}
+}
+
+// coalesceRun drives a long-running watch on a clock that moves one second per
+// reading. script runs on each reading with the seconds since start, so a test
+// can append status lines and inspect output between scans.
+func coalesceRun(h *harness, script func(sec int), args ...string) (int, time.Duration) {
+	start := h.now
+	h.a.now = func() time.Time {
+		h.now = h.now.Add(time.Second)
+		script(int(h.now.Sub(start) / time.Second))
+		return h.now
+	}
+	h.out.Reset()
+	code := h.a.run(append([]string{"watch", "--interval", "0"}, args...))
+	return code, h.now.Sub(start)
+}
+
+func appendRawStatus(t *testing.T, dir, line string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(dir, "status.log"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchCoalesceHoldsLinesUntilWindow(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	pend := pendingFile(filepath.Join(h.tmp, "state", "repo", "watch-w1-p0.json"))
+	appended := [2]bool{}
+	var midOut string
+	var sidecarMid bool
+	code, took := coalesceRun(h, func(sec int) {
+		if sec >= 3 && !appended[0] {
+			appended[0] = true
+			appendRawStatus(t, h.dir("t1"), "needs-decision [at=1]: first")
+		}
+		if sec >= 12 && !appended[1] {
+			appended[1] = true
+			appendRawStatus(t, h.dir("t1"), "done [at=2]: second")
+		}
+		if sec >= 25 && midOut == "" {
+			midOut = h.out.String() + "|"
+			_, err := os.Stat(pend)
+			sidecarMid = err == nil
+		}
+	}, "--timeout", "300")
+	if code != 0 || midOut != "|" {
+		t.Fatalf("code=%d, printed before the window: %q", code, midOut)
+	}
+	if !sidecarMid {
+		t.Fatal("buffered lines were not persisted")
+	}
+	// The first line was buffered near 4s, so the flush may not come before 34s.
+	if took < 33*time.Second {
+		t.Fatalf("flushed after %v, before the 30s window", took)
+	}
+	out := h.out.String()
+	i, j := strings.Index(out, "orch: t1 needs-decision: first"), strings.Index(out, "orch: t1 done: second")
+	if i < 0 || j < i {
+		t.Fatalf("batch = %q", out)
+	}
+	if _, err := os.Stat(pend); !os.IsNotExist(err) {
+		t.Fatal("sidecar left after flush")
+	}
+}
+
+func TestWatchUrgentLineFlushesBufferedLines(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	appended := [2]bool{}
+	code, took := coalesceRun(h, func(sec int) {
+		if sec >= 3 && !appended[0] {
+			appended[0] = true
+			appendRawStatus(t, h.dir("t1"), "needs-decision [at=1]: first")
+		}
+		if sec >= 12 && !appended[1] {
+			appended[1] = true
+			appendRawStatus(t, h.dir("t1"), "failed [at=2]: second")
+		}
+	}, "--timeout", "300")
+	out := h.out.String()
+	i, j := strings.Index(out, "orch: t1 needs-decision: first"), strings.Index(out, "orch: t1 failed: second")
+	if code != 0 || i < 0 || j < i || took > 25*time.Second {
+		t.Fatalf("code=%d took=%v batch=%q", code, took, out)
+	}
+}
+
+func TestWatchCoalesceZeroPrintsAtOnce(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	appendRawStatus(t, h.dir("t1"), "needs-decision [at=1]: now")
+	code, took := coalesceRun(h, func(int) {}, "--coalesce", "0", "--timeout", "300")
+	if code != 0 || !strings.Contains(h.out.String(), "orch: t1 needs-decision: now") || took > 10*time.Second {
+		t.Fatalf("code=%d took=%v out=%q", code, took, h.out.String())
+	}
+}
+
+func TestWatchPendingSurvivesRestart(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	h.must("spawn", "t1")
+	state := filepath.Join(h.tmp, "state", "repo", "watch-w1-p0.json")
+	pend := pendingFile(state)
+	// What a watcher killed with lines buffered leaves behind.
+	b, _ := json.Marshal(watchPending{Since: h.now.Unix(), Lines: []pendingLine{{Msg: "t1 done: left over"}}})
+	if err := os.WriteFile(pend, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := filepath.Match("watch*.json", filepath.Base(pend)); ok {
+		t.Fatalf("%s matches the glob otherWatcherSeen reads", pend)
+	}
+	code, _ := coalesceRun(h, func(int) {}, "--timeout", "300")
+	if code != 0 || !strings.Contains(h.out.String(), "orch: t1 done: left over") {
+		t.Fatalf("code=%d out=%q", code, h.out.String())
+	}
+	if _, err := os.Stat(pend); !os.IsNotExist(err) {
+		t.Fatal("sidecar left after flush")
+	}
+}
+
+func TestWatchNoOpenLeadsExitsSilently(t *testing.T) {
+	h := setup(t)
+	if code, out := h.run("watch", "--interval", "0"); code != 0 || out != "" {
+		t.Fatalf("code=%d out=%q", code, out)
 	}
 }
 

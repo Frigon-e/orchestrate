@@ -24,6 +24,7 @@ import (
 var (
 	leadStates    = []string{"working", "needs-decision", "blocked", "question", "escalate", "paused", "done", "failed", "note"}
 	notifyStates  = map[string]bool{"done": true, "needs-decision": true, "blocked": true, "escalate": true, "failed": true}
+	urgentStates  = map[string]bool{"blocked": true, "escalate": true, "failed": true}
 	waitingOnOrch = map[string]bool{"done": true, "failed": true, "needs-decision": true, "blocked": true, "escalate": true, "paused": true}
 	lineRe        = regexp.MustCompile(`^([a-z-]+)((?: \[[a-z]+=[^\]]*\])*): ?(.*)$`)
 	tagRe         = regexp.MustCompile(`\[([a-z]+)=([^\]]*)\]`)

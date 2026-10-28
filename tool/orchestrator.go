@@ -1011,6 +1011,7 @@ func cmdWatch(a *app, args []string) error {
 	interval := fs.Float64("interval", 5, "seconds between scans")
 	timeout := fs.Int("timeout", 0, "checkpoint mode: exit 124 after `N` seconds with nothing actionable")
 	once := fs.Bool("once", false, "scan once, then exit")
+	coalesce := fs.Float64("coalesce", 30, "hold lines up to `N` seconds and print them together (0 prints at once); escalate, blocked and failed print at once")
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
@@ -1055,19 +1056,36 @@ func cmdWatch(a *app, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	started, herdrDown := a.now(), false
-	say := func(msg string) { fmt.Fprintln(a.out, "orch: "+msg) }
+	// Lines wait in pending (and in a sidecar file, since the cursor on disk
+	// moves past them) until a flush prints them together as one wake.
+	pendFile := pendingFile(stateFile)
+	var pend watchPending
+	if b, err := os.ReadFile(pendFile); err == nil {
+		_ = json.Unmarshal(b, &pend)
+	}
+	say := func(msg string, urgent bool) {
+		if len(pend.Lines) == 0 {
+			pend.Since = a.now().Unix()
+		}
+		pend.Lines = append(pend.Lines, pendingLine{Msg: msg, Urgent: urgent})
+	}
+	flush := func() {
+		for _, l := range pend.Lines {
+			fmt.Fprintln(a.out, "orch: "+l.Msg)
+		}
+		pend = watchPending{}
+		os.Remove(pendFile)
+	}
 	for {
-		emitted := 0
 		leads := myLeads(openLeads(s.root), me)
 		if len(leads) == 0 {
-			say("no open leads for this orchestrator; watcher exiting")
+			flush()
 			return nil
 		}
 		agents, err := agentMap()
 		if err != nil {
 			if !herdrDown {
-				say(fmt.Sprintf("herdr unreachable, watching status files only (%v)", err))
-				emitted++
+				say(fmt.Sprintf("herdr unreachable, watching status files only (%v)", err), false)
 			}
 			herdrDown = true
 		} else {
@@ -1087,30 +1105,67 @@ func cmdWatch(a *app, args []string) error {
 				st = &watchSeen{SpawnedAt: ol.lead.SpawnedAt, Offset: offset}
 			}
 			seen[ol.lead.ID] = st
-			emitted += a.watchLead(ol, st, agents, s.cfg, say)
+			a.watchLead(ol, st, agents, s.cfg, say)
 		}
 		b, _ := json.Marshal(seen)
 		if err := writeAtomic(stateFile, b); err != nil {
 			return err
 		}
+		if len(pend.Lines) > 0 {
+			pb, _ := json.Marshal(pend)
+			if err := writeAtomic(pendFile, pb); err != nil {
+				return err
+			}
+		}
+		urgent := false
+		for _, l := range pend.Lines {
+			urgent = urgent || l.Urgent
+		}
+		flushed := false
+		if len(pend.Lines) > 0 && (urgent || *once || float64(a.now().Unix()-pend.Since) >= *coalesce) {
+			flush()
+			flushed = true
+		}
 		if *once {
 			return nil
 		}
 		if *timeout > 0 {
-			if emitted > 0 {
+			if flushed {
 				return nil
 			}
 			if a.now().Sub(started) >= time.Duration(*timeout)*time.Second {
-				say(fmt.Sprintf("checkpoint, nothing actionable in %ds", *timeout))
+				if len(pend.Lines) > 0 {
+					flush()
+					return nil
+				}
+				fmt.Fprintf(a.out, "orch: checkpoint, nothing actionable in %ds\n", *timeout)
 				return &exitError{code: 124}
 			}
 		}
 		select {
 		case <-ctx.Done():
+			flush()
 			return nil
 		case <-time.After(time.Duration(*interval * float64(time.Second))):
 		}
 	}
+}
+
+type pendingLine struct {
+	Msg    string `json:"msg"`
+	Urgent bool   `json:"urgent,omitempty"`
+}
+
+// watchPending is the watcher's unprinted lines and when the first was added.
+type watchPending struct {
+	Since int64         `json:"since"`
+	Lines []pendingLine `json:"lines"`
+}
+
+// pendingFile is the sidecar holding a watcher's unprinted lines. It must not
+// match the watch*.json glob that otherWatcherSeen reads.
+func pendingFile(stateFile string) string {
+	return filepath.Join(filepath.Dir(stateFile), "pending-"+filepath.Base(stateFile))
 }
 
 // otherWatcherSeen finds the furthest place another watcher reached in this
@@ -1135,12 +1190,13 @@ func otherWatcherSeen(root, stateFile string, l *lead) *watchSeen {
 
 // watchLead prints one line per actionable event for one lead and returns how
 // many it printed. agents is nil while Herdr is unreachable.
-func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent, cfg config, say func(string)) int {
+func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent, cfg config, say func(string, bool)) int {
 	id, now, emitted := ol.lead.ID, a.now().Unix(), 0
-	emit := func(msg string) {
-		say(id + " " + msg)
+	emitU := func(msg string, urgent bool) {
+		say(id+" "+msg, urgent)
 		emitted++
 	}
+	emit := func(msg string) { emitU(msg, false) }
 	if f, err := os.Open(filepath.Join(ol.dir, "status.log")); err == nil {
 		info, _ := f.Stat()
 		if info.Size() < st.Offset {
@@ -1164,7 +1220,7 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 					if e.Key != "" {
 						key = " [" + e.Key + "]"
 					}
-					emit(fmt.Sprintf("%s%s: %s", e.State, key, e.Text))
+					emitU(fmt.Sprintf("%s%s: %s", e.State, key, e.Text), urgentStates[e.State])
 				}
 			}
 			st.Offset += int64(len(complete))

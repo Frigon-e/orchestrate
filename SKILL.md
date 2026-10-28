@@ -22,10 +22,12 @@ that builds the Go tool on first use). Always call it by that full path.
 2. `orch status` shows the leads, their last reports and any open decisions.
 3. When at least one lead is open, keep a watcher running. On Claude Code,
    run `orch watch` with the Monitor tool; each line it prints wakes you.
+   Lines arrive in batches of up to 30 s (`--coalesce`); `escalate`,
+   `blocked` and `failed` flush the batch at once.
    Monitor stops at its timeout (30 minutes at most), so start it again
    when it ends while leads are still open; the watcher keeps its place on
-   disk, so no event is lost or repeated. The watcher exits when none of your leads
-   are open, so start it again after the next spawn.
+   disk, so no event is lost or repeated. The watcher exits silently when
+   none of your leads are open, so start it after each spawn.
 4. Several orchestrators can work in one repo, one per Herdr pane. Each
    lead belongs to the pane that spawned it; your board and your watcher
    cover only your leads, and the board names the others' open leads in one
@@ -141,8 +143,8 @@ What makes a brief work (template: `references/task-template.md`):
 
 ## Loop
 
-Each watcher line is `orch: <id> <event>: <text>`. Act on it, then end
-your turn:
+Each watcher line is `orch: <id> <event>: <text>`. One wake may carry
+several lines; act on each, then end your turn:
 
 | Event | Do |
 |---|---|
