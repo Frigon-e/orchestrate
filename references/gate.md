@@ -6,6 +6,18 @@ what the orchestrator needs only when it reads a gate report or tunes a run.
 Model roles, connector health and outages: `model-roles.md`, `outage.md`.
 Benchmarks: `bench.md`.
 
+## Rounds and the cap
+
+Run the gate, fix what is real, rerun. A completed round is a non-experiment
+record of the spec path in state `fail` or `incomplete` (`error` and `stale`
+do not count). When the gate has not passed, `orch plan` proceeds once the
+current spec text has a completed round and the spec path has
+`gate_max_rounds` completed rounds (user config, default 2, 0 means no cap).
+It prints the cap, the round count and the report path, and writes a
+`## Known risks` section into every brief: the active blockers and the
+blocking questions, at most 25. Do not loop on more rounds. `--skip-gate`
+still needs the user's agreement and adds no section.
+
 ## Passes
 
 The gate checks pointers and acceptance commands, then runs read-only model

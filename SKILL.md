@@ -88,8 +88,11 @@ When a spec with work packages exists (`references/spec-format.md`), run
 per package. The gate checks pointers and acceptance commands, then runs
 read-only model passes and keeps only claims whose `path:line` evidence
 exists; `orch gate <spec> --dry-run` lists the passes without calling a model.
-`orch plan` refuses a spec whose current text has not passed the gate; never
-use `--skip-gate` without the user's agreement. Read `gate/<hash>/report.md`
+`orch plan` refuses a spec whose current text has not passed the gate: run the
+gate, fix what is real, rerun. After `gate_max_rounds` completed rounds (default
+2, once the current text has had one) plan proceeds without a pass and puts the
+unresolved findings in each brief as `## Known risks`; do not loop on more
+rounds. Never use `--skip-gate` without the user's agreement. Read `gate/<hash>/report.md`
 (short), judge the findings yourself, add a Claude adversarial pass on the
 Design rules when the spec is risky, and show the user only what survives. A
 model verdict is input, not truth. Decisive open questions arrive as cards:
@@ -340,7 +343,7 @@ a lead's pane.
   `references/repo-config.md` owns its keys, what a note may hold, when
   to change it (rarely, with evidence and the user's approval) and setup.
   Settings a repo must not control live in
-  `~/.config/orchestrate/config.toml`: `max_leads`, `lead_context_limit`, `unread_minutes` (default 10, 0 turns off the watcher's re-ring of an unread message),
+  `~/.config/orchestrate/config.toml`: `max_leads`, `lead_context_limit`, `unread_minutes` (default 10, 0 turns off the watcher's re-ring of an unread message), `gate_max_rounds` (default 2, 0 means no cap: completed gate rounds after which `orch plan` proceeds with known risks),
   `claude_args` and `pi_args` (extra CLI flags for leads), `triage_mode` (shadow, enforce or off), `quick_mode` (same values; for `orch quick`), `triage_model`, `weak_models`, `ctx_index` (`full`, the default, builds a missing jbcontext index and refreshes a stale one; `incremental` only refreshes; `off` never calls jbcontext), `ctx_deny` (repos that never use jbcontext) and `dispatch`
   rules (a profile may set `degraded = true` for a weaker fallback). orch refuses them in a repo file, so a commit can't change how
   leads launch.

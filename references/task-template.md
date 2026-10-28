@@ -24,7 +24,7 @@ Out: {{what it must not touch, and which other task owns it if any}}
 
 # Spec
 
-{{What to build or find out. For ship: behaviour, decisions already made, constraints, edge cases. For scout: the questions to answer and what a good answer looks like.}}
+{{What to build or find out. For ship: behaviour, decisions already made, constraints, edge cases. For scout: the questions to answer and what a good answer looks like. `orch plan` may add a `## Known risks` section before Report-back (the gate did not pass within `gate_max_rounds`): each bullet is an unresolved finding or question, and the lead must handle or escalate each one that touches its package.}}
 
 # Acceptance
 

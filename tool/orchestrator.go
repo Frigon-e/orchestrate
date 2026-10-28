@@ -62,6 +62,7 @@ type taskOpts struct {
 	owns                                   []string
 	degraded                               bool
 	integration, specHash                  string // set by orch plan
+	risks                                  string // set by orch plan: body of a `## Known risks` section
 }
 
 // newTask scaffolds task.md for one task and returns its path.
@@ -146,6 +147,9 @@ func newTask(s site, o taskOpts) (string, error) {
 	}
 	for name, body := range o.fill {
 		text = fillSection(text, name, body)
+	}
+	if o.risks != "" {
+		text = strings.Replace(text, "\n# Report-back\n", "\n## Known risks\n\n"+o.risks+"\n\n# Report-back\n", 1)
 	}
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		return "", err

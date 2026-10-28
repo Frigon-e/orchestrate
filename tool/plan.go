@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -387,9 +388,21 @@ func cmdPlan(a *app, args []string) error {
 	sp := parseSpec(string(src))
 	sp.validate()
 	sp.lines = specRanges(string(src))
+	risks := ""
 	if !*skipGate {
 		if passed, reason := gateApproval(s.root, top, src); !passed {
-			sp.add("the gate has not passed for this version of the spec and checkout (%s): run `orch gate %s`, fix what it reports, and rerun (or pass --skip-gate with the user's agreement)", reason, pos[0])
+			cr := completedGateRounds(s.root, top, src, rel)
+			maxRounds := s.cfg.GateMaxRounds
+			if maxRounds > 0 && cr.current != nil && cr.rounds >= maxRounds {
+				fmt.Fprintf(a.out, "gate: not passed after %d completed round(s), cap gate_max_rounds = %d; planning with known risks. Report: %s\n", cr.rounds, maxRounds, cr.report)
+				risks = gateKnownRisks(cr.current, cr.rounds, cr.report)
+			} else {
+				capNote := ""
+				if maxRounds > 0 {
+					capNote = fmt.Sprintf("; plan proceeds after gate_max_rounds = %d completed rounds, once the current text has had one", maxRounds)
+				}
+				sp.add("the gate has not passed for this version of the spec and checkout (%s; %d completed round(s) done%s): run `orch gate %s`, fix what it reports, and rerun (or pass --skip-gate with the user's agreement)", reason, cr.rounds, capNote, pos[0])
+			}
 		}
 	}
 
@@ -485,6 +498,7 @@ func cmdPlan(a *app, args []string) error {
 			continue
 		}
 		o := withDegraded(sp.taskOpts(p, rel, baseBranch), *degraded)
+		o.risks = risks
 		if intBranch != "" {
 			o.base = intBranch
 			if p.kind == "ship" {
@@ -666,4 +680,89 @@ func specText(p *specPackage) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// gateRounds counts the completed gate rounds of one spec path. current is the
+// record of this spec version when it is a completed round on this checkout.
+type gateRounds struct {
+	rounds  int
+	current *gateRecord
+	report  string
+}
+
+// completedGateRounds reads every non-experiment gate record of the spec at rel.
+// A round is complete when its state is fail or incomplete; error and stale
+// records do not count. The current version's record must also belong to this
+// checkout, as gateApproval requires.
+func completedGateRounds(root, code string, src []byte, rel string) gateRounds {
+	cr := gateRounds{report: filepath.Join(gateDir(root, specHash(src)), "report.md")}
+	files, _ := filepath.Glob(filepath.Join(root, "gate", "*", "gate.json"))
+	hash := specHash(src)
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var r gateRecord
+		if json.Unmarshal(b, &r) != nil || r.Experiment != "" || r.SpecRel != rel || (r.State != "fail" && r.State != "incomplete") {
+			continue
+		}
+		cr.rounds++
+		if filepath.Base(filepath.Dir(f)) != hash || !r.Subject.valid() {
+			continue
+		}
+		if now, err := captureGateSubject(code, src); err == nil && len(gateSubjectChanges(r.Subject, now)) == 0 {
+			cr.current = &r
+		}
+	}
+	return cr
+}
+
+const gateRisksMax = 25
+
+// gateKnownRisks is the body of the `## Known risks` section of a brief.
+func gateKnownRisks(rec *gateRecord, round int, report string) string {
+	one := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	var bullets []string
+	if rec.Reduction != nil {
+		for _, id := range rec.Reduction.ActiveBlockers {
+			switch {
+			case strings.HasPrefix(id, "finding-"):
+				for _, f := range rec.Findings {
+					if f.ID == id {
+						bullets = append(bullets, one(f.Where+": "+f.Claim))
+						break
+					}
+				}
+			case strings.HasPrefix(id, "structural-"):
+				for _, d := range rec.Deterministic {
+					if "structural-"+subjectDigest([]byte(d)) == id {
+						bullets = append(bullets, one(d))
+						break
+					}
+				}
+			}
+		}
+	} else {
+		for _, f := range rec.Findings {
+			if f.Severity == "blocker" && f.Verified {
+				bullets = append(bullets, one(f.Where+": "+f.Claim))
+			}
+		}
+	}
+	for _, q := range rec.Questions {
+		if q.blocks() {
+			bullets = append(bullets, "Question: "+one(q.Question))
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Gate round %d did not pass; these were not resolved. Full report: %s\nHandle or escalate each risk that touches your package.", round, report)
+	for i, x := range bullets {
+		if i == gateRisksMax {
+			fmt.Fprintf(&b, "\n- %d more in the report", len(bullets)-gateRisksMax)
+			break
+		}
+		b.WriteString("\n- " + x)
+	}
+	return b.String()
 }

@@ -11,6 +11,11 @@ leads read it from their own worktree. `orch plan` also accepts a spec that
 sits in a linked worktree of the repo, when it is committed to that
 worktree's branch (the spec's `base:`).
 
+A spec states behaviour, contracts between packages, decisions, authority and
+acceptance. It leaves function signatures and internal layout to the lead,
+unless they are a contract two packages share. A change to a core contract
+(the data model, state rules) needs those details spelled out.
+
 ## Format
 
 ```
