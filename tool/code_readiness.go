@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -37,33 +35,6 @@ func codeEnvFor(a *app) (*codeEnv, error) {
 	return newCodeEnv(top, codeOpts{Cfg: cfg, Private: private}), nil
 }
 
-var watchPIDRe = regexp.MustCompile(`pid (\d+)`)
-
-// watchStatus reads `jbcontext watch status`: whether the daemon runs and the
-// roots it watches.
-func (e *codeEnv) watchStatus() (line, pid string, roots []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), jbStatusLimit)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, e.JB, "watch", "status").Output()
-	if err != nil {
-		return "unavailable", "", nil
-	}
-	for i, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		l = strings.TrimSpace(l)
-		if i == 0 {
-			line = l
-			if m := watchPIDRe.FindStringSubmatch(l); m != nil {
-				pid = m[1]
-			}
-			continue
-		}
-		if f := strings.Fields(l); len(f) >= 2 && strings.HasPrefix(f[len(f)-1], "/") {
-			roots = append(roots, f[len(f)-1])
-		}
-	}
-	return line, pid, roots
-}
-
 func which(bin string) string {
 	if p, err := exec.LookPath(bin); err == nil {
 		return p
@@ -72,7 +43,8 @@ func which(bin string) string {
 }
 
 // retrievalReadiness is the one-line state of the retrieval layer for `orch doctor`:
-// the index, the watch and the tools, and what to run when something is off.
+// the index and the tools, and what to run when something is off. A stale index
+// is normal for up to a prompt: orch-guard refreshes it in the background.
 func retrievalReadiness(e *codeEnv) string {
 	var parts, fixes []string
 	switch {
@@ -96,19 +68,7 @@ func retrievalReadiness(e *codeEnv) string {
 			parts = append(parts, "no index")
 			fixes = append(fixes, "jbcontext index --project-path "+e.Code)
 		default:
-			parts = append(parts, "index stale")
-			fixes = append(fixes, "jbcontext index --project-path "+e.Code)
-		}
-		_, _, roots := e.watchStatus()
-		watched := false
-		for _, r := range roots {
-			watched = watched || evalOr(r) == evalOr(e.Code)
-		}
-		if watched {
-			parts = append(parts, "watch on")
-		} else {
-			parts = append(parts, "watch off")
-			fixes = append(fixes, "jbcontext watch add --project-path "+e.Code)
+			parts = append(parts, "index behind HEAD")
 		}
 	}
 	for _, t := range []struct {

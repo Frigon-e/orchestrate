@@ -15,6 +15,8 @@ import (
 var guardBin string
 
 func TestMain(m *testing.M) {
+	// No test starts a real jbcontext index, here or in a spawned hook.
+	os.Setenv("ORCH_JB_REFRESH", "off")
 	dir, err := os.MkdirTemp("", "orch-guard-test")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -441,6 +441,7 @@ func PiCoach(ev *Event) PiResponse {
 
 	switch event {
 	case "before_agent_start":
+		jbRefresh(cwd)
 		if !coachOn {
 			return PiResponse{}
 		}

@@ -31,6 +31,8 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeHerdr(path, os.Args[1:]))
 	}
 	gateOutsideHerdr = true
+	// Hooks the tests spawn never start a real jbcontext index.
+	os.Setenv("ORCH_JB_REFRESH", "off")
 	code := m.Run()
 	removeGuardBin()
 	os.Exit(code)
