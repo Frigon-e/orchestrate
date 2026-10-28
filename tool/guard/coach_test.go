@@ -1,7 +1,9 @@
 package guard
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -340,6 +342,51 @@ func TestFailureEventNamesItselfInTheReminder(t *testing.T) {
 	_, stdout := box.run(inProc{}, rg, "tu_0_0", runOpts{failure: &failure})
 	if !strings.Contains(stdout, `"hookEventName": "PostToolUseFailure"`) {
 		t.Errorf("stdout %q", stdout)
+	}
+}
+
+// Claude writes an api-request entry before each model call and the assistant
+// message only after its tools ran, so a call of the current message is not in
+// the transcript yet; it belongs to the api-request without a message.
+func TestCallOfTheUnwrittenMessageTakesItsApiRequestTurn(t *testing.T) {
+	calls := []spec{{"bash": `jbcontext search "a"`}, {"bash": `jbcontext search "b"`}, {"bash": `jbcontext search "c"`}}
+	write := func(box *sandbox) {
+		var out bytes.Buffer
+		for i, c := range calls {
+			out.Write(jsonBytes(t, map[string]any{"type": "api-request", "id": "req_" + itoa(i)}))
+			out.WriteByte('\n')
+			if i < 2 {
+				out.Write(jsonBytes(t, map[string]any{"type": "assistant", "message": map[string]any{
+					"id": "msg_" + itoa(i), "role": "assistant", "content": []any{claudeCall(c, "tu_"+itoa(i))}}}))
+				out.WriteByte('\n')
+			}
+		}
+		if err := os.WriteFile(box.transcript, out.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	box := newSandbox(t)
+	write(box)
+	var last string
+	for i, c := range calls {
+		_, last = box.run(inProc{}, c, "tu_"+itoa(i), runOpts{})
+	}
+	var turns []any
+	for _, row := range box.log() {
+		turns = append(turns, row["turn"])
+	}
+	if fmt.Sprint(turns) != "[req_0 req_1 req_2]" {
+		t.Errorf("turns %v", turns)
+	}
+	if !strings.Contains(last, "parallel calls") {
+		t.Errorf("third single-lookup turn did not get batch-lookups: %q", last)
+	}
+
+	sub := newSandbox(t)
+	write(sub)
+	sub.run(inProc{}, calls[2], "tu_2", runOpts{extra: map[string]any{"agent_id": "a1"}})
+	if row := sub.log()[0]; row["turn"] != nil {
+		t.Errorf("a subagent call took the main thread's turn: %v", row["turn"])
 	}
 }
 

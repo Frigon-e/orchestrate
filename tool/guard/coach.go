@@ -188,9 +188,14 @@ func (s *State) promptStep(reminders bool) bool {
 	return due
 }
 
-// transcriptTurn is the turn id of a tool call and the ordered distinct
-// assistant message ids around it, from the transcript tail.
-func transcriptTurn(path, toolUseID string) (*string, []string, error) {
+// transcriptTurn is the turn id of a tool call and the ordered distinct turn
+// ids around it, from the transcript tail. A turn is the api-request entry
+// Claude Code writes before each model call, or the assistant message id in a
+// transcript without those. The message holding the call is written only
+// after its tools ran, so a call missing from the transcript belongs to the
+// last api-request that has no message yet; inSubagent turns that off, since a
+// subagent's calls are not the main thread's.
+func transcriptTurn(path, toolUseID string, inSubagent bool) (*string, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -213,7 +218,15 @@ func transcriptTurn(path, toolUseID string) (*string, []string, error) {
 		content any
 	}
 	var entries []entry
+	req, pending := "", false // pending: the last api-request has no message yet
 	for _, raw := range bytes.Split(data, []byte("\n")) {
+		if bytes.Contains(raw, []byte(`"api-request"`)) {
+			var r struct{ Type, ID string }
+			if json.Unmarshal(raw, &r) == nil && r.Type == "api-request" && r.ID != "" {
+				req, pending = r.ID, true
+			}
+			continue
+		}
 		if !bytes.Contains(raw, []byte(`"message"`)) {
 			continue
 		}
@@ -235,7 +248,11 @@ func transcriptTurn(path, toolUseID string) (*string, []string, error) {
 		if !ok || id == "" {
 			continue
 		}
-		entries = append(entries, entry{truthy(line["isSidechain"]), id, message["content"]})
+		side := truthy(line["isSidechain"])
+		if req != "" && !side {
+			id, pending = req, false
+		}
+		entries = append(entries, entry{side, id, message["content"]})
 	}
 	var match *entry
 	for i, e := range entries {
@@ -246,16 +263,22 @@ func transcriptTurn(path, toolUseID string) (*string, []string, error) {
 			}
 		}
 	}
-	if match == nil {
+	if match == nil && (!pending || inSubagent) {
 		return nil, nil, nil
+	}
+	side, id := false, req
+	if match != nil {
+		side, id = match.side, match.id
 	}
 	var order []string
 	for _, e := range entries {
-		if e.side == match.side && !contains(order, e.id) {
+		if e.side == side && !contains(order, e.id) {
 			order = append(order, e.id)
 		}
 	}
-	id := match.id
+	if !contains(order, id) {
+		order = append(order, id)
+	}
 	return &id, order, nil
 }
 
@@ -424,7 +447,8 @@ func Coach(ev *Event, stdout io.Writer) error {
 	path, pathOK := ev.fieldString("transcript_path")
 	useID, useOK := ev.fieldString("tool_use_id")
 	if pathOK && useOK {
-		if t, o, err := transcriptTurn(path, useID); err == nil {
+		_, inSubagent := ev.fieldString("agent_id")
+		if t, o, err := transcriptTurn(path, useID, inSubagent); err == nil {
 			turn, order = t, o
 		}
 	}
