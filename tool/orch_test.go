@@ -338,6 +338,15 @@ func decReply(v decVals) string {
 
 func setup(t *testing.T) *harness {
 	t.Helper()
+	// A lead pane exports ORCH_EPOCH and other ORCH_* vars; clear every
+	// inherited one so the pane's identity does not leak into the harness.
+	// The t.Setenv calls below re-set the ones the tests need.
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "ORCH_") {
+			t.Setenv(k, "")
+		}
+	}
 	oldExt := gatePiExtension
 	t.Cleanup(func() { gatePiExtension = oldExt })
 	oldWarm := gateWarmDelay
