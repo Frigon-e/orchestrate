@@ -208,7 +208,7 @@ func toolInFlight(ol openLead, ag herdrAgent, now, mins int64) bool {
 // nothing has changed or been reported for stall_minutes, and `looping` when
 // the transcript repeats one tool call while the worktree stands still. Each
 // alert is also written to the status log so the circuit breakers count it.
-func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, now int64, emit func(string)) {
+func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, now int64, emit func(string), wk *wakeSink) {
 	id := ol.lead.ID
 	if now-st.LastSample >= stallSampleSecs || st.FPSince == 0 {
 		st.LastSample = now
@@ -224,6 +224,7 @@ func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, 
 		msg := fmt.Sprintf("no report and no change to the worktree for %dm", (now-progressAt)/60)
 		_ = a.appendStatus(ol.dir, "note", "stalled: "+msg, "", "orch")
 		emit("stalled: " + msg + "; run orch peek " + id)
+		wk.alert(a, ol, ag, "stalled", (now-progressAt)/60, cfg.StallMinutes, st.FP)
 	}
 	if now-st.FPSince >= loopStillSecs {
 		if name, n, ok := loopingCall(callSignatures(ol.lead.Harness, sessionOf(ag, ol.lead))); ok && st.LoopAlerted != name {
@@ -231,6 +232,7 @@ func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, 
 			msg := fmt.Sprintf("it called %s with the same arguments %d times in its last %d tool calls while the worktree did not change", name, n, loopWindow)
 			_ = a.appendStatus(ol.dir, "note", "looping: "+msg, "", "orch")
 			emit("looping: " + msg + "; run orch peek " + id)
+			wk.alert(a, ol, ag, "looping", (now-st.FPSince)/60, cfg.StallMinutes, st.FP)
 		}
 	}
 }
