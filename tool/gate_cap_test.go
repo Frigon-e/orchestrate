@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,4 +135,112 @@ func TestPlanSkipGateAddsNoKnownRisks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(h.a.siteRoot(t), "alpha", "task.md")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// riskRec is a latest gate run with n verified blocker findings finding-1..n.
+func riskRec(n int) *gateRecord {
+	rec := &gateRecord{Hash: "hcur", Reduction: &reviewResult{}}
+	for i := 1; i <= n; i++ {
+		id := fmt.Sprintf("finding-%d", i)
+		rec.Findings = append(rec.Findings, gateFinding{ID: id, Severity: "blocker", Verified: true, Where: fmt.Sprintf("w%d", i), Claim: fmt.Sprintf("c%d", i)})
+		rec.Reduction.ActiveBlockers = append(rec.Reduction.ActiveBlockers, id)
+	}
+	return rec
+}
+
+func riskItem(n int, state, hash string) ledgerItem {
+	return ledgerItem{ID: fmt.Sprintf("L%d", n), State: state, Reason: "why " + state, Seen: []ledgerSighting{{Hash: hash, Finding: fmt.Sprintf("finding-%d", n)}}}
+}
+
+func TestPlanKnownRisksNameTheLedgerItem(t *testing.T) {
+	rec := riskRec(4)
+	rec.Questions = []gateQuestion{{Package: "a", Question: "Which?", Decisive: true}}
+	dup := riskItem(3, "duplicate", "hcur")
+	dup.Of = "L1"
+	led := &gateLedger{Schema: 1, Items: []ledgerItem{
+		riskItem(1, "open", "hcur"), riskItem(2, "rejected", "hcur"), dup,
+		riskItem(4, "accepted", "hold"), // seen only in an older run
+	}}
+	got := gateKnownRisks(rec, 2, "/r/report.md", led, "spec.md")
+	want := "Gate round 2 did not pass; these were not resolved. Full report: /r/report.md\n" +
+		"Handle or escalate each risk that touches your package.\n" +
+		"Ledger: orch gate resolve spec.md lists every item.\n" +
+		"- L1 (open): w1: c1\n- L2 (rejected: why rejected): w2: c2\n- L3 (duplicate of L1: why duplicate): w3: c3\n- w4: c4\n- Question: Which?"
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// A hint-level match changes nothing.
+	led.Items[0].Match = &ledgerMatch{Choice: "L2", P: 0.95, HintAt: 5}
+	if again := gateKnownRisks(rec, 2, "/r/report.md", led, "spec.md"); again != got {
+		t.Fatalf("match changed the output:\n%s", again)
+	}
+}
+
+func TestPlanKnownRisksListAcceptedFirstOutsideTheCap(t *testing.T) {
+	rec := riskRec(33)
+	led := &gateLedger{Schema: 1}
+	for i := 1; i <= 33; i++ {
+		state := "open"
+		if i > 30 {
+			state = "accepted"
+		}
+		led.Items = append(led.Items, riskItem(i, state, "hcur"))
+	}
+	lines := strings.Split(gateKnownRisks(rec, 2, "/r", led, "spec.md"), "\n")
+	bullets := lines[3:] // header, handle line, ledger line
+	if len(bullets) != 3+25+1 {
+		t.Fatalf("%d bullets:\n%s", len(bullets), strings.Join(bullets, "\n"))
+	}
+	for i, id := range []string{"L31", "L32", "L33"} {
+		if !strings.HasPrefix(bullets[i], "- "+id+" (accepted: ") {
+			t.Errorf("bullet %d: %s", i, bullets[i])
+		}
+	}
+	if bullets[3] != "- L1 (open): w1: c1" || bullets[27] != "- L25 (open): w25: c25" || bullets[28] != "- 5 more in the report" {
+		t.Fatalf("others: %q %q %q", bullets[3], bullets[27], bullets[28])
+	}
+}
+
+func TestPlanKnownRisksSkipACorruptLedgerWithAWarning(t *testing.T) {
+	h := capHarness(t, "")
+	s, err := h.a.site()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := ledgerPath(s.root, "spec.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if led := planLedger(h.a, s.root, "spec.md"); led != nil || h.errw.Len() != 0 {
+		t.Fatalf("missing ledger: %v %q", led, h.errw.String())
+	}
+	if err := os.WriteFile(path, []byte("{bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	led := planLedger(h.a, s.root, "spec.md")
+	if led != nil || !strings.HasPrefix(h.errw.String(), "orch: gate ledger "+path+" unreadable, known risks listed without ledger notes: ") {
+		t.Fatalf("corrupt ledger: %v %q", led, h.errw.String())
+	}
+	rec := riskRec(2)
+	if got, want := gateKnownRisks(rec, 1, "/r", led, "spec.md"), "Gate round 1 did not pass; these were not resolved. Full report: /r\nHandle or escalate each risk that touches your package.\n- w1: c1\n- w2: c2"; got != want {
+		t.Fatalf("nil-ledger output:\n%s", got)
+	}
+}
+
+func TestPlanProceedsWithLedgerNotesAfterTheCap(t *testing.T) {
+	h := capHarness(t, "")
+	capRound(t, h, "old1", "incomplete", false, "")
+	dir := capRound(t, h, "cur", "fail", true, "")
+	s, _ := h.a.site()
+	led := &gateLedger{Schema: 1, SpecRel: "spec.md", Next: 2, Items: []ledgerItem{riskItem(1, "accepted", filepath.Base(dir))}}
+	led.Items[0].Seen[0].Finding = "finding-1"
+	if err := os.MkdirAll(filepath.Dir(ledgerPath(s.root, "spec.md")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveLedger(ledgerPath(s.root, "spec.md"), led); err != nil {
+		t.Fatal(err)
+	}
+	h.must("plan", "spec.md")
+	task := string(mustRead(t, filepath.Join(s.root, "alpha", "task.md")))
+	wantContains(t, task, "Ledger: orch gate resolve spec.md lists every item.", "\n- L1 (accepted: why accepted): package alpha: alpha has no rollback", "\n- owns overlap")
 }

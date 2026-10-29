@@ -395,7 +395,7 @@ func cmdPlan(a *app, args []string) error {
 			maxRounds := s.cfg.GateMaxRounds
 			if maxRounds > 0 && cr.current != nil && cr.rounds >= maxRounds {
 				fmt.Fprintf(a.out, "gate: not passed after %d completed round(s), cap gate_max_rounds = %d; planning with known risks. Report: %s\n", cr.rounds, maxRounds, cr.report)
-				risks = gateKnownRisks(cr.current, cr.rounds, cr.report)
+				risks = gateKnownRisks(cr.current, cr.rounds, cr.report, planLedger(a, s.root, rel), rel)
 			} else {
 				capNote := ""
 				if maxRounds > 0 {
@@ -720,17 +720,68 @@ func completedGateRounds(root, code string, src []byte, rel string) gateRounds {
 
 const gateRisksMax = 25
 
-// gateKnownRisks is the body of the `## Known risks` section of a brief.
-func gateKnownRisks(rec *gateRecord, round int, report string) string {
+// planLedger loads the spec's findings ledger for the known risks. A missing
+// file is no ledger; one that cannot be read is skipped with a warning.
+func planLedger(a *app, root, rel string) *gateLedger {
+	path := ledgerPath(root, rel)
+	led, exists, err := loadLedger(path, rel)
+	if err != nil {
+		fmt.Fprintf(a.errw, "orch: gate ledger %s unreadable, known risks listed without ledger notes: %v\n", path, err)
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	return led
+}
+
+// ledgerRiskTag names the ledger item a finding of rec was seen as, such as
+// `L4 (accepted: reason)`; ok is false when the latest run has no sighting.
+func ledgerRiskTag(led *gateLedger, rec *gateRecord, findingID string) (tag, state string, ok bool) {
+	for _, it := range led.Items {
+		for _, sg := range it.Seen {
+			if sg.Hash != rec.Hash || sg.Finding != findingID {
+				continue
+			}
+			switch it.State {
+			case "open":
+				return it.ID + " (open)", it.State, true
+			case "duplicate":
+				return fmt.Sprintf("%s (duplicate of %s: %s)", it.ID, it.Of, strings.Join(strings.Fields(it.Reason), " ")), it.State, true
+			}
+			return fmt.Sprintf("%s (%s: %s)", it.ID, it.State, strings.Join(strings.Fields(it.Reason), " ")), it.State, true
+		}
+	}
+	return "", "", false
+}
+
+// gateKnownRisks is the body of the `## Known risks` section of a brief. With a
+// ledger, risks of the latest run carry their L-id and state, and accepted ones
+// come first, outside the cap.
+func gateKnownRisks(rec *gateRecord, round int, report string, led *gateLedger, rel string) string {
 	one := func(s string) string { return strings.Join(strings.Fields(s), " ") }
-	var bullets []string
+	var bullets, accepted []string
+	finding := func(f gateFinding) {
+		text := one(f.Where + ": " + f.Claim)
+		if led != nil {
+			if tag, state, ok := ledgerRiskTag(led, rec, f.ID); ok {
+				if state == "accepted" {
+					accepted = append(accepted, tag+": "+text)
+				} else {
+					bullets = append(bullets, tag+": "+text)
+				}
+				return
+			}
+		}
+		bullets = append(bullets, text)
+	}
 	if rec.Reduction != nil {
 		for _, id := range rec.Reduction.ActiveBlockers {
 			switch {
 			case strings.HasPrefix(id, "finding-"):
 				for _, f := range rec.Findings {
 					if f.ID == id {
-						bullets = append(bullets, one(f.Where+": "+f.Claim))
+						finding(f)
 						break
 					}
 				}
@@ -746,7 +797,7 @@ func gateKnownRisks(rec *gateRecord, round int, report string) string {
 	} else {
 		for _, f := range rec.Findings {
 			if f.Severity == "blocker" && f.Verified {
-				bullets = append(bullets, one(f.Where+": "+f.Claim))
+				finding(f)
 			}
 		}
 	}
@@ -757,6 +808,12 @@ func gateKnownRisks(rec *gateRecord, round int, report string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Gate round %d did not pass; these were not resolved. Full report: %s\nHandle or escalate each risk that touches your package.", round, report)
+	if led != nil {
+		fmt.Fprintf(&b, "\nLedger: orch gate resolve %s lists every item.", rel)
+	}
+	for _, x := range accepted {
+		b.WriteString("\n- " + x)
+	}
 	for i, x := range bullets {
 		if i == gateRisksMax {
 			fmt.Fprintf(&b, "\n- %d more in the report", len(bullets)-gateRisksMax)
