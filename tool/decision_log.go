@@ -349,8 +349,13 @@ func resolveOutcomes(s site) {
 type decisionMetric struct {
 	Name    string
 	Key     string
-	Field   string
+	Field   string // a dotted path reaches into nested objects, such as "probabilities.3"
 	Outcome string
+	// Scale divides the score, to bring it into [0,1] for the calibration bands.
+	Scale float64
+	// Positive replaces the Outcome field when a use judges against something
+	// the outcome does not carry as a boolean.
+	Positive func(o map[string]any) (pos, ok bool)
 }
 
 func registerDecisionMetric(use string, m decisionMetric) {
@@ -512,12 +517,20 @@ func decisionUses(root string) ([]string, error) {
 }
 
 func numField(raw json.RawMessage, field string) (float64, bool) {
+	head, rest, nested := strings.Cut(field, ".")
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(raw, &obj) != nil {
 		return 0, false
 	}
+	v, ok := obj[head]
+	if !ok {
+		return 0, false
+	}
+	if nested {
+		return numField(v, rest)
+	}
 	var f float64
-	if v, ok := obj[field]; !ok || json.Unmarshal(v, &f) != nil {
+	if json.Unmarshal(v, &f) != nil {
 		return 0, false
 	}
 	return f, true
@@ -611,8 +624,16 @@ func reportDecisionUse(a *app, s site, use string, cutoff time.Time) error {
 			if !ok || r.Error != "" {
 				continue
 			}
-			pos, isBool := o[m.Outcome].(bool)
+			var pos, isBool bool
+			if m.Positive != nil {
+				pos, isBool = m.Positive(o)
+			} else {
+				pos, isBool = o[m.Outcome].(bool)
+			}
 			sc, haveScore := numField(r.Answers[m.Key], m.Field)
+			if m.Scale > 0 {
+				sc /= m.Scale
+			}
 			if isBool && haveScore {
 				xs = append(xs, scored{sc, pos})
 			}

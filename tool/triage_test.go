@@ -220,3 +220,41 @@ func TestLegacyTriageGroupJoinsOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestHelperTriageReportScoresHardAndRunSignals(t *testing.T) {
+	h := setup(t)
+	for _, id := range []string{"run", "ok", "lead"} {
+		h.task(id)
+		reply := settledAnswers
+		if id == "run" {
+			reply = planningAnswers
+		}
+		h.dec.set(200, decReply(reply))
+		h.must("triage", id)
+	}
+	h.a.appendStatus(h.dir("run"), "note", "stalled: no report", "", "orch")
+	h.a.appendStatus(h.dir("run"), "done", "ok", "", "")
+	h.a.appendStatus(h.dir("ok"), "done", "ok", "", "")
+	h.a.appendStatus(h.dir("lead"), "escalate", "need a call", "", "")
+	for _, id := range []string{"run", "ok", "lead"} {
+		h.a.appendStatus(h.dir(id), "note", "closed by orchestrator", "", "orch")
+	}
+	s, _ := h.a.site()
+	var buf strings.Builder
+	if err := reportDecisions(&app{out: &buf, now: time.Now}, s, "triage", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// run and lead are hard overall; only run has a run signal. "ok" and "lead"
+	// share the settled answers, so the overall AUC counts that tie as half.
+	for _, want := range []string{
+		"metric difficulty (difficulty.score vs hard): 3 outcomes, fewer than 100 outcomes\n  AUC 0.750",
+		"metric difficulty run_signals (difficulty.score vs run_signals): 3 outcomes, fewer than 100 outcomes\n  AUC 1.000",
+		"metric P(difficulty=3) (difficulty.probabilities.3 vs hard): 3 outcomes",
+		"metric P(verifiable) (verifiable.noul vs hard): 3 outcomes",
+		"metric P(cause known) run_signals (cause_known.noul vs run_signals): 3 outcomes",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, buf.String())
+		}
+	}
+}

@@ -565,7 +565,23 @@ func readLegacyTriage(s site) []legacyDecision {
 func init() {
 	legacyReaders["triage"] = readLegacyTriage
 	registerOutcomeResolver("triage", resolveTriageOutcomes)
-	registerDecisionMetric("triage", decisionMetric{Name: "difficulty", Key: "difficulty", Field: "score", Outcome: "hard"})
+	// The helper group reads the same four raw answers as the legacy group, each
+	// against hard overall and against run signals alone.
+	runHard := func(o map[string]any) (bool, bool) {
+		signals, ok := o["run_signals"].([]any)
+		return len(signals) > 0, ok
+	}
+	for _, m := range []decisionMetric{
+		{Name: "difficulty", Key: "difficulty", Field: "score", Scale: 3},
+		{Name: "P(difficulty=3)", Key: "difficulty", Field: "probabilities.3"},
+		{Name: "P(verifiable)", Key: "verifiable", Field: "noul"},
+		{Name: "P(cause known)", Key: "cause_known", Field: "noul"},
+	} {
+		m.Outcome = "hard"
+		registerDecisionMetric("triage", m)
+		m.Name, m.Outcome, m.Positive = m.Name+" run_signals", "run_signals", runHard
+		registerDecisionMetric("triage", m)
+	}
 }
 
 const triageNewReport = "new records: orch decisions report --use triage"
