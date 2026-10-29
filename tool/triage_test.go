@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func triageAnswersFor(v decVals) triageAnswers {
@@ -147,5 +150,73 @@ func TestTriageTwiceJoinsTheLatestDecision(t *testing.T) {
 	outs, _ := readJSONLines[decisionOutcome](decisionOutcomeFile(s.root, "triage"))
 	if len(outs) != 1 || outs[0].ID != recs[1].Decision || outs[0].Outcome["tier"] != "planning" || outs[0].Outcome["outcome"] != "clean" {
 		t.Fatalf("outcomes = %+v, want one clean for %s", outs, recs[1].Decision)
+	}
+}
+
+func TestLegacyTriageGroupJoinsOutcomes(t *testing.T) {
+	h := setup(t)
+	for _, id := range []string{"esc", "twice", "both", "nolog"} {
+		h.task(id)
+	}
+	s, _ := h.a.site()
+	ans := func(difficulty float64) triageAnswers {
+		return triageAnswers{Difficulty: difficulty, DifficultyP: map[string]float64{"3": difficulty / 3}, Verifiable: 0.5, CauseKnown: 0.5}
+	}
+	for _, r := range []triageRecord{
+		{ID: "esc", At: 100, Answers: ans(3)},
+		{ID: "twice", At: 100, Answers: ans(0)},
+		{ID: "twice", At: 200, Answers: ans(1.5)},
+		{ID: "both", At: 100, Answers: ans(3)},
+		{ID: "nolog", At: 100, Answers: ans(1)},
+		{ID: "gone", At: 100, Answers: ans(1)},
+		{ID: "skipped", At: 100, Skipped: "decider off"},
+	} {
+		if err := appendTriage(s.root, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := appendDecisionLine(decisionFile(s.root, "triage"), decisionRecord{ID: "d1", Use: "triage", Subject: "both"}); err != nil {
+		t.Fatal(err)
+	}
+	h.a.appendStatus(h.dir("esc"), "escalate", "need a call", "", "")
+	h.a.appendStatus(h.dir("twice"), "done", "ok", "", "")
+	h.a.appendStatus(h.dir("both"), "done", "ok", "", "")
+	os.Remove(filepath.Join(h.dir("nolog"), "status.log"))
+
+	got := map[string]legacyDecision{}
+	for _, d := range readLegacyTriage(s) {
+		if _, dup := got[d.ID]; dup {
+			t.Fatalf("%s counted twice", d.ID)
+		}
+		got[d.ID] = d
+	}
+	if _, ok := got["both"]; ok {
+		t.Errorf("a task with a helper record counted as legacy")
+	}
+	if _, ok := got["skipped"]; ok {
+		t.Errorf("a skipped record counted")
+	}
+	if len(got) != 4 {
+		t.Fatalf("legacy tasks = %v, want esc, twice, nolog, gone", got)
+	}
+	if d := got["esc"]; d.Outcome != "hard" || d.RunHard {
+		t.Errorf("escalate-only = %+v, want hard overall but not run_signals", d)
+	}
+	if d := got["twice"]; d.Outcome != "clean" || d.Scores["expected difficulty / 3"] != 0.5 {
+		t.Errorf("twice = %+v, want clean with the latest answers (1.5/3)", d)
+	}
+	for _, id := range []string{"nolog", "gone"} {
+		if got[id].Outcome != "" {
+			t.Errorf("%s = %+v, want no outcome", id, got[id])
+		}
+	}
+
+	var buf strings.Builder
+	reportLegacyGroup(&app{out: &buf, now: time.Now}, s, "triage", time.Time{})
+	out := buf.String()
+	for _, want := range []string{"tasks 4, outcome coverage 2/4 (50%), no outcome 2", "legacy P(verifiable) vs hard overall: 2 outcomes", "legacy P(cause known) vs hard from run_signals only: 2 outcomes"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
 	}
 }

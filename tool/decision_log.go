@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -471,6 +473,14 @@ func reportDecisions(a *app, s site, only string, cutoff time.Time) error {
 	}
 	if only != "" {
 		uses = []string{only}
+	} else {
+		// A use with only old records still has a report.
+		for u := range legacyReaders {
+			if !slices.Contains(uses, u) && len(legacyReaders[u](s)) > 0 {
+				uses = append(uses, u)
+			}
+		}
+		sort.Strings(uses)
 	}
 	if len(uses) == 0 {
 		fmt.Fprintln(a.out, "no decisions recorded")
@@ -480,6 +490,7 @@ func reportDecisions(a *app, s site, only string, cutoff time.Time) error {
 		if err := reportDecisionUse(a, s, u, cutoff); err != nil {
 			return err
 		}
+		reportLegacyGroup(a, s, u, cutoff)
 	}
 	return nil
 }
@@ -606,26 +617,93 @@ func reportDecisionUse(a *app, s site, use string, cutoff time.Time) error {
 				xs = append(xs, scored{sc, pos})
 			}
 		}
-		fmt.Fprintf(w, "metric %s (%s.%s vs %s): %d outcomes", m.Name, m.Key, m.Field, m.Outcome, len(xs))
-		if len(xs) < minOutcomesForVerdict {
-			fmt.Fprintf(w, ", fewer than %d outcomes\n", minOutcomesForVerdict)
-		} else {
-			fmt.Fprintln(w)
-		}
-		if auc, ok := aucOf(append([]scored(nil), xs...)); ok {
-			fmt.Fprintf(w, "  AUC %.3f\n", auc)
-		} else {
-			fmt.Fprintln(w, "  AUC n/a (one outcome class only)")
-		}
-		fmt.Fprintln(w, "  band        n  mean  positive")
-		for _, b := range calibration(xs) {
-			if b.N == 0 {
-				continue
-			}
-			fmt.Fprintf(w, "  %.1f-%.1f %4d  %.2f  %.2f\n", b.Lo, b.Hi, b.N, b.MeanScore, float64(b.Pos)/float64(b.N))
-		}
+		printScoreTable(w, fmt.Sprintf("metric %s (%s.%s vs %s)", m.Name, m.Key, m.Field, m.Outcome), xs)
 	}
 	return nil
+}
+
+// printScoreTable prints the outcome count, the AUC and the calibration bands
+// of one score against a boolean outcome.
+func printScoreTable(w io.Writer, title string, xs []scored) {
+	fmt.Fprintf(w, "%s: %d outcomes", title, len(xs))
+	if len(xs) < minOutcomesForVerdict {
+		fmt.Fprintf(w, ", fewer than %d outcomes\n", minOutcomesForVerdict)
+	} else {
+		fmt.Fprintln(w)
+	}
+	if auc, ok := aucOf(append([]scored(nil), xs...)); ok {
+		fmt.Fprintf(w, "  AUC %.3f\n", auc)
+	} else {
+		fmt.Fprintln(w, "  AUC n/a (one outcome class only)")
+	}
+	fmt.Fprintln(w, "  band        n  mean  positive")
+	for _, b := range calibration(xs) {
+		if b.N == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %.1f-%.1f %4d  %.2f  %.2f\n", b.Lo, b.Hi, b.N, b.MeanScore, float64(b.Pos)/float64(b.N))
+	}
+}
+
+// legacyDecision is an old record that predates the helper, in the scored form
+// the report reads. Outcome is "" while the task has no result or no status log.
+type legacyDecision struct {
+	ID      string
+	At      time.Time
+	Scores  map[string]float64 // raw answers by report name, each scaled into [0,1]
+	Outcome string             // "hard", "clean" or ""
+	RunHard bool               // a run signal fired, not only a lead one
+}
+
+// legacyReaders turn a use's old records into scored form at report time.
+// Nothing is written to decisions/.
+var legacyReaders = map[string]func(s site) []legacyDecision{}
+
+// legacyScoreOrder is the order the raw answers print in.
+var legacyScoreOrder = []string{"expected difficulty / 3", "P(difficulty=3)", "P(verifiable)", "P(cause known)"}
+
+// reportLegacyGroup prints the legacy group of one use after its helper group.
+func reportLegacyGroup(a *app, s site, use string, cutoff time.Time) {
+	read := legacyReaders[use]
+	if read == nil {
+		return
+	}
+	var kept []legacyDecision
+	for _, d := range read(s) {
+		if cutoff.IsZero() || !d.At.Before(cutoff) {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		return
+	}
+	w := a.out
+	withOutcome := 0
+	for _, d := range kept {
+		if d.Outcome != "" {
+			withOutcome++
+		}
+	}
+	fmt.Fprintf(w, "-- %s: legacy (triage/triage.jsonl, outcomes from status logs; read-only) --\n", use)
+	fmt.Fprintf(w, "tasks %d, outcome coverage %d/%d (%.0f%%), no outcome %d\n",
+		len(kept), withOutcome, len(kept), 100*float64(withOutcome)/float64(len(kept)), len(kept)-withOutcome)
+	for _, view := range []struct {
+		name string
+		pos  func(legacyDecision) bool
+	}{
+		{"hard overall", func(d legacyDecision) bool { return d.Outcome == "hard" }},
+		{"hard from run_signals only", func(d legacyDecision) bool { return d.RunHard }},
+	} {
+		for _, name := range legacyScoreOrder {
+			var xs []scored
+			for _, d := range kept {
+				if d.Outcome != "" {
+					xs = append(xs, scored{d.Scores[name], view.pos(d)})
+				}
+			}
+			printScoreTable(w, fmt.Sprintf("legacy %s vs %s", name, view.name), xs)
+		}
+	}
 }
 
 func failureList(f map[string]int) string {

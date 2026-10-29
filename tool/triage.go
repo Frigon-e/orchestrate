@@ -520,7 +520,50 @@ func resolveTriageOutcomes(s site) error {
 	return errors.Join(errs...)
 }
 
+// readLegacyTriage turns the records written before the decision helper, joined
+// to their status-log outcomes, into the report's scored form. A task keeps its
+// latest record, and a task that has any helper record is left to the helper
+// group. Read-only; a task with no dir or no status log has no outcome.
+func readLegacyTriage(s site) []legacyDecision {
+	helped := map[string]bool{}
+	recs, _ := readJSONLines[decisionRecord](decisionFile(s.root, "triage"))
+	for _, r := range recs {
+		helped[r.Subject] = true
+	}
+	latest := map[string]triageRecord{}
+	var ids []string
+	for _, r := range readTriage(s.root) {
+		if r.Decision != "" || r.Skipped != "" || helped[r.ID] {
+			continue
+		}
+		if _, ok := latest[r.ID]; !ok {
+			ids = append(ids, r.ID)
+		}
+		latest[r.ID] = r
+	}
+	sort.Strings(ids)
+	out := make([]legacyDecision, 0, len(ids))
+	for _, id := range ids {
+		r := latest[id]
+		d := legacyDecision{ID: id, At: time.Unix(r.At, 0), Scores: map[string]float64{
+			"expected difficulty / 3": r.Answers.Difficulty / 3,
+			"P(difficulty=3)":         r.Answers.DifficultyP["3"],
+			"P(verifiable)":           r.Answers.Verifiable,
+			"P(cause known)":          r.Answers.CauseKnown,
+		}}
+		if dir, err := taskDir(s.root, id); err == nil {
+			entries := readStatus(dir)
+			d.Outcome, _ = triageOutcome(entries)
+			_, run := triageSignals(entries)
+			d.RunHard = len(run) > 0
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 func init() {
+	legacyReaders["triage"] = readLegacyTriage
 	registerOutcomeResolver("triage", resolveTriageOutcomes)
 	registerDecisionMetric("triage", decisionMetric{Name: "difficulty", Key: "difficulty", Field: "score", Outcome: "hard"})
 }
