@@ -90,6 +90,34 @@ enabled = true
 use = [{ harness = "api", provider = "openrouter", model = "<decisions-model-id>" }]
 ```
 
+## Gate match role
+
+`gate_match` is a decisions API role that asks, for each new gate finding,
+which existing ledger item it restates (see `gate.md`, Findings ledger). When
+absent, it inherits a copy of the Decider's ordered connector list the way
+`wake` does and is enabled by default when a usable connector exists. An
+explicit role replaces that default; `enabled = false` turns it off. Only `api`
+profiles are accepted. It is shadow only: it sends a finding's `where`, `claim`
+and `evidence` and the candidates' own, records the answer, and changes no
+verdict, ledger state, report, plan output or gate.json. The one place its
+answer shows is the hint in `orch gate resolve <spec>`, for an open item at 0.7
+or above: `likely same as L3, 86%`.
+
+```toml
+[roles.gate_match]
+enabled = false
+use = [{ harness = "api", provider = "openrouter", model = "<decisions-model-id>" }]
+```
+
+The outcome is recorded when an author first closes an item that has a match:
+`duplicate`, `of`, `state`, `choice`, `of_offered`, `choice_correct`, `hint`
+(the author was shown the hint before the close), `confirmed`, and one of
+`confirmed_hinted` or `confirmed_unhinted`. `orch decisions report --use
+gate_match` shows three metrics, `restates`, `confirmed-hinted` and
+`confirmed-unhinted`, each saying `fewer than 100 outcomes` until it has 100.
+Outcomes exist only for closed items that have a match, so reaching 100 may
+take many rounds.
+
 ## Removed: question classifier
 
 The `question_classifier` role, its worker and `orch question-classifier-worker`

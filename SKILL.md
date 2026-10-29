@@ -92,7 +92,10 @@ exists; `orch gate <spec> --dry-run` lists the passes without calling a model.
 gate, fix what is real, rerun. After `gate_max_rounds` completed rounds (default
 2, once the current text has had one) plan proceeds without a pass and puts the
 unresolved findings in each brief as `## Known risks`; do not loop on more
-rounds. Never use `--skip-gate` without the user's agreement. Read `gate/<hash>/report.md`
+rounds. After a failed round, close each ledger item with `orch gate resolve
+<spec> <L-id> fixed|accepted|rejected|duplicate --reason "..."` (use
+`duplicate --of <L-id>` when an item restates an older one), then rerun or let
+the round cap plan with known risks. Never use `--skip-gate` without the user's agreement. Read `gate/<hash>/report.md`
 (short), judge the findings yourself, add a Claude adversarial pass on the
 Design rules when the spec is risky, and show the user only what survives. A
 model verdict is input, not truth. Decisive open questions arrive as cards:
