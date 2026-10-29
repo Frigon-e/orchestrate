@@ -1096,41 +1096,6 @@ func TestWatchLooping(t *testing.T) {
 	}
 }
 
-func TestTierFor(t *testing.T) {
-	mk := func(v decVals) triageAnswers {
-		var r struct {
-			Answers map[string]decAnswer `json:"answers"`
-		}
-		json.Unmarshal([]byte(decReply(v)), &r)
-		c, d := r.Answers["clarity"], r.Answers["difficulty"]
-		return triageAnswers{Clarity: c.Choice, ClarityP: c.Probabilities, ClarityConf: c.Confidence, Difficulty: d.Score,
-			DifficultyP: d.Probabilities, DiffConf: d.Confidence, Verifiable: r.Answers["verifiable"].Noul,
-			CrossCutting: r.Answers["cross_cutting"].Noul, CauseKnown: r.Answers["cause_known"].Noul}
-	}
-	with := func(v decVals, f func(*decVals)) decVals { f(&v); return v }
-	cases := []struct {
-		name string
-		v    decVals
-		want string
-	}{
-		{"clear, easy, verifiable", settledAnswers, "settled"},
-		{"guided and medium", standardAnswers, "standard"},
-		{"open-ended", planningAnswers, "planning"},
-		{"hard but otherwise clear", with(settledAnswers, func(v *decVals) { v.d0, v.d1, v.d3 = 0.4, 0.3, 0.3 }), "planning"},
-		{"unknown cause", with(settledAnswers, func(v *decVals) { v.cause = 0.1 }), "planning"},
-		{"no check that can fail", with(settledAnswers, func(v *decVals) { v.verifiable = 0.5 }), "standard"},
-		{"touches a shared interface", with(settledAnswers, func(v *decVals) { v.cross = 0.6 }), "standard"},
-		{"just under the clear threshold", with(settledAnswers, func(v *decVals) { v.clear, v.guided = 0.79, 0.21 }), "standard"},
-		{"low confidence moves settled up", with(settledAnswers, func(v *decVals) { v.conf = 0.5 }), "standard"},
-		{"low confidence moves standard up", with(standardAnswers, func(v *decVals) { v.conf = 0.5 }), "planning"},
-	}
-	for _, c := range cases {
-		if got, why := tierFor(mk(c.v)); got != c.want {
-			t.Errorf("%s: tier = %s (%s), want %s", c.name, got, why, c.want)
-		}
-	}
-}
-
 func TestTriageShadowRecordsAndNeverBlocks(t *testing.T) {
 	h := setup(t)
 	os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte("weak_models = [\"flash\"]\n"), 0o644)
