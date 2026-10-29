@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,18 +28,14 @@ import (
 const (
 	triageURLDefault   = "https://openrouter.ai/api/alpha/decisions"
 	triageModelDefault = "perplexity/pplx-decider-v1.2-20261016"
-	triageTimeout      = 30 * time.Second
-	triageMinOutcomes  = 20 // outcomes needed before the report trusts a rate
+	triageDeadline     = 90 * time.Second // per call, passed to askDecision as a context
+	triageMinOutcomes  = 20               // outcomes needed before the old report trusts a rate
 
-	settledClear      = 0.8 // P(clear) needed for settled
-	settledDifficulty = 1.0 // expected difficulty at most this for settled
-	settledVerifiable = 0.8
-	crossCuttingMax   = 0.5
-	hardPlanning      = 0.3 // P(hard) at or above this means planning
-	openEndedPlanning = 0.5
+	// The tier follows the raw answers: no confidence bump, no open-ended rule.
+	hardPlanning      = 0.3 // P(difficulty=3) at or above this means planning
 	causeUnknown      = 0.2 // P(cause known) below this means planning
-	causeKnownMin     = 0.5
-	lowConfidence     = 0.6 // below this the tier moves up one step
+	settledDifficulty = 1.5 // expected difficulty below this for settled
+	settledVerifiable = 0.8 // P(verifiable) at or above this for settled
 )
 
 type triageAnswers struct {
@@ -61,6 +59,7 @@ type triageRecord struct {
 	TaskHash string        `json:"task_hash"`
 	Answers  triageAnswers `json:"answers"`
 	Tier     string        `json:"tier"`
+	Decision string        `json:"decision_id,omitempty"` // the decisions/triage.jsonl record this tier came from
 	Reason   string        `json:"reason"`
 	Skipped  string        `json:"skipped,omitempty"`
 }
@@ -128,24 +127,14 @@ func triageQuestions() map[string]any {
 // tierFor turns answers into a tier and the reason, using fixed thresholds.
 func tierFor(a triageAnswers) (tier, reason string) {
 	switch {
-	case a.ClarityP["open_ended"] >= openEndedPlanning:
-		tier, reason = "planning", fmt.Sprintf("open-ended (%.2f)", a.ClarityP["open_ended"])
 	case a.DifficultyP["3"] >= hardPlanning:
-		tier, reason = "planning", fmt.Sprintf("hard (P=%.2f)", a.DifficultyP["3"])
+		return "planning", fmt.Sprintf("hard (P=%.2f)", a.DifficultyP["3"])
 	case a.CauseKnown < causeUnknown:
-		tier, reason = "planning", fmt.Sprintf("unknown cause (P(known)=%.2f)", a.CauseKnown)
-	case a.ClarityP["clear"] >= settledClear && a.Difficulty <= settledDifficulty &&
-		a.Verifiable >= settledVerifiable && a.CrossCutting < crossCuttingMax && a.CauseKnown >= causeKnownMin:
-		tier, reason = "settled", fmt.Sprintf("clear %.2f, difficulty %.2f, verifiable %.2f", a.ClarityP["clear"], a.Difficulty, a.Verifiable)
-	default:
-		tier, reason = "standard", "not clear and easy and verifiable enough for settled"
+		return "planning", fmt.Sprintf("unknown cause (P(known)=%.2f)", a.CauseKnown)
+	case a.Difficulty < settledDifficulty && a.Verifiable >= settledVerifiable:
+		return "settled", fmt.Sprintf("difficulty %.2f, verifiable %.2f", a.Difficulty, a.Verifiable)
 	}
-	if c := min(a.ClarityConf, a.DiffConf); c < lowConfidence && tier != "planning" {
-		up := map[string]string{"settled": "standard", "standard": "planning"}[tier]
-		reason += fmt.Sprintf("; confidence %.2f is low, moved up from %s", c, tier)
-		tier = up
-	}
-	return tier, reason
+	return "standard", "not easy and verifiable enough for settled"
 }
 
 type decAnswer struct {
@@ -161,32 +150,22 @@ type decAnswer struct {
 // token pi already holds for the provider.
 func triageKey() (string, error) { return providerKey("openrouter") }
 
-// callDecider posts one decisions request and returns the answers and the
-// model version that served it.
-func callDecider(model string, state map[string]any) (triageAnswers, string, error) {
-	return callDeciderWith(profile{Harness: "api", Provider: "openrouter", Model: model}, state)
+// triageAnswersOf reads the typed answers the helper has already validated.
+func triageAnswersOf(r map[string]decAnswer) triageAnswers {
+	c, d := r["clarity"], r["difficulty"]
+	return triageAnswers{Clarity: c.Choice, ClarityP: c.Probabilities, ClarityConf: c.Confidence,
+		Difficulty: d.Score, DifficultyP: d.Probabilities, DiffConf: d.Confidence,
+		Verifiable: r["verifiable"].Noul, CrossCutting: r["cross_cutting"].Noul, CauseKnown: r["cause_known"].Noul}
 }
 
-func callDeciderWith(p profile, state map[string]any) (triageAnswers, string, error) {
-	var out triageAnswers
-	answers, served, _, err := postDecisionsWith(p, state, triageQuestions())
-	if err != nil {
-		return out, "", err
-	}
-	r := struct {
-		Model   string
-		Answers map[string]decAnswer
-	}{served, answers}
-	for _, k := range []string{"clarity", "difficulty", "verifiable", "cross_cutting", "cause_known"} {
-		if _, ok := r.Answers[k]; !ok {
-			return out, "", fmt.Errorf("decisions API reply lacks the %q answer", k)
-		}
-	}
-	c, d := r.Answers["clarity"], r.Answers["difficulty"]
-	out = triageAnswers{Clarity: c.Choice, ClarityP: c.Probabilities, ClarityConf: c.Confidence,
-		Difficulty: d.Score, DifficultyP: d.Probabilities, DiffConf: d.Confidence,
-		Verifiable: r.Answers["verifiable"].Noul, CrossCutting: r.Answers["cross_cutting"].Noul, CauseKnown: r.Answers["cause_known"].Noul}
-	return out, r.Model, nil
+// triageFields are the JSON fields each answer must carry; a missing one is an
+// invalid answer, never a zero.
+var triageFields = map[string][]string{
+	"clarity":       {"choice", "probabilities", "confidence"},
+	"difficulty":    {"score", "probabilities", "confidence"},
+	"verifiable":    {"noul"},
+	"cross_cutting": {"noul"},
+	"cause_known":   {"noul"},
 }
 
 // triageState is what the model reads: the task's own words and nothing from
@@ -295,23 +274,39 @@ func (a *app) triageScore(s site, id string, force bool) (rec *triageRecord, cac
 			}
 		}
 	}
-	runner, _ := s.newRoleRun("decider", modelOptions{})
+	fm, _, _ := readTask(filepath.Join(dir, "task.md"))
+	actual := fm["harness"] + " " + fm["model"]
 	var ans triageAnswers
-	var served string
-	_, _, used, runErr := runner.run(func(p profile) (string, string, error) {
-		var e error
-		ans, served, e = callDeciderWith(p, state)
-		return "", "", e
+	var tier, reason string
+	ctx, cancel := context.WithTimeout(context.Background(), triageDeadline)
+	defer cancel()
+	res, runErr := askDecision(ctx, s, decisionRequest{
+		Use: "triage", Role: "decider", Subject: id, State: state, Questions: triageQuestions(),
+		Keys: []string{"clarity", "difficulty", "verifiable", "cross_cutting", "cause_known"}, Fields: triageFields,
+		Meta: map[string]any{"task_hash": hash, "actual": actual, "mode": s.cfg.TriageMode},
+		Action: func(r decisionResult) string {
+			ans = triageAnswersOf(r.Answers)
+			tier, reason = tierFor(ans)
+			return tier
+		},
 	})
+	if errors.Is(runErr, errDecisionDisabled) {
+		return nil, false, &triageOff{reason: "decider disabled", id: id}
+	}
 	if runErr != nil {
 		// Runtime failures never supply a tier. Persist only a reason class and
 		// lane, not provider response bodies or potentially secret transport URLs.
-		return nil, false, &triageOff{reason: "dependency_unavailable, " + used.lane(), id: id}
+		lane := "pi:openrouter"
+		for _, p := range s.role("decider").Use {
+			if p.Harness == "api" {
+				lane = p.lane()
+				break
+			}
+		}
+		return nil, false, &triageOff{reason: "dependency_unavailable, " + lane, id: id}
 	}
-	tier, reason := tierFor(ans)
-	fm, _, _ := readTask(filepath.Join(dir, "task.md"))
-	return &triageRecord{ID: id, At: a.now().Unix(), Mode: s.cfg.TriageMode, Model: served, TaskHash: hash,
-		Actual: fm["harness"] + " " + fm["model"], Answers: ans, Tier: tier, Reason: reason}, false, nil
+	return &triageRecord{ID: id, At: a.now().Unix(), Mode: s.cfg.TriageMode, Model: res.Model, TaskHash: hash,
+		Actual: actual, Answers: ans, Tier: tier, Reason: reason, Decision: res.ID}, false, nil
 }
 
 // triageGate runs at spawn. Shadow mode never blocks. Enforce mode refuses a
@@ -401,35 +396,42 @@ func cmdTriage(a *app, args []string) error {
 	return nil
 }
 
-// triageOutcome says what happened to a task, from its status log alone:
-// "hard" when any of the signals that mean the plan or the model was not
-// enough fired, "clean" when it reported done without them, "" while open.
-func triageOutcome(entries []entry) (outcome, why string) {
-	var hits []string
-	add := func(s string) {
-		if slices.Contains(hits, s) {
-			return
+// triageSignals lists the hard signals in a status log. The lead's own
+// reports (escalate, failed) are kept apart from what the run did (stalled,
+// looping, verify fail, respawn, frozen), so the report can tell a model that
+// gave up from a run that went wrong.
+func triageSignals(entries []entry) (lead, run []string) {
+	add := func(list *[]string, s string) {
+		if !slices.Contains(*list, s) {
+			*list = append(*list, s)
 		}
-		hits = append(hits, s)
 	}
 	for _, e := range entries {
 		switch {
 		case e.By != "orch" && e.State == "escalate":
-			add("escalated")
+			add(&lead, "escalated")
 		case e.By != "orch" && e.State == "failed":
-			add("failed")
+			add(&lead, "failed")
 		case e.By == "orch" && (strings.HasPrefix(e.Text, "stalled:") || strings.HasPrefix(e.Text, "looping:")):
-			add("stalled")
+			add(&run, "stalled")
 		case e.By == "orch" && strings.HasPrefix(e.Text, "verify fail"):
-			add("verify failed")
+			add(&run, "verify failed")
 		case e.By == "orch" && strings.HasPrefix(e.Text, "closed for respawn"):
-			add("respawned")
+			add(&run, "respawned")
 		}
 	}
 	if frozenReason(entries) != "" {
-		add("frozen")
+		add(&run, "frozen")
 	}
-	if len(hits) > 0 {
+	return lead, run
+}
+
+// triageOutcome says what happened to a task, from its status log alone:
+// "hard" when any of the signals that mean the plan or the model was not
+// enough fired, "clean" when it reported done without them, "" while open.
+func triageOutcome(entries []entry) (outcome, why string) {
+	lead, run := triageSignals(entries)
+	if hits := append(lead, run...); len(hits) > 0 {
 		return "hard", strings.Join(hits, ", ")
 	}
 	if lastState(leadEntries(entries)) == "done" {
@@ -437,6 +439,93 @@ func triageOutcome(entries []entry) (outcome, why string) {
 	}
 	return "", ""
 }
+
+// latestTriageDecision is the task's newest record that came from a decision.
+func latestTriageDecision(root, id string) (triageRecord, bool) {
+	recs := readTriage(root)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if recs[i].ID == id && recs[i].Decision != "" {
+			return recs[i], true
+		}
+	}
+	return triageRecord{}, false
+}
+
+// recordTriageOutcome writes what happened to the task's latest triage
+// decision. A task with no result yet (still open, or closed without a verdict)
+// gets nothing, so a later call can still write one.
+func recordTriageOutcome(s site, id string) error {
+	rec, ok := latestTriageDecision(s.root, id)
+	if !ok {
+		return nil
+	}
+	dir, err := taskDir(s.root, id)
+	if err != nil {
+		return err
+	}
+	entries := readStatus(dir)
+	outcome, why := triageOutcome(entries)
+	if outcome == "" {
+		return nil
+	}
+	lead, run := triageSignals(entries)
+	return recordDecisionOutcome(s.root, "triage", rec.Decision, map[string]any{
+		"outcome": outcome, "hard": outcome == "hard", "why": why, "tier": rec.Tier,
+		"lead_signals": append([]string{}, lead...), "run_signals": append([]string{}, run...),
+	})
+}
+
+// closedByOrch is true once `orch close` has run on the task. A close for
+// respawn writes a different note and does not count: the task goes on.
+func closedByOrch(entries []entry) bool {
+	for _, e := range entries {
+		if e.By == "orch" && strings.HasPrefix(e.Text, "closed by orchestrator") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveTriageOutcomes writes the outcome of every closed task whose latest
+// triage decision has none yet. It runs from the watcher and from
+// `orch decisions report`, and is safe to repeat.
+func resolveTriageOutcomes(s site) error {
+	done := map[string]bool{}
+	outs, err := readJSONLines[decisionOutcome](decisionOutcomeFile(s.root, "triage"))
+	if err != nil {
+		return err
+	}
+	for _, o := range outs {
+		done[o.ID] = true
+	}
+	latest := map[string]triageRecord{}
+	for _, r := range readTriage(s.root) {
+		if r.Decision != "" {
+			latest[r.ID] = r
+		}
+	}
+	var errs []error
+	for id, r := range latest {
+		if done[r.Decision] {
+			continue
+		}
+		dir, err := taskDir(s.root, id)
+		if err != nil || !closedByOrch(readStatus(dir)) {
+			continue
+		}
+		if err := recordTriageOutcome(s, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func init() {
+	registerOutcomeResolver("triage", resolveTriageOutcomes)
+	registerDecisionMetric("triage", decisionMetric{Name: "difficulty", Key: "difficulty", Field: "score", Outcome: "hard"})
+}
+
+const triageNewReport = "new records: orch decisions report --use triage"
 
 func (a *app) triageReport(s site) error {
 	latest := map[string]triageRecord{}
@@ -448,7 +537,7 @@ func (a *app) triageReport(s site) error {
 		latest[r.ID] = r
 	}
 	if len(ids) == 0 {
-		fmt.Fprintln(a.out, "triage: no records yet (they are written when a task is spawned or triaged)")
+		fmt.Fprintf(a.out, "triage: no records yet (they are written when a task is spawned or triaged); %s\n", triageNewReport)
 		return nil
 	}
 	sort.Strings(ids)
@@ -527,5 +616,6 @@ func (a *app) triageReport(s site) error {
 	}
 	fmt.Fprintln(a.out)
 	fmt.Fprintln(a.out, "read: a good setup has a low hard_rate for settled and a rising rate with difficulty; settled_but_hard is the costly error, cautious_but_clean the cheap one")
+	fmt.Fprintln(a.out, triageNewReport)
 	return nil
 }

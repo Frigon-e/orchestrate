@@ -120,7 +120,7 @@ func TestOutageTriageSpawnAndQuick(t *testing.T) {
 	}
 }
 
-func TestOutageAPIAdjudicatorAndClassifier(t *testing.T) {
+func TestOutageAPIAdjudicator(t *testing.T) {
 	for _, mode := range outageModes {
 		t.Run(mode, func(t *testing.T) {
 			setup(t)
@@ -140,15 +140,6 @@ func TestOutageAPIAdjudicatorAndClassifier(t *testing.T) {
 			result := ReduceReview(env.Subject, env.Review.Checks, env.Review.Answers, nil, env.Review.Policy)
 			if result.State != "incomplete" {
 				t.Fatalf("outage approved check: %+v", result)
-			}
-			b := classifierFixture()
-			before, _ := json.Marshal(b)
-			spent := &classifierSpend{}
-			records := classifierRunTest(t, b, spent, func() bool { return true }, postDecisionsWithContext)
-			after, _ := json.Marshal(b)
-			last := records[len(records)-1]
-			if string(before) != string(after) || last.Status != "unavailable" || len(last.Results) != 0 || spent.Requests > 2 {
-				t.Fatalf("classifier changed production input or hid outage: %+v", records)
 			}
 			if calls.Load() > 4 {
 				t.Fatalf("retry loop: %d", calls.Load())
@@ -342,60 +333,6 @@ func TestOutageLeadDispatchAndRespawnDecision(t *testing.T) {
 	_, _, _, _, e = h.a.preflight("running", nil)
 	if e != nil {
 		t.Fatalf("recovered lane refused: %v", e)
-	}
-}
-
-func TestOutageClassifierWorkerPreservesPublishedBytes(t *testing.T) {
-	for _, mode := range outageModes {
-		t.Run(mode, func(t *testing.T) {
-			h := setup(t)
-			dir := t.TempDir()
-			t.Setenv("ORCH_TRIAGE_KEY", "fake-test-key")
-			installOutageTransport(t, mode)
-			src := []byte("# Subject\n")
-			writeFiles(t, h.repo, map[string]string{"spec.md": string(src)})
-			subject, e := captureGateSubject(h.repo, src)
-			if e != nil {
-				t.Fatal(e)
-			}
-			b := classifierFixture()
-			b.Code = h.repo
-			b.SpecPath = "spec.md"
-			b.Subject = subject
-			b.Choices = []profile{b.Model}
-			writeFiles(t, filepath.Dir(os.Getenv("ORCH_CONFIG")), map[string]string{filepath.Base(os.Getenv("ORCH_CONFIG")): "[roles.question_classifier]\nuse=[{harness=\"api\",provider=\"openrouter\",model=\"fake-decider\"}]\n"})
-			before := map[string]string{"report.md": "deterministic report\n"}
-			for i := range b.Cards {
-				c := &b.Cards[i]
-				c.Revision = subjectDigest([]byte(c.Text))
-				before["questions/"+c.ID+".md"] = c.Text
-			}
-			raw, _ := json.Marshal(gateRecord{Subject: subject})
-			before["gate.json"] = string(raw)
-			if e := os.MkdirAll(filepath.Join(dir, "questions"), 0700); e != nil {
-				t.Fatal(e)
-			}
-			writeFiles(t, dir, before)
-			if !classifierCurrent(dir, b) {
-				t.Fatal("worker fixture is not current")
-			}
-			if e = classifierQueue(dir, b, func(string) error { return nil }); e != nil {
-				t.Fatal(e)
-			}
-			if e = classifierWorker(dir, postDecisionsWithContext); e != nil {
-				t.Fatal(e)
-			}
-			for path, want := range before {
-				if got := string(mustRead(t, filepath.Join(dir, path))); got != want {
-					t.Fatalf("outage changed published %s", path)
-				}
-			}
-			rows := classifierReadTest(t, classifierLog(dir))
-			last := rows[len(rows)-1]
-			if last.Status != "unavailable" || len(last.Results) != 0 || len(last.Relations) != 0 {
-				t.Fatalf("outage invisible or accepted: %+v", rows)
-			}
-		})
 	}
 }
 

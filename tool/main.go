@@ -35,6 +35,7 @@ Orchestrator:
   orch bench record|import|list|show|compare|key|spec|report|verify|migrate|export|import-archive|readme
   orch spec queries <spec> [--package id | --item id#n] [--json] [--generate [--dry-run] [--all]]
   orch test-changed [--base main] [--print] [--run-extra <regex>]   (build, vet and only the tests the branch changed)
+  orch decisions report [--use U] [--since 7d]   (decision model uses: calls, cost, latency, outcomes, AUC)
   orch lookups report [--since 7d] [--repo PATH] [--json]   (what the lookup coach logged: tools, turns, reminders)
   orch lsp def|refs|callers|impls <Name>... | symbols <file> | hover <path:line:col>   (symbols by name via the language servers; orch lsp --help)
   orch quick <id> --owns <file>[,<file>] <request...>
@@ -103,6 +104,7 @@ var commands = map[string]func(*app, []string) error{
 	"integration":       cmdIntegration,
 	"gate":              cmdGate,
 	"bench":             cmdBench,
+	"decisions":         cmdDecisions,
 	"lookups":           cmdLookups,
 	"lsp":               cmdLsp,
 	"test-changed":      cmdTestChanged,

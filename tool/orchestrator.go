@@ -652,6 +652,7 @@ func cmdSend(a *app, args []string) error {
 	}); err != nil {
 		return err
 	}
+	_ = a.appendStatus(dir, "note", "sent message "+name, "", "orch")
 	status := ""
 	if l.ClosedAt == 0 {
 		if agents, err := agentMap(); err == nil {
@@ -1053,6 +1054,8 @@ func cmdWatch(a *app, args []string) error {
 			os.Remove(pidFile)
 		}
 	}()
+	wk := newWakeSink(s, stateFile)
+	defer waitWake()
 	seen := map[string]*watchSeen{}
 	if b, err := os.ReadFile(stateFile); err == nil {
 		_ = json.Unmarshal(b, &seen)
@@ -1076,6 +1079,9 @@ func cmdWatch(a *app, args []string) error {
 	flush := func() {
 		for _, l := range pend.Lines {
 			fmt.Fprintln(a.out, "orch: "+l.Msg)
+		}
+		if len(pend.Lines) > 0 {
+			wk.noteFlush(a.now())
 		}
 		pend = watchPending{}
 		os.Remove(pendFile)
@@ -1109,12 +1115,13 @@ func cmdWatch(a *app, args []string) error {
 				st = &watchSeen{SpawnedAt: ol.lead.SpawnedAt, Offset: offset}
 			}
 			seen[ol.lead.ID] = st
-			a.watchLead(ol, st, agents, s.cfg, say)
+			a.watchLead(ol, st, agents, s.cfg, say, wk)
 		}
 		b, _ := json.Marshal(seen)
 		if err := writeAtomic(stateFile, b); err != nil {
 			return err
 		}
+		resolveOutcomes(s)
 		if len(pend.Lines) > 0 {
 			pb, _ := json.Marshal(pend)
 			if err := writeAtomic(pendFile, pb); err != nil {
@@ -1194,7 +1201,7 @@ func otherWatcherSeen(root, stateFile string, l *lead) *watchSeen {
 
 // watchLead prints one line per actionable event for one lead and returns how
 // many it printed. agents is nil while Herdr is unreachable.
-func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent, cfg config, say func(string, bool)) int {
+func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent, cfg config, say func(string, bool), wk *wakeSink) int {
 	id, now, emitted := ol.lead.ID, a.now().Unix(), 0
 	emitU := func(msg string, urgent bool) {
 		say(id+" "+msg, urgent)
@@ -1280,6 +1287,7 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 		if !waiting && !st.QuietAlerted && idleFor >= int64(cfg.QuietMinutes)*60 {
 			emit(fmt.Sprintf("quiet: idle %dm without a report; run orch peek %s", idleFor/60, id))
 			st.QuietAlerted = true
+			wk.alert(a, ol, ag, "quiet", idleFor/60, cfg.QuietMinutes, worktreeFingerprint(worktreePath(ol.dir, id)))
 		}
 	} else {
 		st.IdleSince = 0
@@ -1295,7 +1303,7 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 		}
 	}
 	if ag.Status == "working" {
-		a.stallCheck(ol, st, ag, cfg, now, emit)
+		a.stallCheck(ol, st, ag, cfg, now, emit, wk)
 	}
 	st.Herdr = ag.Status
 	return emitted
@@ -1334,27 +1342,37 @@ func cmdPeek(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Herdr returns nothing for small --lines values, so always ask for 200+.
-	out, err := herdrCmd(herdrTimeout, "agent", "read", l.PaneID, "--source", "recent-unwrapped", "--lines", strconv.Itoa(max(*n, 200)))
+	lines, err := readScreen(l.PaneID, *n)
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	fmt.Fprintln(a.out, strings.Join(lines[max(0, len(lines)-*n):], "\n"))
+	fmt.Fprintln(a.out, strings.Join(lines, "\n"))
 	return nil
+}
+
+// readScreen returns the last n lines of a lead's pane.
+func readScreen(paneID string, n int) ([]string, error) {
+	// Herdr returns nothing for small --lines values, so always ask for 200+.
+	out, err := herdrCmd(herdrTimeout, "agent", "read", paneID, "--source", "recent-unwrapped", "--lines", strconv.Itoa(max(n, 200)))
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	return lines[max(0, len(lines)-n):], nil
 }
 
 func cmdFocus(a *app, args []string) error {
 	if err := exactArgs(args, 1, "focus <id>"); err != nil {
 		return err
 	}
-	_, l, err := a.requireLead(args[0])
+	dir, l, err := a.requireLead(args[0])
 	if err != nil {
 		return err
 	}
 	if _, err := herdrCmd(herdrTimeout, "agent", "focus", l.PaneID); err != nil {
 		return err
 	}
+	_ = a.appendStatus(dir, "note", "focused "+l.Name, "", "orch")
 	fmt.Fprintln(a.out, "focused "+l.Name)
 	return nil
 }
@@ -1388,12 +1406,15 @@ func cmdClose(a *app, args []string) error {
 		return err
 	}
 	fmt.Fprintln(a.out, "closed "+l.Name)
-	if l.WorkspaceID == "" {
-		return nil
-	}
 	s, err := a.site()
 	if err != nil {
 		return err
+	}
+	if err := recordTriageOutcome(s, l.ID); err != nil {
+		fmt.Fprintf(a.errw, "orch: triage outcome for %s not written: %v\n", l.ID, err)
+	}
+	if l.WorkspaceID == "" {
+		return nil
 	}
 	fm, _, err := readTask(filepath.Join(dir, "task.md"))
 	if err != nil {
@@ -1466,6 +1487,7 @@ func cmdCompact(a *app, args []string) error {
 	if err := a.resolveContext(dir, "compacted"); err != nil {
 		return err
 	}
+	_ = a.appendStatus(dir, "note", "compacted "+l.Name, "", "orch")
 	line := "compacted " + l.Name
 	if agents, err := agentMap(); err == nil && before > 0 {
 		ag := agents[l.PaneID]
