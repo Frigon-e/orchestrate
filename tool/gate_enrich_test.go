@@ -729,3 +729,57 @@ func TestGoplsMissingOrSlowLeavesValidCardsAndANote(t *testing.T) {
 		check(t, "timed out")
 	})
 }
+
+func TestRoleRemovedClassifierLoadsWithWarning(t *testing.T) {
+	h := setup(t)
+	path := filepath.Join(h.tmp, "classifier-roles.toml")
+	t.Setenv("ORCH_CONFIG", path)
+	raw := "[roles.question_classifier]\nuse=[{harness=\"api\",provider=\"openrouter\",model=\"m\"}]\npromote=true\n[roles.question_classifier.classifier_limits]\nrun_requests=4\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(h.repo)
+	if err != nil {
+		t.Fatalf("removed role must load: %v", err)
+	}
+	if _, ok := cfg.Roles["question_classifier"]; ok || !cfg.droppedClassifier {
+		t.Fatalf("role kept or flag unset: %+v", cfg.Roles)
+	}
+	if out := h.must("doctor"); strings.Count(out, "role question_classifier ignored") != 1 {
+		t.Fatal(out)
+	}
+}
+
+func TestRoleWakeDefaultsToDeciderAPIAndCanBeDisabled(t *testing.T) {
+	h := setup(t)
+	t.Setenv("ORCH_TRIAGE_KEY", "fake-test-key")
+	s := site{}
+	want := s.role("decider").Use
+	rr, err := s.newRoleRun("wake", modelOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != 1 || want[0].Harness != "api" || len(rr.choices) != 1 || rr.choices[0] != want[0] || !rr.enabled {
+		t.Fatalf("wake not on the decider api route: %+v vs %+v", rr.choices, want)
+	}
+	path := filepath.Join(h.tmp, "wake-roles.toml")
+	t.Setenv("ORCH_CONFIG", path)
+	if err := os.WriteFile(path, []byte("[roles.wake]\nenabled=false\nuse=[{harness=\"api\",provider=\"openrouter\",model=\"m\"}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(h.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, _ := (site{cfg: cfg}).newRoleRun("wake", modelOptions{})
+	if off.state(off.choices[0]) != "disabled" {
+		t.Fatalf("wake enabled=false not disabled: %s", off.state(off.choices[0]))
+	}
+	for _, bad := range []string{"claude", "pi"} {
+		raw := "[roles.wake]\nuse=[{harness=\"" + bad + "\",model=\"m\"}]\n"
+		_ = os.WriteFile(path, []byte(raw), 0o600)
+		if _, err := loadConfig(h.repo); err == nil {
+			t.Fatalf("wake accepted harness %s", bad)
+		}
+	}
+}

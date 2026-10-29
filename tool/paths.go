@@ -18,6 +18,9 @@ import (
 // commit to the repo controls it. It only shapes briefs.
 type repoConfig struct {
 	benchSuiteIgnored bool
+	// droppedClassifier is set when a config still names the removed
+	// question_classifier role; guard reports it.
+	droppedClassifier bool
 	BaseBranch        string   `toml:"base_branch"`
 	LeadSkills        []string `toml:"lead_skills"`
 	Check             string   `toml:"check"`
@@ -274,6 +277,10 @@ var userKeys = []string{"gate_budget", "ctx_trust", "roles", "max_leads", "claud
 var removedKeys = []string{"reuse_shadow"}
 
 func removedKey(k string) bool {
+	// Fields the removed classifier role carried (promote, classifier_limits).
+	if strings.HasPrefix(strings.ToLower(k), "roles.question_classifier.") {
+		return true
+	}
 	return slices.ContainsFunc(removedKeys, func(o string) bool { return strings.EqualFold(o, k) })
 }
 
@@ -390,26 +397,20 @@ func loadConfig(repo string) (config, error) {
 			delete(cfg.Roles, name) // the role of the removed shadow judges
 			continue
 		}
+		if name == "question_classifier" {
+			delete(cfg.Roles, name) // the removed classifier role
+			cfg.droppedClassifier = true
+			continue
+		}
 		if !slices.Contains(modelRoles, name) {
 			return cfg, fail("%s: unknown role %q", user, name)
 		}
-		if r.ClassifierLimits != nil {
-			if name != "question_classifier" {
-				return cfg, fail("%s: classifier_limits belongs only to question_classifier", user)
-			}
-			if err := r.ClassifierLimits.validate(); err != nil {
-				return cfg, fail("%s: %v", user, err)
-			}
-		}
-		if r.Promote && name != "question_classifier" {
-			return cfg, fail("%s: promote belongs only to question_classifier", user)
-		}
 		for _, p := range r.Use {
-			if (name == "decider" || name == "question_classifier") && p.Harness != "api" {
+			if (name == "decider" || name == "wake") && p.Harness != "api" {
 				return cfg, fail("%s: role %s needs harness api and a provider", user, name)
 			}
-			if (p.Harness != "claude" && p.Harness != "pi" && p.Harness != "api") || p.Model == "" || (p.Harness == "api" && ((name != "decider" && name != "gate_adjudicator" && name != "question_classifier") || p.Provider == "" || !validLane("pi:"+p.Provider))) {
-				return cfg, fail("%s: role %s: choices need claude/pi and a model, or api with a provider and model for decider, gate_adjudicator or question_classifier", user, name)
+			if (p.Harness != "claude" && p.Harness != "pi" && p.Harness != "api") || p.Model == "" || (p.Harness == "api" && ((name != "decider" && name != "gate_adjudicator" && name != "wake") || p.Provider == "" || !validLane("pi:"+p.Provider))) {
+				return cfg, fail("%s: role %s: choices need claude/pi and a model, or api with a provider and model for decider, gate_adjudicator or wake", user, name)
 			}
 		}
 	}

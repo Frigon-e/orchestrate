@@ -66,7 +66,7 @@ all pi children; an OpenAI limit does not disable Claude or OpenRouter.
 |---|---|
 | Gate reviewers and adversaries | Skip a failed lane for this run and try one configured fallback. With no completed review, the v2 result is incomplete, never pass. Deterministic checks and items remain. |
 | Triage, auto dispatch and quick | Record a sanitized skipped triage result, never invent a tier. Shadow proceeds; enforce refuses. Auto gives manual-profile/`--tier` guidance and starts no lead. |
-| Question classifier | Keep deterministic cards and gate outputs unchanged. Record unavailability; bounded retries and late-result rejection remain in force. |
+| Wake judgment | Record unavailability; the watcher never waits on it and wakes as it would without the role. |
 | Optional gate adjudicator | Leave the check incomplete. Charge attempts to its local and shared gate budget; no indefinite retries. |
 | Spec queries | Report the unavailable optional work. No independent authority to pass a gate. |
 | Offline sweep | Missing, unreadable or insufficient independent passes cannot settle a card. Human-only questions stay human-only. |
@@ -75,81 +75,28 @@ all pi children; an OpenAI limit does not disable Claude or OpenRouter.
 See [outage.md](outage.md) for the deterministic injection matrix and precise
 limits of what these tests establish.
 
-## Background question classification
+## Wake role
 
-`question_classifier` is a separate typed decisions API role. When absent, it
-inherits a copy of the Decider's ordered connector list, including the legacy
-`triage_model` override. It is enabled by default when a usable connector exists.
-It does not inherit triage's enabled switch or `triage_mode`. An explicit role
-replaces that default. Changing or disabling this role never changes triage or
-`gate_adjudicator`. Health, credentials and degraded-choice filtering still
-apply. Only `api` profiles are accepted; this is not a conversational agent.
+`wake` is a separate decisions API role for the watcher's orchestrator-wake
+judgments. When absent, it inherits a copy of the Decider's ordered connector
+list, including the legacy `triage_model` override, and is enabled by default
+when a usable connector exists. It does not inherit triage's enabled switch or
+`triage_mode`. An explicit role replaces that default. Changing or disabling it
+never changes triage or `gate_adjudicator`. Only `api` profiles are accepted.
 
 ```toml
-[roles.question_classifier]
+[roles.wake]
 enabled = true
 use = [{ harness = "api", provider = "openrouter", model = "<decisions-model-id>" }]
-promote = false # Keep OFF until a measured trial approves promotion.
-
-[roles.question_classifier.classifier_limits]
-batch_requests = 2
-run_requests = 8
-seconds = 60
-retries = 1
 ```
 
-These are the defaults. Each package's related cards share batches of at most
-four cards. Each batch makes one request, with at most one retry. All pairs
-within that bounded batch receive a relation question. Requests have a 96000
-UTF-8 byte input cap. One worker serializes the run's calls through a process
-lock. The run request count and wall deadline survive worker restarts; admission
-is persisted and directory-synced before a call. Ledgers are scoped to the gate
-invocation, not the lifetime of a reused spec-hash directory. Accounting run IDs
-are excluded from both the model state and the decision cache key. Limits are independent of the gate's `RunBudget`.
-Classifier failures and exhaustion never consume or reset the gate budget.
-The configured hard ranges are 1..2 requests per batch, 1..32 per run, 1..300
-seconds, and 0..1 retries. Exhaustion is an explicit unresolved outcome.
+## Removed: question classifier
 
-Card production queues immutable jobs, starts a detached local worker, and
-returns without connector probes or model calls. No usable connector, a disabled
-role, or an unbound legacy subject records an unavailable note, without changing
-cards, packets, routes, readiness, gate status, report or command output.
-Connector resolution happens in the worker. Pending jobs do not cause polling
-or repeated requests. A completed or exhausted manifest is never resubmitted by
-re-enrichment. `orch question-classifier-worker <gate-dir>` explicitly drains
-pending manifests after an interrupted worker. This internal command never
-retries terminal jobs. Queued jobs remain visible if a process is killed.
-
-The append-only `question-classifications.jsonl` beside `gate.json` records:
-`input_hash` (all decision inputs, including card text/options/revisions, evidence
-IDs/hashes, subject, authority, rubric, model choices and grouping), `job_key`
-(the immutable submitted manifest), `card_hashes`, `subject_id`, `evidence`,
-`evidence_scope`, configured/served model IDs, `rubric_version`, `grouping`,
-`status`, `note`, `run_id`, attempt, latency, limits/spent requests, usage and the empty
-`subsequent_outcome` field for a later human/lead outcome. JSONL readers tolerate
-missing additive fields and incomplete lines. Positive aggregate token usage
-is recorded separately; it is never guessed into input/output splits. The
-legacy connector cannot distinguish omitted usage from zero, so zero stays
-unknown rather than becoming a fabricated measurement.
-
-`cards[].question_kind` and `cards[].card_readiness` are separate typed guesses;
-`relations[].question_relation` describes a card pair. Each guess records its
-probability distribution and a selected/unresolved outcome. Labels below 0.8
-remain unresolved. No probability creates explanation text: the reviewer's
-rationale stays in the original packet. Classifier evidence scope is limited
-to the supplied review evidence and card hints, never an exhaustive search.
-Before accepting a result, the worker rechecks card bytes, the current code/spec
-subject, and the gate's evidence records. Late results become `stale` records,
-not updates over newer cards.
-
-The worker is RECORD-ONLY. It never rewrites cards or grants authority. The
-`promote` flag defaults off. Its policy projection records `effective_route`
-beside `deterministic_route`: only an `unclear` implementation choice may project
-to `lead-may-decide`, only with an exact supporting Authority `May decide`
-phrase and ready deterministic checks. Owner routes, owner-sensitive words,
-missing readiness, and any escalation/prohibition text prevent promotion.
-Even an enabled projection cannot resolve questions, merge cards, waive checks
-or change triage. The production route stays deterministic pending trial.
+The `question_classifier` role, its worker and `orch question-classifier-worker`
+are gone; gates queue no classifier job and cards keep their deterministic
+route. A config that still has `[roles.question_classifier]` loads, the role is
+dropped, and `orch doctor` warns. Existing `question-classifier.jsonl` files are
+left on disk.
 
 ## Optional gate adjudication infrastructure
 
