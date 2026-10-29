@@ -37,14 +37,12 @@ func processCommandContext(ctx context.Context, name string, args ...string) *ex
 	return cmd
 }
 
-var modelRoles = []string{"gate", "spec_queries", "decider", "gate_adjudicator", "question_classifier"}
+var modelRoles = []string{"gate", "spec_queries", "decider", "gate_adjudicator", "wake"}
 
 type modelRole struct {
-	Enabled          *bool               `toml:"enabled"`
-	Use              []profile           `toml:"use"`
-	Budget           *adjudicationLimits `toml:"budget"`
-	Promote          bool                `toml:"promote"`
-	ClassifierLimits *classifierLimits   `toml:"classifier_limits"`
+	Enabled *bool               `toml:"enabled"`
+	Use     []profile           `toml:"use"`
+	Budget  *adjudicationLimits `toml:"budget"`
 }
 
 func runnerBinary(h string) string {
@@ -69,9 +67,9 @@ func (s site) role(name string) modelRole {
 		return r
 	}
 	var r modelRole
-	if name == "question_classifier" {
+	if name == "wake" {
 		// Inherit the connector list, not triage's enabled switch or behavior.
-		// Explicit classifier configuration always wins over this default.
+		// Explicit wake configuration always wins over this default.
 		r.Use = append([]profile(nil), s.role("decider").Use...)
 		return r
 	}

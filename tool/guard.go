@@ -198,6 +198,9 @@ func cmdDoctor(a *app, args []string) error {
 			add(f.severity, f.where, f.msg, f.fix)
 		}
 	}
+	if s.cfg.droppedClassifier {
+		add("warn", "config", "role question_classifier ignored", "the classifier was removed; delete [roles.question_classifier] from the user config")
+	}
 	if s.cfg.benchSuiteIgnored {
 		add("warn", "config", "repo bench_suite ignored", "use --bench-suite or bench_suite in the user config")
 	}
