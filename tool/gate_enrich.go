@@ -876,19 +876,56 @@ func enrichedIndex(res *enrichResult, rel string) string {
 // addReportSection puts the question summary in report.md, replacing an
 // earlier one so a rerun does not stack them.
 func addReportSection(path string, res *enrichResult) error {
+	var body strings.Builder
+	fmt.Fprintf(&body, "%s\n", res.summary())
+	for _, n := range res.Notes {
+		fmt.Fprintf(&body, "Note: %s\n", n)
+	}
+	return setReportSection(path, "## Question cards", body.String())
+}
+
+// setReportSection replaces the section with the heading in report.md (up to
+// the next `## ` heading or the end), else inserts it right before
+// `## Question cards` when present, else appends it. A rerun never stacks
+// sections, and a section keeps the other sections as they are.
+func setReportSection(path, heading, body string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	text := string(b)
-	if i := strings.Index(text, "## Question cards\n"); i >= 0 {
-		text = strings.TrimRight(text[:i], "\n") + "\n\n"
+	section := heading + "\n" + strings.TrimRight(body, "\n") + "\n"
+	before, after := text, ""
+	if i := sectionStart(text, heading); i >= 0 {
+		before = text[:i]
+		after = text[i+len(heading)+1:]
+		if j := strings.Index(after, "\n## "); j >= 0 {
+			after = after[j+1:]
+		} else {
+			after = ""
+		}
+	} else if i := sectionStart(text, "## Question cards"); i >= 0 {
+		before, after = text[:i], text[i:]
 	}
-	var section strings.Builder
-	section.WriteString(text)
-	fmt.Fprintf(&section, "## Question cards\n%s\n", res.summary())
-	for _, n := range res.Notes {
-		fmt.Fprintf(&section, "Note: %s\n", n)
+	if strings.TrimSpace(before) != "" {
+		before = strings.TrimRight(before, "\n") + "\n\n"
+	} else {
+		before = ""
 	}
-	return os.WriteFile(path, []byte(section.String()), 0o644)
+	out := before + section
+	if after != "" {
+		out += "\n" + after
+	}
+	return writeAtomic(path, []byte(out))
+}
+
+// sectionStart is the offset of a heading line, or -1.
+func sectionStart(text, heading string) int {
+	if strings.HasPrefix(text, heading+"\n") {
+		return 0
+	}
+	if i := strings.Index(text, "\n"+heading+"\n"); i >= 0 {
+		return i + 1
+	}
+	return -1
 }
