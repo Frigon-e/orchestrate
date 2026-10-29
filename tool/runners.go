@@ -37,7 +37,7 @@ func processCommandContext(ctx context.Context, name string, args ...string) *ex
 	return cmd
 }
 
-var modelRoles = []string{"gate", "spec_queries", "decider", "gate_adjudicator", "wake"}
+var modelRoles = []string{"gate", "spec_queries", "decider", "gate_adjudicator", "wake", "gate_match"}
 
 type modelRole struct {
 	Enabled *bool               `toml:"enabled"`
@@ -67,7 +67,7 @@ func (s site) role(name string) modelRole {
 		return r
 	}
 	var r modelRole
-	if name == "wake" {
+	if name == "wake" || name == "gate_match" {
 		// Inherit the connector list, not triage's enabled switch or behavior.
 		// Explicit wake configuration always wins over this default.
 		r.Use = append([]profile(nil), s.role("decider").Use...)

@@ -406,11 +406,11 @@ func loadConfig(repo string) (config, error) {
 			return cfg, fail("%s: unknown role %q", user, name)
 		}
 		for _, p := range r.Use {
-			if (name == "decider" || name == "wake") && p.Harness != "api" {
+			if (name == "decider" || name == "wake" || name == "gate_match") && p.Harness != "api" {
 				return cfg, fail("%s: role %s needs harness api and a provider", user, name)
 			}
-			if (p.Harness != "claude" && p.Harness != "pi" && p.Harness != "api") || p.Model == "" || (p.Harness == "api" && ((name != "decider" && name != "gate_adjudicator" && name != "wake") || p.Provider == "" || !validLane("pi:"+p.Provider))) {
-				return cfg, fail("%s: role %s: choices need claude/pi and a model, or api with a provider and model for decider, gate_adjudicator or wake", user, name)
+			if (p.Harness != "claude" && p.Harness != "pi" && p.Harness != "api") || p.Model == "" || (p.Harness == "api" && ((name != "decider" && name != "gate_adjudicator" && name != "wake" && name != "gate_match") || p.Provider == "" || !validLane("pi:"+p.Provider))) {
+				return cfg, fail("%s: role %s: choices need claude/pi and a model, or api with a provider and model for decider, gate_adjudicator, wake or gate_match", user, name)
 			}
 		}
 	}
