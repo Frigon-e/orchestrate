@@ -92,6 +92,11 @@ func TestGateHeadlessArgumentsAndEnv(t *testing.T) {
 					if !strings.Contains(args, "claudeMdExcludes") {
 						t.Fatal(args)
 					}
+					// A pass runs start to finish, so the cheaper 5-minute cache
+					// write beats the subscription's 1-hour default.
+					if !strings.Contains(args, `"promptCacheTtl":"5m"`) {
+						t.Fatal(args)
+					}
 					if strings.Contains(args, "Bash(orch lsp:*)") != ctxOn {
 						t.Fatal(args)
 					}

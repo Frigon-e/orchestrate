@@ -210,7 +210,9 @@ func claudePassArgs(choice profile, p gatePass) []string {
 		}
 	}
 	// Exclude repository memories without --bare, which disables subscription auth.
-	settings := map[string]any{"claudeMdExcludes": []string{"**"}}
+	// A pass runs start to finish and never idles for long, so the 5-minute cache
+	// write (about 1.25x input) beats the 1-hour subscription default (about 2x).
+	settings := map[string]any{"claudeMdExcludes": []string{"**"}, "promptCacheTtl": "5m"}
 	if !p.noTools && p.cli.Hook != "" {
 		// Prefix allow rules cannot refuse rg --pre or fd -x, so every Bash call goes
 		// through the same check pi's shell uses. It adds to the user's own hooks.
