@@ -951,24 +951,45 @@ type gateSpec struct {
 	sp              *spec
 }
 
-func loadGateSpec(a *app, arg string) (*gateSpec, error) {
-	s, err := a.site()
+// gateSpecLocation finds a spec argument on disk: the site, the checkout the
+// spec lives in and the spec's real path.
+func gateSpecLocation(a *app, arg string) (s site, code, real string, err error) {
+	s, err = a.site()
 	if err != nil {
-		return nil, err
+		return s, "", "", err
 	}
 	specPath := expandHome(arg)
 	if !filepath.IsAbs(specPath) {
 		specPath = filepath.Join(a.cwd, specPath)
 	}
-	real, err := filepath.EvalSymlinks(specPath)
+	real, err = filepath.EvalSymlinks(specPath)
 	if err != nil {
-		return nil, fail("spec %s: %v", arg, err)
+		return s, "", "", fail("spec %s: %v", arg, err)
 	}
 	// Like `orch plan`, check the code in the checkout the spec lives in: a
 	// linked worktree may hold code the main checkout does not have yet.
-	code, err := git(filepath.Dir(real), "rev-parse", "--show-toplevel")
+	code, err = git(filepath.Dir(real), "rev-parse", "--show-toplevel")
 	if err != nil || code == "" || !sameGitCommonDir(code, s.repo) {
-		return nil, fail("spec %s is not inside the repo %s", arg, s.repo)
+		return s, "", "", fail("spec %s is not inside the repo %s", arg, s.repo)
+	}
+	return s, code, real, nil
+}
+
+// gateSpecRelOf is the spec's repo-relative path, so the model can cite its
+// lines; empty if the evidence check would not accept the path.
+func gateSpecRelOf(code, real string) string {
+	if root, err := filepath.EvalSymlinks(code); err == nil {
+		if r, err := filepath.Rel(root, real); err == nil && evidenceHolds(code, filepath.ToSlash(r)+":1") {
+			return filepath.ToSlash(r)
+		}
+	}
+	return ""
+}
+
+func loadGateSpec(a *app, arg string) (*gateSpec, error) {
+	s, code, real, err := gateSpecLocation(a, arg)
+	if err != nil {
+		return nil, err
 	}
 	srcB, err := os.ReadFile(real)
 	if err != nil {
@@ -981,14 +1002,7 @@ func loadGateSpec(a *app, arg string) (*gateSpec, error) {
 		fmt.Fprintf(a.out, "spec has %d format problem(s); run `orch plan --dry-run` and fix them first\n", n)
 		return nil, &exitError{code: 1}
 	}
-	// The spec's repo-relative path, so the model can cite its lines.
-	rel := ""
-	if root, err := filepath.EvalSymlinks(code); err == nil {
-		if r, err := filepath.Rel(root, real); err == nil && evidenceHolds(code, filepath.ToSlash(r)+":1") {
-			rel = filepath.ToSlash(r)
-		}
-	}
-	return &gateSpec{s: s, code: code, src: src, hash: specHash(srcB), rel: rel, sp: sp}, nil
+	return &gateSpec{s: s, code: code, src: src, hash: specHash(srcB), rel: gateSpecRelOf(code, real), sp: sp}, nil
 }
 
 // cmdGateEnrich rewrites the question cards of the spec's latest gate run.
@@ -1065,6 +1079,9 @@ func cmdGate(a *app, args []string) (retErr error) {
 	if len(args) > 0 && args[0] == "compare" {
 		return cmdGateCompare(a, args[1:])
 	}
+	if len(args) > 0 && args[0] == "resolve" {
+		return cmdGateResolve(a, args[1:])
+	}
 	runStarted := time.Now()
 	fs := a.flags("gate")
 	human := fs.Bool("human", false, "readable JSON of the selected gate summary")
@@ -1114,7 +1131,7 @@ func cmdGate(a *app, args []string) (retErr error) {
 	if *schemaVersion != 2 {
 		return fail("--schema-version is 2, not %d; use --schema-version 2 (the default)", *schemaVersion)
 	}
-	if err := exactArgs(pos, 1, "gate <spec> [--dry-run] | gate <spec> --only <group-key>[,...] --experiment <name> | gate enrich <spec> | gate compare <spec> <experiment-a> <experiment-b>"); err != nil {
+	if err := exactArgs(pos, 1, "gate <spec> [--dry-run] | gate <spec> --only <group-key>[,...] --experiment <name> | gate enrich <spec> | gate compare <spec> <experiment-a> <experiment-b> | "+gateLedgerUsage); err != nil {
 		return err
 	}
 	if *lookupTool != "on" && *lookupTool != "off" {
@@ -1248,6 +1265,7 @@ func cmdGate(a *app, args []string) (retErr error) {
 	if err := writeGate(runDir, rec); err != nil {
 		return err
 	}
+	a.recordGateLedger(s, rec, runDir, a.now())
 	benchID := ""
 	if experiment {
 		suite := *benchSuiteF

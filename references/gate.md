@@ -18,6 +18,40 @@ It prints the cap, the round count and the report path, and writes a
 blocking questions, at most 25. Do not loop on more rounds. `--skip-gate`
 still needs the user's agreement and adds no section.
 
+## Findings ledger
+
+Each spec path keeps a findings ledger across gate runs. From a non-experiment
+run in state `fail`, `incomplete` or `pass`, every verified blocker finding
+with an ID enters it; concerns, unverified findings, deterministic issues and
+questions stay out, and experiment, `error`, `stale` and dry runs read and
+write no ledger. Each item gets an L-id (L1, L2, ...) that never changes and is
+never reused. A finding whose ID matches an earlier sighting is the same item;
+any other finding is a new `open` item. A sighting of a `fixed` item reopens it.
+
+Close an item with `orch gate resolve <spec> <L-id> fixed|accepted|rejected|duplicate --reason "..."`.
+`duplicate` also needs `--of <L-id>` (an older, non-duplicate item, never the
+item itself); `open` reopens an item. `orch gate resolve <spec>` with no L-id
+lists the items: open first, then fixed, accepted, rejected, duplicate. An open
+item whose shadow matcher answer is at least 0.7 and names an item gets a
+` | likely same as L3, 86%` hint. The hint appears in this list only, never in
+the report, plan output, gate.json or stdout.
+
+The gate report gets a `## Findings ledger` section before `## Question cards`:
+counts per state, the items new and seen again in this run, the open items seen
+in this run, and how many older open items it did not see. `orch plan` known
+risks of the latest run start with the item's L-id and state (`L4 (open): ...`);
+accepted risks come first and sit outside the 25-bullet cap. A corrupt ledger
+file is skipped with a warning, and plan goes on without notes.
+
+The shadow matcher (`gate_match`, see `model-roles.md`) records which existing
+item each new finding restates. It changes no merge, state or verdict.
+
+There is one ledger per spec path for the whole repo: every worktree and
+branch that gates the same spec path reads and writes the same ledger, so a
+resolve in one is seen in all. The pass rule is unchanged: the ledger never
+feeds the reducer, gate.json or the exit code, and an accepted or rejected
+item still blocks until the finding is gone.
+
 ## Passes
 
 The gate checks pointers and acceptance commands, then runs read-only model

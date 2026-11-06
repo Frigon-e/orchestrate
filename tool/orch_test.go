@@ -33,6 +33,14 @@ func TestMain(m *testing.M) {
 	gateOutsideHerdr = true
 	// Hooks the tests spawn never start a real jbcontext index.
 	os.Setenv("ORCH_JB_REFRESH", "off")
+	// No test reaches a real provider through a decider route: every decisions
+	// URL points at the closed port 9. Tests that need a server use t.Setenv.
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "ORCH_") && strings.HasSuffix(k, "_DECISIONS_URL") {
+			os.Setenv(k, "http://127.0.0.1:9")
+		}
+	}
+	os.Setenv("ORCH_TRIAGE_URL", "http://127.0.0.1:9")
 	code := m.Run()
 	removeGuardBin()
 	os.Exit(code)
