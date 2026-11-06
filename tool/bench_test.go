@@ -16,8 +16,7 @@ import (
 
 func benchHarness(t *testing.T) *harness {
 	t.Helper()
-	t.Setenv("ORCH_BENCH_DIR", t.TempDir())
-	return setup(t)
+	return setup(t) // setup gives every harness its own ORCH_BENCH_DIR
 }
 func benchFixture(t *testing.T, h *harness, label string, seconds int, captured bool) string {
 	t.Helper()

@@ -384,6 +384,13 @@ func setup(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", onPath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Keep bench records out of the user's real store: an experiment gate run
+	// records into it, and the ORCH_* clear above drops any caller's setting.
+	bench := filepath.Join(tmp, "bench")
+	if err := os.MkdirAll(bench, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORCH_BENCH_DIR", bench)
 	t.Setenv("ORCH_JBCONTEXT", filepath.Join(tmp, "no-jbcontext"))
 	t.Setenv("ORCH_GOPLS", filepath.Join(tmp, "no-gopls"))
 	t.Setenv("ORCH_TSLS", filepath.Join(tmp, "no-tsls"))
