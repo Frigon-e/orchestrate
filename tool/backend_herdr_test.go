@@ -20,7 +20,9 @@ func TestConformanceHerdr(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ORCH_HERDR_CONFIG", cfg)
-	RunConformance(t, func(t testing.TB) Backend { return &conformanceHerdr{herdrBackend: &herdrBackend{}, repo: h.repo, dir: filepath.Join(h.tmp, "wts")} })
+	RunConformance(t, func(t testing.TB) Backend {
+		return &conformanceHerdr{herdrBackend: &herdrBackend{}, repo: h.repo, dir: filepath.Join(h.tmp, "wts")}
+	})
 }
 
 // conformanceHerdr gives the suite's repo-less worktree spec the repo and path
