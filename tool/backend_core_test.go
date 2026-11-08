@@ -454,10 +454,8 @@ func TestBackendCoreFilesNameNoRegisteredBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Pending: these files belong to other packages (gate-pane, doctor-setup)
-	// and still read the herdr env directly. Remove the entries when those
-	// packages move to the backend interface.
-	pending := []string{"gate_pane.go:", "doctor_setup.go:"}
+	// doctor_setup.go is a machine-setup check outside the backend interface.
+	pending := []string{"doctor_setup.go:"}
 	hits = slices.DeleteFunc(hits, func(h string) bool {
 		return slices.ContainsFunc(pending, func(p string) bool { return strings.HasPrefix(h, p) })
 	})

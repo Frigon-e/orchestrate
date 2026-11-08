@@ -25,6 +25,7 @@ func fakeAgentAfter(t *testing.T, misses int) {
 		t.Fatal(err)
 	}
 	t.Setenv("ORCH_HERDR", script)
+	t.Setenv("HERDR_ENV", "1") // the backend is selected from the env, not assumed
 }
 
 func staleSession(t *testing.T) string {

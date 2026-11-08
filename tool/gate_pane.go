@@ -3,25 +3,76 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// In a Herdr session the gate's model passes run in panes of one tab, so the
-// user can watch them. The tab is created for the run and closed at its end;
-// the panes are not leads and are never recorded as such.
+// When the backend has the layout capability, the gate's model passes run in
+// panes of one tab, so the user can watch them. The tab is created for the run
+// and closed at its end; the panes are not leads and are never recorded as
+// such. Without layout, each pass is its own backend Start and is closed when
+// the pass ends, with no pool placement.
 
-// gatePaneMode reports whether passes should run in Herdr panes.
+// panePilot is what the pooled path needs beyond the required operations: type
+// a command into a pane's shell, name the agent in it, send it a key and close
+// the pool's tab. A backend with layout that does not implement it gets the
+// separate-starts path.
+type panePilot interface {
+	RunInPane(ctx context.Context, h Handle, command string) error
+	RenameAgent(ctx context.Context, h Handle, name string) error
+	SendKeys(ctx context.Context, h Handle, key string) error
+	CloseTab(ctx context.Context, tab Handle) error
+}
+
+// gateBackendFn selects the backend a gate run uses. Tests replace it.
+var gateBackendFn = useBackend
+
+// gateMux is the backend a gate run talks to.
+type gateMux struct {
+	b     *Active
+	self  Identity
+	lay   Layout    // nil without layout
+	pilot panePilot // nil without layout
+}
+
+// pooled says passes run in placed panes of one tab.
+func (m *gateMux) pooled() bool { return m.lay != nil && m.pilot != nil }
+
+func openGateMux() (*gateMux, error) {
+	b, err := gateBackendFn()
+	if err != nil {
+		return nil, err
+	}
+	self, err := b.Self(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	m := &gateMux{b: b, self: self}
+	if b.Has(CapLayout) {
+		lay, _, ok := capabilityAs[Layout](b, CapLayout)
+		pilot, isPilot := b.Backend.(panePilot)
+		if ok && isPilot {
+			if self.Workspace == "" {
+				return nil, fmt.Errorf("the backend reported no workspace for the gate tab")
+			}
+			m.lay, m.pilot = lay, pilot
+		}
+	}
+	return m, nil
+}
+
+// gatePaneMode reports whether passes should run through a backend.
 func gatePaneMode() bool {
-	return os.Getenv("HERDR_ENV") == "1" && os.Getenv("HERDR_WORKSPACE_ID") != ""
+	_, err := openGateMux()
+	return err == nil
 }
 
 // paneOrchOnPath fails a pane run with the ctx tool when orch is not on PATH:
@@ -47,51 +98,54 @@ var unsafeFileRe = regexp.MustCompile(`[^A-Za-z0-9._+-]`)
 func passFile(name string) string { return unsafeFileRe.ReplaceAllString(name, "-") }
 
 type gatePool struct {
-	tab   string
+	mux   *gateMux
+	tab   Handle
 	panes []string
 	once  sync.Once
 }
 
 func (p *gatePool) close() {
-	p.once.Do(func() { _, _ = herdrCmd(herdrTimeout, "tab", "close", p.tab) })
+	p.once.Do(func() {
+		if p.mux.pooled() {
+			_ = p.mux.pilot.CloseTab(context.Background(), p.tab)
+		}
+	})
 }
 
-// openGatePool creates the run's tab and up to want panes in it. Herdr splits
-// a pane in half, so the grid is three columns by two rows at most: the first
+// openGatePool creates the run's tab and up to want panes in it. A pane is
+// split in half, so the grid is three columns by two rows at most: the first
 // row is split right (columns of 1/2, 1/4 and 1/4 of the width), then each
 // column is split down. More panes would be too narrow or short to read, which
-// is why the pool stops at gateParallel panes.
+// is why the pool stops at gateParallel panes. Without layout there is no tab:
+// the pool holds want slots, and each pass starts and closes its own agent.
 func openGatePool(repo, hash string, want int) (*gatePool, error) {
-	var res struct {
-		Result struct {
-			Tab struct {
-				TabID string `json:"tab_id"`
-			} `json:"tab"`
-			RootPane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"root_pane"`
-		} `json:"result"`
-	}
-	label := "gate-" + hash[:min(8, len(hash))]
-	if err := herdrJSON(&res, herdrTimeout, "tab", "create", "--workspace", os.Getenv("HERDR_WORKSPACE_ID"), "--cwd", repo, "--label", label, "--no-focus"); err != nil {
+	m, err := openGateMux()
+	if err != nil {
 		return nil, err
 	}
-	pool := &gatePool{tab: res.Result.Tab.TabID, panes: []string{res.Result.RootPane.PaneID}}
+	if !m.pooled() {
+		pool := &gatePool{mux: m}
+		for i := range max(want, 1) {
+			pool.panes = append(pool.panes, fmt.Sprintf("slot-%d", i+1))
+		}
+		return pool, nil
+	}
+	ctx := context.Background()
+	label := "gate-" + hash[:min(8, len(hash))]
+	tab, err := m.lay.NewTab(ctx, label, Spec{Cwd: repo, Workspace: m.self.Workspace})
+	if err != nil {
+		return nil, err
+	}
+	pool := &gatePool{mux: m, tab: tab.Tab, panes: []string{string(tab.Handle)}}
 	// Entry i splits panes[from[i]] in direction dir[i].
 	from := []int{0, 1, 0, 1, 2}
 	dir := []string{"right", "right", "down", "down", "down"}
 	for i := 0; len(pool.panes) < want && i < len(from); i++ {
-		var sp struct {
-			Result struct {
-				Pane struct {
-					PaneID string `json:"pane_id"`
-				} `json:"pane"`
-			} `json:"result"`
-		}
-		if err := herdrJSON(&sp, herdrTimeout, "pane", "split", pool.panes[from[i]], "--direction", dir[i], "--cwd", repo, "--no-focus"); err != nil {
+		sp, err := m.lay.Split(ctx, Handle(pool.panes[from[i]]), Spec{Cwd: repo, Direction: dir[i]})
+		if err != nil {
 			break // fewer panes is slower, not wrong
 		}
-		pool.panes = append(pool.panes, sp.Result.Pane.PaneID)
+		pool.panes = append(pool.panes, string(sp.Handle))
 	}
 	return pool, nil
 }
@@ -144,36 +198,37 @@ func agentName(gdir, pane, pass string) string {
 	return head + "-" + sfx
 }
 
-// agentGone reports whether herdr has no agent in pane any more.
-func agentGone(pane string) bool {
-	_, err := herdrCmd(herdrTimeout, "agent", "get", pane)
-	return err != nil && strings.Contains(err.Error(), "agent_not_found")
+// agentGone reports whether the backend has no agent in pane any more.
+func (m *gateMux) agentGone(pane string) bool {
+	_, err := m.b.Status(context.Background(), Handle(pane))
+	return errors.Is(err, ErrGone)
 }
 
-// leavePane exits pi (ctrl+d returns the pane to its shell prompt) and waits a
-// short while for herdr to forget the agent. A pane that does not come back is
-// replaced by a fresh split, so the next pass never types into a stuck pane.
-func leavePane(pane *string, repo string, interrupt bool) {
+// leavePane exits the agent (ctrl+d returns the pane to its shell prompt) and
+// waits a short while for the backend to forget it. A pane that does not come
+// back is replaced by a fresh split, so the next pass never types into a stuck
+// pane. Without layout the agent is closed instead.
+func (m *gateMux) leavePane(pane *string, repo string, interrupt bool) {
+	ctx := context.Background()
+	if !m.pooled() {
+		if *pane != "" {
+			_ = m.b.Close(ctx, Handle(*pane))
+		}
+		return
+	}
 	if interrupt {
-		_, _ = herdrCmd(herdrTimeout, "agent", "send-keys", *pane, "ctrl+c")
+		_ = m.pilot.SendKeys(ctx, Handle(*pane), "ctrl+c")
 		time.Sleep(gateLeavePoll)
 	}
-	_, _ = herdrCmd(herdrTimeout, "agent", "send-keys", *pane, "ctrl+d")
+	_ = m.pilot.SendKeys(ctx, Handle(*pane), "ctrl+d")
 	for deadline := time.Now().Add(gateLeaveWait); time.Now().Before(deadline); time.Sleep(gateLeavePoll) {
-		if agentGone(*pane) {
+		if m.agentGone(*pane) {
 			return
 		}
 	}
-	var sp struct {
-		Result struct {
-			Pane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"pane"`
-		} `json:"result"`
-	}
-	if err := herdrJSON(&sp, herdrTimeout, "pane", "split", *pane, "--direction", "down", "--cwd", repo, "--no-focus"); err == nil && sp.Result.Pane.PaneID != "" {
-		_, _ = herdrCmd(herdrTimeout, "pane", "close", *pane)
-		*pane = sp.Result.Pane.PaneID
+	if sp, err := m.lay.Split(ctx, Handle(*pane), Spec{Cwd: repo, Direction: "down"}); err == nil && sp.Handle != "" {
+		_ = m.b.Close(ctx, Handle(*pane))
+		*pane = string(sp.Handle)
 	}
 }
 
@@ -192,17 +247,25 @@ var (
 // it sends the prompt from its launch arguments, so an idle agent with no
 // answer yet is still starting, not finished.
 func waitPaneTurn(ctx context.Context, pane, session, transcript string, old map[string]bool) error {
+	b, err := gateBackendFn()
+	if err != nil {
+		return nil // the backend failed: the pass's wait loop reports it
+	}
+	return (&gateMux{b: b}).waitPaneTurn(ctx, pane, session, transcript, old)
+}
+
+func (m *gateMux) waitPaneTurn(ctx context.Context, pane, session, transcript string, old map[string]bool) error {
 	deadline := time.Now().Add(gateStartWait)
 	seen := false
 	for {
-		out, err := herdrCmdContext(ctx, herdrTimeout, "agent", "get", pane)
-		gone := err != nil && strings.Contains(err.Error(), "agent_not_found")
+		st, err := m.b.Status(ctx, Handle(pane))
+		gone := errors.Is(err, ErrGone)
 		switch {
 		case err != nil && !gone:
-			return nil // herdr failed: the pass's wait loop reports it
+			return nil // the backend failed: the pass's wait loop reports it
 		case !gone:
 			seen = true
-			if st := agentStatus(out); st == "working" || st == "blocked" || st == "done" {
+			if st.State == StateWorking || st.State == StateBlocked || st.State == StateDone {
 				return nil
 			}
 		}
@@ -285,9 +348,11 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 	if err = writeSharedFile(gdir, p); err != nil {
 		return "", "", err
 	}
-	herdrCmd := func(timeout time.Duration, args ...string) ([]byte, error) {
-		return herdrCmdContext(passContext(p), timeout, args...)
+	m, err := openGateMux()
+	if err != nil {
+		return "", "", err
 	}
+	ctx := passContext(p)
 	name := passFile(p.name)
 	task := filepath.Join(gdir, "passes", name+".md")
 	errF := filepath.Join(gdir, "passes", name+".err")
@@ -309,7 +374,6 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 	if err = os.WriteFile(task, []byte(p.task), 0o600); err != nil {
 		return "", "", err
 	}
-	_, _ = herdrCmd(herdrTimeout, "pane", "rename", *pane, p.name) // best effort: label the pane
 	argv := []string{"pi", "--no-approve", "--no-extensions"}
 	if f := expandHome(gatePiExtension); fileExists(f) {
 		argv = append(argv, "-e", f)
@@ -330,55 +394,89 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 		argv = append(argv, "--session-id", id, p.shared+"\n\n"+p.task)
 	}
 	agent := agentName(gdir, *pane, p.name)
-	if err = os.WriteFile(launcher, []byte(paneLaunchScript(p.name+": herdr agent "+agent, p.cli.Env, argv)), 0o600); err != nil {
-		return "", "", err
+	// cur is where the agent runs: the pool's pane, or the agent a separate
+	// Start made. Without layout the slot in *pane is only a name seed and is
+	// never changed; the started agent is closed when the pass leaves it.
+	cur := *pane
+	leave := func(interrupt bool) {
+		if !m.pooled() {
+			m.leavePane(&cur, repo, interrupt)
+			return
+		}
+		m.leavePane(&cur, repo, interrupt)
+		*pane = cur
 	}
 	start := time.Now()
 	old := sessionFiles(session)
-	// The pane's shell types one short line: the long command and its
-	// environment stay in the launcher (see paneLaunchScript).
-	if _, err = herdrCmd(herdrTimeout, "pane", "run", *pane, "sh "+shellQuote(launcher)); err != nil {
-		leavePane(pane, repo, true)
-		return "", "", fmt.Errorf("%s did not start: %v", choice.Harness, err)
+	if m.pooled() {
+		_ = m.b.Rename(ctx, Handle(cur), p.name) // best effort: label the pane
+		if err = os.WriteFile(launcher, []byte(paneLaunchScript(p.name+": herdr agent "+agent, p.cli.Env, argv)), 0o600); err != nil {
+			return "", "", err
+		}
+		// The pane's shell types one short line: the long command and its
+		// environment stay in the launcher (see paneLaunchScript).
+		if err = m.pilot.RunInPane(ctx, Handle(cur), "sh "+shellQuote(launcher)); err != nil {
+			leave(true)
+			return "", "", fmt.Errorf("%s did not start: %v", choice.Harness, err)
+		}
+	} else {
+		env := map[string]string{}
+		for _, kv := range p.cli.Env {
+			if k, v, _ := strings.Cut(kv, "="); k != "" && k != "PATH" {
+				env[k] = v
+			}
+		}
+		id, serr := m.b.Start(ctx, Spec{Agent: argv[0], Harness: argv[0], Cwd: repo, Name: agent, Env: env, Args: argv[1:]})
+		cur = string(id.Handle) // a failed Start may still have made an agent
+		if serr != nil {
+			leave(true)
+			return "", "", fmt.Errorf("%s did not start: %v", choice.Harness, serr)
+		}
 	}
-	if serr := waitPaneTurn(passContext(p), *pane, session, transcript, old); serr != nil {
-		leavePane(pane, repo, true)
-		if passContext(p).Err() != nil {
-			return "", "", passContext(p).Err()
+	defer func() {
+		if !m.pooled() {
+			leave(false) // a no-op once the pass has left the agent
+		}
+	}()
+	if serr := m.waitPaneTurn(ctx, cur, session, transcript, old); serr != nil {
+		leave(true)
+		if ctx.Err() != nil {
+			return "", "", ctx.Err()
 		}
 		return "", "", fmt.Errorf("%s did not start: %v", choice.Harness, serr)
 	}
-	_, _ = herdrCmd(herdrTimeout, "agent", "rename", *pane, agent) // best effort: name the agent
+	if m.pooled() {
+		_ = m.pilot.RenameAgent(ctx, Handle(cur), agent) // best effort: name the agent
+	}
 	// Wait in steps of gatePoll: between steps, a pass whose session files and
 	// agent status have not changed for gateStall is stalled, and one past the
 	// wall cap has timed out.
-	var out []byte
+	var final AgentStatus
 	lastSeen, lastChange := "", time.Now()
 	softSent := false
 	for {
-		if passContext(p).Err() != nil {
-			leavePane(pane, repo, true)
-			return "", hit, passContext(p).Err()
+		if ctx.Err() != nil {
+			leave(true)
+			return "", hit, ctx.Err()
 		}
 		left := time.Until(start.Add(gateTimeout))
 		if left <= 0 {
-			leavePane(pane, repo, true)
+			leave(true)
 			return "", hit, &passLimit{fmt.Sprintf("timed out after %s", gateTimeout)}
 		}
 		step := max(min(left, gatePoll), 10*time.Millisecond)
-		o, werr := herdrCmd(step+herdrTimeout, "agent", "wait", *pane, "--until", "idle", "--until", "done", "--until", "blocked",
-			"--timeout", strconv.FormatInt(step.Milliseconds(), 10))
+		st, werr := m.b.Wait(ctx, Handle(cur), []State{StateIdle, StateDone, StateBlocked}, step)
 		if werr == nil {
-			out = o
+			final = st
 			break
 		}
-		if passContext(p).Err() != nil {
-			leavePane(pane, repo, true)
-			return "", hit, passContext(p).Err()
+		if ctx.Err() != nil {
+			leave(true)
+			return "", hit, ctx.Err()
 		}
-		got, gerr := herdrCmd(herdrTimeout, "agent", "get", *pane)
+		got, gerr := m.b.Status(ctx, Handle(cur))
 		if gerr != nil { // the agent is gone, so this was no poll timeout
-			leavePane(pane, repo, true)
+			leave(true)
 			return "", hit, fmt.Errorf("herdr: %v", werr)
 		}
 		if transcript != "" {
@@ -389,20 +487,19 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 			if hard := int(float64(p.budget) * gateBudgetHard); calls >= hard {
 				// Past the hard limit: interrupt, ask for the answer, and take what comes.
 				hit = "hard"
-				_, _ = herdrCmd(herdrTimeout, "agent", "send-keys", *pane, "ctrl+c")
-				time.Sleep(gateLeavePoll)
+				m.interrupt(ctx, cur)
 				if p.admission != nil {
 					if e := p.admission.continueWith(max(int64(len(p.prompt)), int64(context)*4)); e != nil {
-						leavePane(pane, repo, true)
+						leave(true)
 						return "", hit, e
 					}
 				}
-				o, perr := herdrCmd(185*time.Second, "agent", "prompt", *pane, "Reply now with the final JSON only.", "--wait", "--timeout", "180000")
+				fin, perr := m.promptAndWait(ctx, cur, "Reply now with the final JSON only.", 180*time.Second)
 				if perr != nil {
-					leavePane(pane, repo, true)
+					leave(true)
 					return "", hit, fmt.Errorf("turn budget exceeded (%d turns) and no reply to the final prompt: %v", calls, perr)
 				}
-				out = o
+				final = fin
 				break
 			} else if (calls >= p.budget || context >= gateContextSoft) && !softSent {
 				softSent, hit = true, "soft"
@@ -412,28 +509,28 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 				}
 				if p.admission != nil {
 					if e := p.admission.continueWith(max(int64(len(p.prompt)), int64(context)*4)); e != nil {
-						leavePane(pane, repo, true)
+						leave(true)
 						return "", hit, e
 					}
 				}
-				_, _ = herdrCmd(herdrTimeout, "agent", "prompt", *pane, fmt.Sprintf("Budget reached (%s). Stop exploring and reply now with the final JSON from what you have.", why))
+				_ = m.b.Prompt(ctx, Handle(cur), fmt.Sprintf("Budget reached (%s). Stop exploring and reply now with the final JSON from what you have.", why))
 			}
 		}
-		if seen := sessionStamp(session) + "|" + agentStatus(got); seen != lastSeen {
+		if seen := sessionStamp(session) + "|" + string(got.State); seen != lastSeen {
 			lastSeen, lastChange = seen, time.Now()
 		} else if time.Since(lastChange) >= gateStall {
-			leavePane(pane, repo, true)
+			leave(true)
 			return "", hit, &passLimit{"stalled: no activity for " + gateStall.String()}
 		}
 	}
-	if agentStatus(out) == "blocked" {
-		screen, _ := herdrCmd(herdrTimeout, "agent", "read", *pane, "--source", "recent-unwrapped", "--lines", "30")
-		leavePane(pane, repo, true)
-		return "", hit, fmt.Errorf("%s is blocked waiting for input: %s", choice.Harness, short(strings.Join(strings.Fields(string(screen)), " "), 300))
+	if final.State == StateBlocked {
+		screen, _ := m.b.Read(ctx, Handle(cur), 30)
+		leave(true)
+		return "", hit, fmt.Errorf("%s is blocked waiting for input: %s", choice.Harness, short(strings.Join(strings.Fields(screen), " "), 300))
 	}
 	if choice.Harness == "pi" {
 		if failure := restrictedShellReady(p); failure != nil {
-			leavePane(pane, repo, true)
+			leave(true)
 			return "", hit, failure
 		}
 	}
@@ -446,21 +543,36 @@ func runPaneChoice(pane *string, repo string, choice profile, gdir string, p gat
 	if failure := sessionFailure(session); failure != nil {
 		err = failure
 	}
-	leavePane(pane, repo, false)
+	leave(false)
 	return reply, hit, err
 }
 
-// agentStatus reads agent_status from a herdr agent get/wait reply.
-func agentStatus(out []byte) string {
-	var res struct {
-		Result struct {
-			Agent struct {
-				Status string `json:"agent_status"`
-			} `json:"agent"`
-		} `json:"result"`
+// interrupt sends ctrl+c where the backend can type keys; elsewhere the
+// agent keeps running until it is prompted or closed.
+func (m *gateMux) interrupt(ctx context.Context, pane string) {
+	if m.pooled() {
+		_ = m.pilot.SendKeys(ctx, Handle(pane), "ctrl+c")
+		time.Sleep(gateLeavePoll)
 	}
-	_ = json.Unmarshal(out, &res)
-	return res.Result.Agent.Status
+}
+
+// promptAndWait sends text and returns the state the agent settles in.
+func (m *gateMux) promptAndWait(ctx context.Context, pane, text string, timeout time.Duration) (AgentStatus, error) {
+	h := Handle(pane)
+	if pw, ok := m.b.Backend.(PromptWaiter); ok {
+		if err := pw.PromptWait(ctx, h, text, timeout); err != nil {
+			return AgentStatus{}, err
+		}
+		st, err := m.b.Status(ctx, h)
+		if err != nil {
+			return AgentStatus{State: StateUnknown}, nil
+		}
+		return st, nil
+	}
+	if err := m.b.Prompt(ctx, h, text); err != nil {
+		return AgentStatus{}, err
+	}
+	return m.b.Wait(ctx, h, []State{StateIdle, StateDone, StateBlocked}, timeout)
 }
 
 // sessionReply is the last assistant message's text in the newest session

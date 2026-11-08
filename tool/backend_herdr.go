@@ -65,10 +65,6 @@ func (ag herdrAgentJSON) info() AgentInfo {
 	}
 }
 
-func herdrCmd(timeout time.Duration, args ...string) ([]byte, error) {
-	return herdrCmdContext(context.Background(), timeout, args...)
-}
-
 func herdrCmdContext(parent context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -94,7 +90,7 @@ func herdrCmdContext(parent context.Context, timeout time.Duration, args ...stri
 }
 
 func herdrJSON(v any, timeout time.Duration, args ...string) error {
-	out, err := herdrCmd(timeout, args...)
+	out, err := herdrCmdContext(context.Background(), timeout, args...)
 	if err != nil || v == nil || len(bytes.TrimSpace(out)) == 0 {
 		return err
 	}
@@ -358,6 +354,33 @@ func (*herdrBackend) Contains(workspace, tab Handle) bool {
 	return strings.HasPrefix(string(tab), string(workspace)+":")
 }
 
+// Pane piloting: what the gate pane needs on top of layout (see panePilot).
+
+var _ panePilot = (*herdrBackend)(nil)
+
+// RunInPane types command into the pane's shell and runs it.
+func (*herdrBackend) RunInPane(ctx context.Context, h Handle, command string) error {
+	_, err := herdrCmdContext(ctx, herdrTimeout, "pane", "run", string(h), command)
+	return err
+}
+
+// RenameAgent names the agent running in the pane.
+func (*herdrBackend) RenameAgent(ctx context.Context, h Handle, name string) error {
+	_, err := herdrCmdContext(ctx, herdrTimeout, "agent", "rename", string(h), name)
+	return err
+}
+
+func (*herdrBackend) SendKeys(ctx context.Context, h Handle, key string) error {
+	_, err := herdrCmdContext(ctx, herdrTimeout, "agent", "send-keys", string(h), key)
+	return err
+}
+
+// CloseTab closes a tab and every pane in it.
+func (*herdrBackend) CloseTab(ctx context.Context, tab Handle) error {
+	_, err := herdrCmdContext(ctx, herdrTimeout, "tab", "close", string(tab))
+	return err
+}
+
 // worktree.manage
 
 type herdrWorktreeJSON struct {
@@ -452,4 +475,3 @@ func (*herdrBackend) StateDir() (string, bool) {
 	}
 	return expandHome(cfg.Worktrees.Directory), true
 }
-

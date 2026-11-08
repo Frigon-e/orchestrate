@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -1103,5 +1105,76 @@ func TestTSLSReachesPaneEnv(t *testing.T) {
 		if strings.HasPrefix(kv, "ORCH_TSLS=") {
 			t.Errorf("unset ORCH_TSLS exported: %q", kv)
 		}
+	}
+}
+
+// noLayoutBackend is an in-process backend that does not declare layout. Its
+// Start plays a harness run: it answers the pass with the fake pi and saves the
+// session file the gate reads, then reports the agent done.
+type noLayoutBackend struct {
+	*fakeBackend
+	mu     sync.Mutex
+	starts []Spec
+}
+
+func (b *noLayoutBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
+	id, err := b.fakeBackend.Start(ctx, spec)
+	if err != nil {
+		return id, err
+	}
+	b.mu.Lock()
+	b.starts = append(b.starts, spec)
+	b.mu.Unlock()
+	var prompt strings.Builder
+	session := ""
+	for i, a := range spec.Args {
+		if f, ok := strings.CutPrefix(a, "@"); ok {
+			data, _ := os.ReadFile(f)
+			prompt.Write(data)
+		}
+		if a == "--session-dir" && i+1 < len(spec.Args) {
+			session = spec.Args[i+1]
+		}
+	}
+	pi := exec.Command(envOr("ORCH_PI", "pi"), "-p", prompt.String())
+	pi.Env = append(os.Environ(), childEnv("nolayout", nil, spec.Env)...) // what a started agent would see
+	out, _ := pi.Output()
+	msg, _ := json.Marshal(map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": string(out)}}}})
+	os.MkdirAll(session, 0o755)
+	os.WriteFile(filepath.Join(session, "session.jsonl"), append(msg, '\n'), 0o644)
+	b.fakeBackend.setNative(id.Handle, "FINISHED")
+	return id, nil
+}
+
+func TestGateCompletesOnABackendWithoutLayout(t *testing.T) {
+	h := setup(t)
+	h.gateRepo(3)
+	h.sessionPi(gatePasses(nil))
+	be := &noLayoutBackend{fakeBackend: newFakeBackend("nolayout")}
+	old := gateBackendFn
+	gateBackendFn = func() (*Active, error) { return &Active{Backend: be}, nil }
+	t.Cleanup(func() { gateBackendFn = old })
+	t.Setenv("HERDR_ENV", "") // nothing but the injected backend is available
+
+	out := h.must("gate", "spec.md")
+	wantGateState(t, out, "pass")
+	if n := len(be.starts); n != 3 {
+		t.Fatalf("agents started = %d, want 3 (2 adversaries + one group pass)", n)
+	}
+	names := map[string]bool{}
+	for _, s := range be.starts {
+		if s.Place != "" || s.Direction != "" {
+			t.Errorf("a pass asked for pool placement: %+v", s)
+		}
+		if !agentNameRe.MatchString(s.Name) || names[s.Name] || s.Harness != "pi" || s.Cwd != h.repo {
+			t.Errorf("bad start: %+v", s)
+		}
+		names[s.Name] = true
+	}
+	if rows, _ := be.List(context.Background()); len(rows) != 0 {
+		t.Fatalf("%d agents outlived the gate: %+v", len(rows), rows)
+	}
+	if n := len(h.gateCalls("agent", "start")) + len(callsOf(h.fakeState(), "tab", "create")); n != 0 {
+		t.Fatalf("herdr was used by a backend without layout: %d calls", n)
 	}
 }
