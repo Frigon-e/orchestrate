@@ -259,7 +259,7 @@ package. No command output, exit code or flag changes.
 `go test -p 2 -count=1 -run 'Backend|Orch|Worktree|Sub|Prune|Lock|Guard|Hook' ./...` in tool/ passes unchanged apart from fakes, `go vet ./...` is clean, and the conformance suite passes against the herdr fake. New tests show:
 - the full `orch_test.go` flow (spawn, status, send, close) gives byte-identical command output before and after, using the existing `ORCH_FAKE_HERDR` harness;
 - a `lead.json` without `Backend` is read as herdr and rewritten with it; the role marker for an existing pane id is still found;
-- outside herdr, `spawn`, `sub`, `prune`, `adopt` and `become` fail early with the registry message and not with the old HERDR_ENV text; `plan`, `verify` and `gate` still run;
+- outside herdr, `spawn`, `adopt` and `become` fail early with the registry message and not with the old HERDR_ENV text; `sub` fails on its existing `ORCH_ROLE=lead` check first (built, 2026-11-08); `prune` keeps everything with a backend-neutral unknown-state line (built, pinned by an existing test); `plan`, `verify` and `gate` still run;
 - `rg 'HERDR_|herdr ' tool --glob '!tool/backend_herdr*' --glob '!*_test.go'` finds no match outside the herdr backend files (comments and the docs excepted).
 
 ### gate-pane-layout: Gate pane on the layout capability
