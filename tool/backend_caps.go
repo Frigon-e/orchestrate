@@ -19,6 +19,9 @@ import (
 type Layout interface {
 	Split(ctx context.Context, anchor Handle, spec Spec) (Identity, error)
 	NewTab(ctx context.Context, name string, spec Spec) (Identity, error)
+	// Contains says whether tab belongs to workspace, so placement only fills
+	// tabs of the caller's own workspace.
+	Contains(workspace, tab Handle) bool
 }
 
 // WorktreeSpec asks for a worktree for one lead. An empty Parent means no
@@ -28,6 +31,10 @@ type WorktreeSpec struct {
 	Branch string
 	Base   string
 	Parent string
+	// Repo is the main checkout. Path is where orch wants the worktree; a
+	// backend that picks its own location ignores it and reports the real one.
+	Repo string
+	Path string
 }
 
 // Worktree is a created or opened worktree. Path is read from the backend's
@@ -35,14 +42,27 @@ type WorktreeSpec struct {
 type Worktree struct {
 	Path   string
 	Branch string
+	// Workspace, Root and Tab are the workspace made for the worktree, its first
+	// pane and that pane's tab. Panes counts the panes the workspace holds.
+	Workspace Handle
+	Root      Handle
+	Tab       Handle
+	Panes     int
 }
+
+// ErrWorktreeDirty is returned by RemoveWorktree when the backend refuses to
+// remove a worktree with uncommitted changes.
+var ErrWorktreeDirty = errors.New("backend reports the worktree dirty")
 
 // WorktreeManager is the `worktree.manage` capability. Remove runs only after
 // orch's own merged and clean checks.
 type WorktreeManager interface {
 	CreateWorktree(ctx context.Context, w WorktreeSpec) (Worktree, error)
-	OpenWorktree(ctx context.Context, path string) (Worktree, error)
-	RemoveWorktree(ctx context.Context, path string) error
+	OpenWorktree(ctx context.Context, w WorktreeSpec) (Worktree, error)
+	RemoveWorktree(ctx context.Context, w WorktreeSpec) error
+	// OpenWorktrees maps the checkout path of every worktree the backend holds
+	// open to its workspace handle.
+	OpenWorktrees(ctx context.Context) (map[string]string, error)
 }
 
 // HookEnv is the variable set both runners give a hook script.

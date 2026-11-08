@@ -45,6 +45,9 @@ func fakeGatePaneVerbs(path string, args []string) (int, bool) {
 			f.Close()
 		}
 	}
+	if verb == "pane rename" && loadFake(path).Agents[args[2]] != nil {
+		return 0, false // a lead's agent, not a gate pass
+	}
 	os.MkdirAll(panes, 0o755)
 	status := func() string { b, _ := os.ReadFile(statusF); return strings.TrimSpace(string(b)) }
 	notFound := func(target string) (int, bool) {

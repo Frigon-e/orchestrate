@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -160,24 +161,37 @@ type lead struct {
 	SpawnedAt int64  `json:"spawned_at"`
 	ClosedAt  int64  `json:"closed_at,omitempty"`
 	// Session is the harness session id orch chose at spawn, for harnesses
-	// Herdr reports no session for (pi). Empty for the others.
+	// the backend reports no session for (pi). Empty for the others.
 	Session string `json:"session,omitempty"`
-	// Owner is the Herdr pane of the orchestrator that watches this lead.
+	// Owner is the pane of the orchestrator that watches this lead.
 	// Empty on leads spawned before owners existed: every orchestrator sees those.
 	Owner string `json:"owner,omitempty"`
 	// Epoch is the token of the session spawn started; a respawn replaces it,
 	// and `orch report` refuses a session holding an older one.
 	Epoch string `json:"epoch,omitempty"`
-	// WorkspaceID is the Herdr workspace orch made for a ship lead's worktree.
+	// WorkspaceID is the backend workspace orch made for a ship lead's worktree.
 	// Empty on scouts and on leads whose worktree the lead made itself.
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	// Subs are the helper panes the lead started with `orch sub`.
 	Subs []subAgent `json:"subs,omitempty"`
+	// Backend names the multiplexer backend that holds the lead's pane. A
+	// record written before this field existed is read as legacyBackendName.
+	Backend string `json:"backend,omitempty"`
 }
 
-// orchID names the orchestrator running this command by its Herdr pane, so
-// several orchestrators can share one repo. Empty outside Herdr.
-func orchID() string { return os.Getenv("HERDR_PANE_ID") }
+// orchID names the orchestrator running this command by its backend identity,
+// so several orchestrators can share one repo. Empty outside a backend.
+func orchID() string {
+	b, err := useBackend()
+	if err != nil {
+		return ""
+	}
+	id, err := b.Self(context.Background())
+	if err != nil {
+		return ""
+	}
+	return id.ID
+}
 
 // ownedBy says whether orchestrator me watches and lists a lead with owner.
 func ownedBy(owner, me string) bool { return owner == "" || owner == me }
@@ -202,6 +216,9 @@ func loadLead(dir string) (*lead, error) {
 	var l lead
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fail("%s/lead.json: %v", dir, err)
+	}
+	if l.Backend == "" {
+		l.Backend = legacyBackendName // the next save writes it
 	}
 	return &l, nil
 }

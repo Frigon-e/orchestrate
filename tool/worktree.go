@@ -1,33 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// herdrManaged says orch runs inside Herdr, so it makes and removes each ship
-// lead's worktree itself instead of leaving that to the lead.
-func herdrManaged() bool { return os.Getenv("HERDR_ENV") == "1" }
-
 // shipBranch is the branch of a ship lead's worktree. The repo config has no
 // key for branch naming, so it is always orch/<id>.
 func shipBranch(id string) string { return "orch/" + id }
-
-// worktreeResult is what `herdr worktree create|open` answers.
-type worktreeResult struct {
-	Result struct {
-		Workspace struct {
-			WorkspaceID string `json:"workspace_id"`
-			PaneCount   int    `json:"pane_count"`
-		} `json:"workspace"`
-		RootPane struct {
-			PaneID string `json:"pane_id"`
-			TabID  string `json:"tab_id"`
-		} `json:"root_pane"`
-	} `json:"result"`
-}
 
 // worktreeBranch is the branch checked out in the worktree at path, or "" when
 // path is not a worktree of repo (or is on a detached head).
@@ -56,22 +40,28 @@ func resolvedPath(p string) string {
 	return filepath.Clean(p)
 }
 
-func envArgs(env []string) []string {
-	var out []string
-	for _, kv := range env {
-		out = append(out, "--env", kv)
-	}
-	return out
-}
-
-// placeShip puts a ship lead in its own Herdr workspace on a worktree: made
+// placeShip puts a ship lead in its own backend workspace on a worktree: made
 // fresh, or for a respawn reopened as it was left. The agent's pane is split
 // off the workspace's root pane so it gets the lead env, and the root pane is
 // closed once nothing else lives in it.
-func (a *app) placeShip(s site, dir, id, base string, prev *lead, env []string) (pane, tab, workspace string, err error) {
+func (a *app) placeShip(s site, dir, id, base string, prev *lead, env map[string]string) (pane, tab, workspace string, err error) {
+	b, err := useBackend()
+	if err != nil {
+		return "", "", "", err
+	}
+	mgr, _, ok := capabilityAs[WorktreeManager](b, CapWorktreeManage)
+	if !ok || !b.Has(CapWorktreeManage) {
+		return "", "", "", fail("backend %s does not manage worktrees", b.Name())
+	}
+	lay, ok := b.Backend.(Layout)
+	if !ok || !b.Has(CapLayout) {
+		return "", "", "", fail("backend %s cannot place a pane in a worktree workspace", b.Name())
+	}
+	ctx := context.Background()
 	wt, branch := worktreePath(dir, id), shipBranch(id)
 	fresh := prev == nil || worktreeBranch(s.repo, wt) == ""
-	var args []string
+	spec := WorktreeSpec{Name: id, Branch: branch, Base: base, Repo: s.repo, Path: wt}
+	var made Worktree
 	if fresh {
 		if _, err := os.Lstat(wt); err == nil {
 			return "", "", "", fail("worktree path %s already exists; remove or move it before spawning %s", wt, id)
@@ -79,40 +69,31 @@ func (a *app) placeShip(s site, dir, id, base string, prev *lead, env []string) 
 		if _, err := git(s.repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 			return "", "", "", fail("branch %s already exists in %s; delete it (git branch -d %s) or pick another task id", branch, s.repo, branch)
 		}
-		args = []string{"worktree", "create", "--cwd", s.repo, "--branch", branch, "--base", base, "--path", wt, "--label", id, "--no-focus"}
+		made, err = mgr.CreateWorktree(ctx, spec)
 	} else {
-		args = []string{"worktree", "open", "--cwd", s.repo, "--path", wt, "--no-focus"}
+		made, err = mgr.OpenWorktree(ctx, spec)
 	}
-	var res worktreeResult
-	if err := herdrJSON(&res, herdrTimeout, args...); err != nil {
+	if err != nil {
 		return "", "", "", err
 	}
-	ws, root := res.Result.Workspace.WorkspaceID, res.Result.RootPane.PaneID
 	undo := func() {
 		if fresh {
-			_, _ = herdrCmd(herdrTimeout, "worktree", "remove", "--workspace", ws)
+			_ = mgr.RemoveWorktree(ctx, spec)
 			_, _ = git(s.repo, "branch", "-d", branch)
 		}
 	}
 	if fresh {
 		a.linkEnv(s.repo, wt, dir)
 	}
-	var split struct {
-		Result struct {
-			Pane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"pane"`
-		} `json:"result"`
-	}
-	cmd := append([]string{"pane", "split", root, "--direction", "right", "--cwd", wt, "--no-focus"}, envArgs(env)...)
-	if err := herdrJSON(&split, herdrTimeout, cmd...); err != nil {
+	split, err := lay.Split(ctx, made.Root, Spec{Direction: "right", Cwd: wt, Env: env})
+	if err != nil {
 		undo()
 		return "", "", "", err
 	}
-	if res.Result.Workspace.PaneCount <= 1 { // a reopened workspace may hold the user's own panes
-		_, _ = herdrCmd(herdrTimeout, "pane", "close", root)
+	if made.Panes <= 1 { // a reopened workspace may hold the user's own panes
+		_ = b.Close(ctx, made.Root)
 	}
-	return split.Result.Pane.PaneID, res.Result.RootPane.TabID, ws, nil
+	return string(split.Handle), string(made.Tab), string(made.Workspace), nil
 }
 
 // linkEnv symlinks the checkout's .env into a new worktree, so the lead runs
@@ -166,13 +147,17 @@ func (a *app) removeShipWorktree(s site, dir string, l *lead, fm map[string]stri
 	if !isAncestor(s.repo, branch, base) {
 		return keep("its branch is not merged into "+base, "Merge it first (orch verify "+l.ID+"), then remove it with: "+manual+". To drop the work instead, use git worktree remove --force and git branch -D, after the user agrees")
 	}
-	var res worktreeResult
-	if err := herdrJSON(&res, herdrTimeout, "worktree", "open", "--cwd", s.repo, "--path", wt, "--no-focus"); err != nil {
+	b, err := useBackend()
+	if err != nil {
 		return err
 	}
-	if _, err := herdrCmd(herdrTimeout, "worktree", "remove", "--workspace", res.Result.Workspace.WorkspaceID); err != nil {
-		if strings.Contains(err.Error(), "dirty_worktree_requires_force") {
-			return keep("Herdr reports it dirty", "Remove it yourself with: "+manual)
+	mgr, _, ok := capabilityAs[WorktreeManager](b, CapWorktreeManage)
+	if !ok || !b.Has(CapWorktreeManage) {
+		return fail("backend %s does not manage worktrees", b.Name())
+	}
+	if err := mgr.RemoveWorktree(context.Background(), WorktreeSpec{Repo: s.repo, Path: wt}); err != nil {
+		if errors.Is(err, ErrWorktreeDirty) {
+			return keep(backendLabel()+" reports it dirty", "Remove it yourself with: "+manual)
 		}
 		return err
 	}

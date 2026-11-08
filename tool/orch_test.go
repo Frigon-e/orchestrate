@@ -51,6 +51,7 @@ type fakeAgent struct {
 	Kind    string `json:"kind"`
 	Status  string `json:"status"`
 	Session string `json:"session"`
+	Prompt  string `json:"prompt"`
 }
 
 type fakeState struct {
@@ -111,7 +112,7 @@ func fakeHerdr(path string, args []string) int {
 		}
 		var agents []map[string]any
 		for pane, ag := range st.Agents {
-			agents = append(agents, map[string]any{"pane_id": pane, "tab_id": st.Panes[pane], "agent": ag.Kind, "agent_status": ag.Status,
+			agents = append(agents, map[string]any{"pane_id": pane, "tab_id": st.Panes[pane], "name": ag.Name, "agent": ag.Kind, "agent_status": ag.Status,
 				"agent_session": map[string]any{"value": ag.Session}})
 		}
 		return print(map[string]any{"result": map[string]any{"agents": agents}})
@@ -145,11 +146,17 @@ func fakeHerdr(path string, args []string) int {
 	case "agent prompt":
 		if ag := st.Agents[args[2]]; ag != nil {
 			ag.Status = "working"
+			if len(args) > 3 {
+				ag.Prompt = args[3]
+			}
 		}
 		return print(map[string]any{})
 	case "agent read":
 		for i := 1; i <= 250; i++ {
 			fmt.Printf("line %d\n", i)
+		}
+		if ag := st.Agents[args[2]]; ag != nil && ag.Prompt != "" && os.Getenv("ORCH_FAKE_HERDR_ECHO") == "1" {
+			fmt.Println(ag.Prompt) // a pane that shows what was typed into it
 		}
 		return 0
 	case "pane close":
@@ -201,7 +208,22 @@ func fakeHerdr(path string, args []string) int {
 		return print(map[string]any{"result": map[string]any{"workspaces": wss}})
 	case "pane current":
 		return print(map[string]any{"result": map[string]any{"pane": map[string]any{"agent_session": map[string]any{"value": st.Session}}}})
-	case "pane rename", "agent wait", "agent focus":
+	case "agent get", "agent wait":
+		ag := st.Agents[args[2]]
+		if ag == nil && args[1] == "wait" {
+			return print(map[string]any{})
+		}
+		if ag == nil {
+			fmt.Fprintf(os.Stderr, `{"error":{"code":"agent_not_found","message":"agent %s not found"}}`+"\n", args[2])
+			return 1
+		}
+		return print(map[string]any{"result": map[string]any{"agent": map[string]any{"pane_id": args[2], "agent_status": ag.Status}}})
+	case "pane rename":
+		if ag := st.Agents[args[2]]; ag != nil && len(args) > 3 {
+			ag.Name = args[3]
+		}
+		return print(map[string]any{})
+	case "agent focus":
 		return print(map[string]any{})
 	}
 	fmt.Fprintf(os.Stderr, "fake herdr: unhandled %v\n", args)

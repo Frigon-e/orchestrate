@@ -207,7 +207,19 @@ func (f *fakeBackend) NewTab(ctx context.Context, name string, spec Spec) (Ident
 	return f.Start(ctx, spec)
 }
 
+func (f *fakeBackend) Contains(workspace, tab Handle) bool { return true }
+
 // worktree.manage
+func (f *fakeBackend) OpenWorktrees(ctx context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := map[string]string{}
+	for p := range f.trees {
+		m[p] = "ws-" + p
+	}
+	return m, nil
+}
+
 func (f *fakeBackend) CreateWorktree(ctx context.Context, w WorktreeSpec) (Worktree, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -216,18 +228,20 @@ func (f *fakeBackend) CreateWorktree(ctx context.Context, w WorktreeSpec) (Workt
 	return Worktree{Path: p, Branch: w.Branch}, nil
 }
 
-func (f *fakeBackend) OpenWorktree(ctx context.Context, path string) (Worktree, error) {
+func (f *fakeBackend) OpenWorktree(ctx context.Context, w WorktreeSpec) (Worktree, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	path := w.Path
 	if !f.trees[path] {
 		return Worktree{}, ErrGone
 	}
 	return Worktree{Path: path}, nil
 }
 
-func (f *fakeBackend) RemoveWorktree(ctx context.Context, path string) error {
+func (f *fakeBackend) RemoveWorktree(ctx context.Context, w WorktreeSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	path := w.Path
 	if !f.trees[path] {
 		return ErrGone
 	}

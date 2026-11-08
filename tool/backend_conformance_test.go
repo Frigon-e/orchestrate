@@ -241,10 +241,10 @@ func capabilityConformance(ctx context.Context, b Backend, name string) error {
 		if err != nil || w.Path == "" {
 			return fmt.Errorf("CreateWorktree: %+v, %v", w, err)
 		}
-		if _, err := m.OpenWorktree(ctx, w.Path); err != nil {
+		if _, err := m.OpenWorktree(ctx, WorktreeSpec{Path: w.Path}); err != nil {
 			return fmt.Errorf("OpenWorktree: %w", err)
 		}
-		if err := m.RemoveWorktree(ctx, w.Path); err != nil {
+		if err := m.RemoveWorktree(ctx, WorktreeSpec{Path: w.Path}); err != nil {
 			return fmt.Errorf("RemoveWorktree: %w", err)
 		}
 	case CapSetupHook, CapArchiveHook:

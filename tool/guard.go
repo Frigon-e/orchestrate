@@ -223,7 +223,7 @@ func cmdDoctor(a *app, args []string) error {
 	}
 	agents, herdrErr := agentMap()
 	if herdrErr != nil {
-		add("warn", "herdr", "cannot list agents: "+herdrErr.Error(), "check that Herdr is running")
+		add("warn", "herdr", "cannot list agents: "+herdrErr.Error(), "check that "+backendLabel()+" is running")
 	}
 	for _, ol := range leads {
 		id := filepath.Base(ol.dir)

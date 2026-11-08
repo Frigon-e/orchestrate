@@ -65,7 +65,7 @@ func lockStale(h *lockHolder) bool {
 		return true
 	}
 	if l.PaneID != "" {
-		if ok, err := paneExists(l.PaneID); err == nil && !ok {
+		if ok, err := leadLive(l); err == nil && !ok {
 			return true
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -63,29 +64,24 @@ func pruneRoot(s site) string {
 	return resolvedPath(filepath.Dir(worktreePath(filepath.Join(s.root, "x"), "x")))
 }
 
-// herdrCheckouts is the checkout path of every open Herdr workspace, by path.
-func herdrCheckouts() (map[string]string, error) {
-	if !herdrManaged() {
-		return nil, fail("HERDR_ENV is not 1")
-	}
-	var res struct {
-		Result struct {
-			Workspaces []struct {
-				ID       string `json:"workspace_id"`
-				Worktree struct {
-					Checkout string `json:"checkout_path"`
-				} `json:"worktree"`
-			} `json:"workspaces"`
-		} `json:"result"`
-	}
-	if err := herdrJSON(&res, herdrTimeout, "workspace", "list"); err != nil {
+// backendCheckouts is the checkout path of every workspace the backend has
+// open, by path. It errors when no backend is active or it cannot say.
+func backendCheckouts() (map[string]string, error) {
+	b, err := useBackend()
+	if err != nil {
 		return nil, err
 	}
-	m := map[string]string{}
-	for _, w := range res.Result.Workspaces {
-		if w.Worktree.Checkout != "" {
-			m[resolvedPath(w.Worktree.Checkout)] = w.ID
-		}
+	mgr, _, ok := capabilityAs[WorktreeManager](b, CapWorktreeManage)
+	if !ok || !b.Has(CapWorktreeManage) {
+		return nil, fail("backend %s does not manage worktrees", b.Name())
+	}
+	open, err := mgr.OpenWorktrees(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(open))
+	for path, id := range open {
+		m[resolvedPath(path)] = id
 	}
 	return m, nil
 }
@@ -225,13 +221,13 @@ func pruneScan(s site, stale staleRule) ([]pruneItem, error) {
 				it.keep = "branch not merged into " + base
 			} else {
 				if !checkoutsRead {
-					checkouts, checkoutsErr = herdrCheckouts()
+					checkouts, checkoutsErr = backendCheckouts()
 					checkoutsRead = true
 				}
 				if checkoutsErr != nil {
-					it.keep = "Herdr state unknown"
+					it.keep = backendLabel() + " state unknown"
 				} else if id, ok := checkouts[p]; ok {
-					it.keep = "open in Herdr workspace " + id
+					it.keep = "open in " + backendLabel() + " workspace " + id
 				}
 			}
 		}

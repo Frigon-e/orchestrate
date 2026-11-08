@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -45,24 +45,26 @@ func openSubs(l *lead) []subAgent {
 // closed one frees its slot. Up to subsInLeadTab stack in the lead's tab; the
 // rest fill 2x2 grids in overflow tabs of the same workspace. A slot whose
 // split target pane is gone is skipped for the next valid one.
-func placeSub(l *lead, wt string, env []string) (pane, tab string, err error) {
-	var split struct {
-		Result struct {
-			Pane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"pane"`
-		} `json:"result"`
+func placeSub(l *lead, wt string, env map[string]string) (pane, tab string, err error) {
+	b, err := useBackend()
+	if err != nil {
+		return "", "", err
 	}
+	lay, native, ok := capabilityAs[Layout](b, CapLayout)
+	if !ok || !native {
+		return "", "", nil // no layout: the caller starts the helper on its own
+	}
+	ctx := context.Background()
 	splitAt := func(target, direction, tabID string) (string, string, bool, error) {
-		ok, err := paneExists(target)
+		ok, err := handleLive(target)
 		if err != nil || !ok {
 			return "", "", false, err
 		}
-		cmd := append([]string{"pane", "split", target, "--direction", direction, "--cwd", wt, "--no-focus"}, envArgs(env)...)
-		if err := herdrJSON(&split, herdrTimeout, cmd...); err != nil {
+		id, err := lay.Split(ctx, Handle(target), Spec{Direction: direction, Cwd: wt, Env: env})
+		if err != nil {
 			return "", "", false, err
 		}
-		return split.Result.Pane.PaneID, tabID, true, nil
+		return string(id.Handle), tabID, true, nil
 	}
 	byTab := map[string][]string{}
 	var overflow []string
@@ -116,24 +118,14 @@ func placeSub(l *lead, wt string, env []string) (pane, tab string, err error) {
 	if n := len(allTabs); n > 0 {
 		label = fmt.Sprintf("%s-%d", label, n+1)
 	}
-	var res struct {
-		Result struct {
-			Tab struct {
-				TabID string `json:"tab_id"`
-			} `json:"tab"`
-			RootPane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"root_pane"`
-		} `json:"result"`
-	}
-	create := append([]string{"tab", "create", "--workspace", l.WorkspaceID, "--cwd", wt, "--label", label, "--no-focus"}, envArgs(env)...)
-	if err := herdrJSON(&res, herdrTimeout, create...); err != nil {
+	id, err := lay.NewTab(ctx, label, Spec{Cwd: wt, Workspace: Handle(l.WorkspaceID), Env: env})
+	if err != nil {
 		return "", "", err
 	}
-	return res.Result.RootPane.PaneID, res.Result.Tab.TabID, nil
+	return string(id.Handle), string(id.Tab), nil
 }
 
-// subAgentName is the Herdr agent name of a helper: [a-z][a-z0-9_-]{0,31}.
+// subAgentName is the backend agent name of a helper: [a-z][a-z0-9_-]{0,31}.
 func subAgentName(leadID, name string) string {
 	id := leadID
 	if len(id) > 15 {
@@ -147,8 +139,8 @@ func (a *app) subLead() (dir string, l *lead, err error) {
 	if os.Getenv("ORCH_ROLE") != "lead" || os.Getenv("ORCH_TASK_DIR") == "" {
 		return "", nil, fail("orch sub runs inside a lead's pane (ORCH_ROLE=lead and ORCH_TASK_DIR)")
 	}
-	if os.Getenv("HERDR_ENV") != "1" {
-		return "", nil, fail("orch sub must run inside a Herdr pane (HERDR_ENV=1)")
+	if _, err := useBackend(); err != nil {
+		return "", nil, err
 	}
 	dir, err = leadDir("")
 	if err != nil {
@@ -208,7 +200,7 @@ func (a *app) subStart(args []string) error {
 		return err
 	}
 	if l.WorkspaceID == "" {
-		return fail("helpers need a managed ship worktree; %s has none (scouts and leads outside Herdr cannot start them)", l.ID)
+		return fail("helpers need a managed ship worktree; %s has none (scouts and leads outside a managed workspace cannot start them)", l.ID)
 	}
 	open := openSubs(l)
 	for _, s := range open {
@@ -238,29 +230,52 @@ func (a *app) subStart(args []string) error {
 		eff = "high"
 	}
 	wt := worktreePath(dir, l.ID)
-	env := []string{"ORCH_ROLE=sub", "ORCH_PARENT=" + l.ID}
+	env := map[string]string{"ORCH_ROLE": "sub", "ORCH_PARENT": l.ID}
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
 	pane, tab, err := placeSub(l, wt, env)
 	if err != nil {
 		return err
 	}
 	agent := subAgentName(l.ID, name)
-	_, _ = herdrCmd(herdrTimeout, "pane", "rename", pane, agent)
-	sub := subAgent{Name: name, Harness: *harness, Model: *model, PaneID: pane, TabID: tab, StartedAt: a.now().Unix()}
-	if err := withFlock(filepath.Join(dir, ".subs.guard"), func() error {
-		cur, err := loadLead(dir)
-		if err != nil || cur == nil {
-			return fail("lead.json vanished")
-		}
-		cur.Subs = append(cur.Subs, sub)
-		return saveLead(dir, cur)
-	}); err != nil {
-		_, _ = herdrCmd(herdrTimeout, "pane", "close", pane)
-		return err
+	record := func() error {
+		sub := subAgent{Name: name, Harness: *harness, Model: *model, PaneID: pane, TabID: tab, StartedAt: a.now().Unix()}
+		return withFlock(filepath.Join(dir, ".subs.guard"), func() error {
+			cur, err := loadLead(dir)
+			if err != nil || cur == nil {
+				return fail("lead.json vanished")
+			}
+			cur.Subs = append(cur.Subs, sub)
+			return saveLead(dir, cur)
+		})
 	}
-	start := append([]string{"agent", "start", agent, "--kind", *harness, "--pane", pane, "--timeout", "90000", "--"},
-		harnessArgs(map[string]string{"harness": *harness, "model": *model, "effort": eff}, s.cfg, "")...)
-	if err := startAgent(start); err != nil {
-		return fail("opened pane %s for helper %s, but the agent did not start (%v); remove it with: orch sub close %s", pane, name, err, name)
+	spec := Spec{
+		Name: agent, Harness: *harness, Cwd: wt, Env: env, Place: Handle(pane),
+		Args: harnessArgs(map[string]string{"harness": *harness, "model": *model, "effort": eff}, s.cfg, ""),
+	}
+	if pane == "" { // no layout: one separate start, no placement
+		id, err := b.Start(ctx, spec)
+		if err != nil {
+			return err
+		}
+		pane, tab = string(id.Handle), string(id.Tab)
+		_ = b.Rename(ctx, id.Handle, agent)
+		if err := record(); err != nil {
+			_ = b.Close(ctx, id.Handle)
+			return err
+		}
+	} else {
+		_ = b.Rename(ctx, Handle(pane), agent)
+		if err := record(); err != nil {
+			_ = b.Close(ctx, Handle(pane))
+			return err
+		}
+		if _, err := b.Start(ctx, spec); err != nil {
+			return fail("opened pane %s for helper %s, but the agent did not start (%v); remove it with: orch sub close %s", pane, name, err, name)
+		}
 	}
 	scope := "the lead's scope"
 	if owns := splitList(fm["owns"]); len(owns) > 0 {
@@ -269,7 +284,7 @@ func (a *app) subStart(args []string) error {
 	header := fmt.Sprintf("You are helper %s for lead %s, working in the lead's checkout at %s. Edit only files inside the lead's owned paths: %s. "+
 		"Do not commit, do not run orch commands or start agents. When finished, say so and summarize in your last message because the lead reads your pane.\n\n",
 		name, l.ID, wt, scope)
-	if _, err := herdrCmd(herdrTimeout, "agent", "prompt", pane, header+prompt); err != nil {
+	if err := b.Prompt(ctx, Handle(pane), header+prompt); err != nil {
 		return fail("helper %s started in pane %s, but the prompt failed (%v)", name, pane, err)
 	}
 	fmt.Fprintln(a.out, agent)
@@ -301,7 +316,7 @@ func (a *app) subList(args []string) error {
 			case !ok:
 				status = "gone"
 			default:
-				status = ag.Status
+				status = string(ag.Status.State)
 			}
 		}
 		fmt.Fprintf(a.out, "%s  %s/%s  %s  %s\n", s.Name, s.Harness, s.Model, status, s.PaneID)
@@ -339,12 +354,15 @@ func (a *app) subRead(args []string) error {
 	if _, err := findSub(l, pos[0]); err != nil {
 		return err
 	}
-	out, err := herdrCmd(herdrTimeout, "agent", "read", subAgentName(l.ID, pos[0]), "--source", "recent-unwrapped", "--lines", strconv.Itoa(max(*n, 200)))
+	b, err := useBackend()
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	fmt.Fprintln(a.out, strings.Join(lines[max(0, len(lines)-*n):], "\n"))
+	out, err := b.Read(context.Background(), Handle(subAgentName(l.ID, pos[0])), *n)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(a.out, out)
 	return nil
 }
 
@@ -381,13 +399,17 @@ func (a *app) subClose(args []string) error {
 
 // closeSubPane closes a helper's pane; a pane already gone is fine.
 func closeSubPane(pane string) error {
-	exists, err := paneExists(pane)
+	exists, err := handleLive(pane)
 	if err != nil {
 		return err
 	}
 	if exists {
-		_, _ = herdrCmd(herdrTimeout, "pane", "close", pane)
-		if still, err := paneExists(pane); err != nil || still {
+		b, err := useBackend()
+		if err != nil {
+			return err
+		}
+		_ = b.Close(context.Background(), Handle(pane))
+		if still, err := handleLive(pane); err != nil || still {
 			return fail("pane %s is still open after close", pane)
 		}
 	}

@@ -88,6 +88,9 @@ type userConfig struct {
 	CtxIndex string   `toml:"ctx_index"`
 	CtxDeny  []string `toml:"ctx_deny"`
 	CtxTrust []string `toml:"ctx_trust"` // repos allowed to run repo-local language servers
+	// Backend holds backend.<name>.native: the capabilities a backend runs
+	// natively (see parseBackendConfig). Absent means every declared one.
+	Backend map[string]any `toml:"backend"`
 }
 
 // limitedAllow allows the models in Allow (by harness) while Harness is limited.
@@ -195,20 +198,43 @@ func repoRoot(dir string) (string, error) {
 	return common, nil
 }
 
-func herdrWorktreesDir() string {
-	var cfg struct {
-		Worktrees struct {
-			Directory string `toml:"directory"`
-		} `toml:"worktrees"`
-	}
-	path := expandHome(envOr("ORCH_HERDR_CONFIG", "~/.config/herdr/config.toml"))
-	if _, err := toml.DecodeFile(path, &cfg); err != nil || cfg.Worktrees.Directory == "" {
+// backendStateDir is the run-state directory the backend names through its
+// state.dir capability. Without a selectable backend (a command run from a
+// plain shell) the first registered backend that names one is used, so state
+// does not move depending on where orch runs.
+func backendStateDir() string {
+	if b, err := useBackend(); err == nil {
+		if impl, native, ok := capabilityAs[StateDirer](b, CapStateDir); ok && native {
+			if dir, ok := impl.StateDir(); ok {
+				return dir
+			}
+		}
 		return ""
 	}
-	return expandHome(cfg.Worktrees.Directory)
+	for _, r := range registeredBackends() {
+		b, err := r.ctor()
+		if err != nil || !slices.Contains(b.Declares(), CapStateDir) {
+			continue
+		}
+		if sd, ok := b.(StateDirer); ok {
+			if dir, ok := sd.StateDir(); ok {
+				return dir
+			}
+		}
+	}
+	return ""
 }
 
-// runRoot keeps a repo's run state next to its Herdr worktrees, so both live
+// loadBackendConfig reads backend.<name>.native from the user config.
+func loadBackendConfig() (backendConfig, error) {
+	uc, err := loadUserConfig()
+	if err != nil {
+		return nil, err
+	}
+	return parseBackendConfig(uc.Backend)
+}
+
+// runRoot keeps a repo's run state next to its backend's worktrees, so both live
 // under one directory per repo. The directory is named after the repo folder
 // and records the repo path in a `.repo` file (see claimRoot); a different
 // repo with the same folder name gets a path hash added instead of sharing
@@ -227,7 +253,7 @@ func runRootNamed(name string) string {
 	if home := os.Getenv("ORCH_HOME"); home != "" {
 		return filepath.Join(expandHome(home), name)
 	}
-	if dir := herdrWorktreesDir(); dir != "" {
+	if dir := backendStateDir(); dir != "" {
 		return filepath.Join(dir, name, ".orchestrate")
 	}
 	return filepath.Join(expandHome("~/.local/state/orchestrate"), name)
@@ -270,7 +296,7 @@ func userConfigPath() string {
 	return filepath.Join(envOr("XDG_CONFIG_HOME", expandHome("~/.config")), "orchestrate", "config.toml")
 }
 
-var userKeys = []string{"gate_budget", "ctx_trust", "roles", "max_leads", "claude_args", "pi_args", "lead_context_limit", "unread_minutes", "gate_max_rounds", "dispatch", "triage_model", "triage_mode", "quick_mode", "weak_models", "allowed_models", "allowed_when_limited"}
+var userKeys = []string{"gate_budget", "ctx_trust", "roles", "max_leads", "claude_args", "pi_args", "lead_context_limit", "unread_minutes", "gate_max_rounds", "dispatch", "triage_model", "triage_mode", "quick_mode", "weak_models", "allowed_models", "allowed_when_limited", "backend"}
 
 // removedKeys are config keys of removed features. A file that still has one
 // loads as if it did not.
@@ -387,6 +413,9 @@ func loadConfig(repo string) (config, error) {
 		return cfg, err
 	}
 	cfg.userConfig = uc
+	if _, err := parseBackendConfig(uc.Backend); err != nil {
+		return cfg, fail("%s: %v", user, err)
+	}
 	switch cfg.CtxIndex {
 	case "", "full", "incremental", "off":
 	default:

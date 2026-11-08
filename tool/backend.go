@@ -56,6 +56,10 @@ type Identity struct {
 	ID      string
 	Handle  Handle
 	Backend string
+	// Tab and Workspace name the group and the workspace the handle sits in,
+	// when the backend has them (the layout capability returns them). Opaque.
+	Tab       Handle
+	Workspace Handle
 }
 
 // Spec is what Start needs to launch an agent.
@@ -68,6 +72,17 @@ type Spec struct {
 	Prompt  string
 	Name    string
 	Env     map[string]string
+	// Args are the harness's own arguments (model, effort, session), passed
+	// after the agent kind.
+	Args []string
+	// Place is a pane or terminal the layout capability already made: Start
+	// launches the agent there instead of making one. Empty means Start makes
+	// its own place.
+	Place Handle
+	// Direction ("right" or "down") and Workspace are for Layout.Split and
+	// Layout.NewTab. An empty Workspace means the caller's own.
+	Direction string
+	Workspace Handle
 }
 
 // AgentInfo is one row of List.
@@ -77,6 +92,8 @@ type AgentInfo struct {
 	Agent  string
 	Cwd    string
 	Status AgentStatus
+	// Session is the harness session id the backend reports, or empty.
+	Session string
 }
 
 var (
@@ -123,6 +140,19 @@ type Backend interface {
 	Resolve(ctx context.Context, h Handle) (Handle, error)
 	// Declares lists the capability names the backend implements natively.
 	Declares() []string
+}
+
+// PromptWaiter is implemented by backends that can send a prompt and block
+// until the agent has settled again (a long /compact). Core uses it when
+// present and otherwise sends Prompt alone.
+type PromptWaiter interface {
+	PromptWait(ctx context.Context, h Handle, text string, timeout time.Duration) error
+}
+
+// SelfSessioner is implemented by backends that know the harness session of the
+// calling agent. Self stays free of backend calls; this one may make them.
+type SelfSessioner interface {
+	SelfSession(ctx context.Context) (string, error)
 }
 
 // Active is the selected backend plus the config that decides which declared

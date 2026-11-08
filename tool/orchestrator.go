@@ -184,7 +184,7 @@ func reportBack(dir, id, kind, repo, base, sha string, cfg config, skill string)
 		"`git -C %s worktree add -b <branch> %s %s` (branch per the repo's convention, else `orch/%s`). "+
 		"Name the branch and head sha in your done line; never merge into `%s` or push unless a message tells you to",
 		repo, worktreePath(dir, id), sha, id, base)
-	if kind != "scout" && herdrManaged() {
+	if kind != "scout" && worktreesManaged() {
 		deliverable = fmt.Sprintf("commits on branch `%s`, in your own worktree `%s`: orch already made it from %s and you start inside it, so do not run `git worktree add` and never work in the main checkout. "+
 			"Name the branch and head sha in your done line; never merge into `%s` or push unless a message tells you to",
 			shipBranch(id), worktreePath(dir, id), sha, base)
@@ -304,8 +304,12 @@ type spawnOverride struct {
 // them before it changes anything. fm is the task's front matter with ov laid
 // over it.
 func (a *app) preflight(id string, ov *spawnOverride) (s site, dir string, fm map[string]string, warnings []string, err error) {
-	if os.Getenv("HERDR_ENV") != "1" || os.Getenv("HERDR_WORKSPACE_ID") == "" {
-		return s, "", nil, nil, fail("spawn must run inside a Herdr pane (HERDR_ENV=1)")
+	b, err := useBackend()
+	if err != nil {
+		return s, "", nil, nil, err
+	}
+	if self, err := b.Self(context.Background()); err != nil || self.Workspace == "" {
+		return s, "", nil, nil, fail("spawn must run inside a %s pane", backendLabel())
 	}
 	s, err = a.site()
 	if err != nil {
@@ -389,13 +393,20 @@ func (a *app) spawn(id, brief string) error {
 	}
 	name := leadName(id)
 	epoch := newSessionID() // a respawn mints a new one, so `orch report` can refuse the replaced session
-	env := []string{"ORCH_TASK_DIR=" + dir, "ORCH_TASK_ID=" + id, "ORCH_ROLE=lead", "ORCH_EPOCH=" + epoch}
+	env := map[string]string{"ORCH_TASK_DIR": dir, "ORCH_TASK_ID": id, "ORCH_ROLE": "lead", "ORCH_EPOCH": epoch}
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	spec := Spec{Name: name, Harness: fm["harness"], Cwd: s.repo, Env: env}
+	started := false
 	// The slot check, the pane and the lead record go under one guard, so two
 	// spawns cannot both see a free slot or both take the same task. The slow
 	// agent start and prompt below run outside it.
 	var paneID string
 	var l *lead
-	managedShip := fm["kind"] != "scout" && herdrManaged()
+	managedShip := fm["kind"] != "scout" && worktreesManaged()
 	base := ""
 	if managedShip {
 		if fm["integration"] != "" { // requireMerged may have re-pinned the base
@@ -425,19 +436,35 @@ func (a *app) spawn(id, brief string) error {
 		if err != nil {
 			return err
 		}
-		paneID = pane
-		_, _ = herdrCmd(herdrTimeout, "pane", "rename", paneID, name)
-		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch, WorkspaceID: workspaceID}
-		if l.Harness == "pi" {
-			l.Session = newSessionID()
+		session := ""
+		if fm["harness"] == "pi" {
+			session = newSessionID()
 		}
+		spec.Args = harnessArgs(fm, s.cfg, session)
+		spec.Place = Handle(pane)
+		if managedShip {
+			spec.Cwd = worktreePath(dir, id)
+		}
+		if pane == "" { // no layout: one separate start, inside the guard so the slot stays taken
+			ident, err := b.Start(ctx, spec)
+			if err != nil {
+				return err
+			}
+			pane, tabID, started = string(ident.Handle), string(ident.Tab), true
+		}
+		paneID = pane
+		_ = b.Rename(ctx, Handle(paneID), name)
+		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch, WorkspaceID: workspaceID, Session: session, Backend: b.Name()}
 		return saveLead(dir, l)
 	})
 	if err != nil {
 		return err
 	}
-	start := append([]string{"agent", "start", name, "--kind", fm["harness"], "--pane", paneID, "--timeout", "90000", "--"}, harnessArgs(fm, s.cfg, l.Session)...)
-	if err := startAgent(start); err != nil {
+	var startErr error
+	if !started {
+		_, startErr = b.Start(ctx, spec)
+	}
+	if err := startErr; err != nil {
 		_ = a.appendStatus(dir, "note", "agent did not report ready in pane "+paneID, "", "orch")
 		fmt.Fprintf(a.out, "opened pane %s for %s, but the agent is not ready (%v). Look with: orch peek %s; give up with: orch close %s --force\n", paneID, name, err, id, id)
 		return nil
@@ -449,11 +476,11 @@ func (a *app) spawn(id, brief string) error {
 	if brief != "" {
 		launch += " " + brief
 	}
-	if _, err := herdrCmd(herdrTimeout, "agent", "prompt", paneID, launch); err != nil {
+	if err := b.Prompt(ctx, Handle(paneID), launch); err != nil {
 		_ = a.appendStatus(dir, "note", "agent prompt failed in pane "+paneID, "", "orch")
 		return fail("opened pane %s for %s, but the launch prompt failed (%v). Look with: orch peek %s; give up with: orch close %s --force", paneID, name, err, id, id)
 	}
-	_, waitErr := herdrCmd(30*time.Second, "agent", "wait", paneID, "--until", "working", "--until", "blocked", "--timeout", "20000")
+	_, waitErr := b.Wait(ctx, Handle(paneID), []State{StateWorking, StateBlocked}, 20*time.Second)
 	if err := a.appendStatus(dir, "working", "spawned in pane "+paneID, "", "orch"); err != nil {
 		return err
 	}
@@ -468,26 +495,6 @@ func (a *app) spawn(id, brief string) error {
 		fmt.Fprintf(a.out, "no watcher running: start `%s watch` with the Monitor tool\n", selfPath())
 	}
 	return nil
-}
-
-// A new pane is not an available shell until its prompt is up; Herdr refuses
-// `agent start` at once with agent_pane_busy instead of waiting. Herdr 0.9.3
-// has no readiness signal to poll (pane get reports agent_status "unknown"),
-// so retry on that one error, bounded. Any other error returns unchanged.
-var (
-	agentStartBusyFor = 10 * time.Second
-	agentStartBackoff = 100 * time.Millisecond
-)
-
-func startAgent(args []string) error {
-	deadline := time.Now().Add(agentStartBusyFor)
-	for wait := agentStartBackoff; ; wait = min(wait*2, time.Second) {
-		_, err := herdrCmd(120*time.Second, args...)
-		if err == nil || !strings.Contains(err.Error(), "agent_pane_busy") || time.Now().Add(wait).After(deadline) {
-			return err
-		}
-		time.Sleep(wait)
-	}
 }
 
 func harnessArgs(fm map[string]string, cfg config, session string) []string {
@@ -515,17 +522,25 @@ func harnessArgs(fm map[string]string, cfg config, session string) []string {
 }
 
 // placePane fills `leads` tabs as 2x2 grids (left, right, bottom-left,
-// bottom-right) and opens a new tab once every tab is full.
-func placePane(leads []openLead, repo string, env []string) (paneID, tabID string, err error) {
-	workspace := os.Getenv("HERDR_WORKSPACE_ID")
-	var envFlags []string
-	for _, kv := range env {
-		envFlags = append(envFlags, "--env", kv)
+// bottom-right) and opens a new tab once every tab is full. A backend without
+// the layout capability places nothing: the pane is empty and the caller
+// starts the agent on its own.
+func placePane(leads []openLead, repo string, env map[string]string) (paneID, tabID string, err error) {
+	b, err := useBackend()
+	if err != nil {
+		return "", "", err
 	}
+	lay, native, ok := capabilityAs[Layout](b, CapLayout)
+	if !ok || !native {
+		return "", "", nil
+	}
+	ctx := context.Background()
+	self, _ := b.Self(ctx)
+	workspace := self.Workspace
 	byTab := map[string][]string{}
 	var tabs []string
 	for _, ol := range leads {
-		ok, err := paneExists(ol.lead.PaneID)
+		ok, err := leadLive(ol.lead)
 		if err != nil {
 			return "", "", err
 		}
@@ -539,7 +554,7 @@ func placePane(leads []openLead, repo string, env []string) (paneID, tabID strin
 	}
 	for _, tab := range tabs {
 		panes := byTab[tab]
-		if !strings.HasPrefix(tab, workspace+":") || len(panes) >= panesPerTab {
+		if !lay.Contains(Handle(workspace), Handle(tab)) || len(panes) >= panesPerTab {
 			continue
 		}
 		target, direction := panes[0], "right"
@@ -549,38 +564,21 @@ func placePane(leads []openLead, repo string, env []string) (paneID, tabID strin
 		case 3:
 			target, direction = panes[1], "down"
 		}
-		var res struct {
-			Result struct {
-				Pane struct {
-					PaneID string `json:"pane_id"`
-				} `json:"pane"`
-			} `json:"result"`
-		}
-		split := append([]string{"pane", "split", target, "--direction", direction, "--cwd", repo, "--no-focus"}, envFlags...)
-		if err := herdrJSON(&res, herdrTimeout, split...); err != nil {
+		id, err := lay.Split(ctx, Handle(target), Spec{Direction: direction, Cwd: repo, Env: env})
+		if err != nil {
 			return "", "", err
 		}
-		return res.Result.Pane.PaneID, tab, nil
+		return string(id.Handle), tab, nil
 	}
 	label := "leads"
 	if len(tabs) > 0 {
 		label = fmt.Sprintf("leads-%d", len(tabs)+1)
 	}
-	var res struct {
-		Result struct {
-			Tab struct {
-				TabID string `json:"tab_id"`
-			} `json:"tab"`
-			RootPane struct {
-				PaneID string `json:"pane_id"`
-			} `json:"root_pane"`
-		} `json:"result"`
-	}
-	create := append([]string{"tab", "create", "--workspace", workspace, "--cwd", repo, "--label", label, "--no-focus"}, envFlags...)
-	if err := herdrJSON(&res, herdrTimeout, create...); err != nil {
+	id, err := lay.NewTab(ctx, label, Spec{Cwd: repo, Workspace: Handle(workspace), Env: env})
+	if err != nil {
 		return "", "", err
 	}
-	return res.Result.RootPane.PaneID, res.Result.Tab.TabID, nil
+	return string(id.Handle), string(id.Tab), nil
 }
 
 func cmdSend(a *app, args []string) error {
@@ -656,7 +654,7 @@ func cmdSend(a *app, args []string) error {
 	status := ""
 	if l.ClosedAt == 0 {
 		if agents, err := agentMap(); err == nil {
-			status = agents[l.PaneID].Status
+			status = string(agents[l.PaneID].Status.State)
 		}
 	}
 	switch status {
@@ -681,8 +679,11 @@ func ringDoorbell(l *lead, dir, status string) error {
 		return nil
 	}
 	bell := fmt.Sprintf("orch: new message for you. Run: %s inbox --dir %s", selfPath(), dir)
-	_, err := herdrCmd(herdrTimeout, "agent", "prompt", l.PaneID, bell)
-	return err
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	return b.Prompt(context.Background(), Handle(l.PaneID), bell)
 }
 
 type row struct {
@@ -741,7 +742,7 @@ func leadRows(root string, includeClosed bool) []row {
 		default:
 			r.Herdr, r.Pane = "gone", l.PaneID
 			if ag, ok := agents[l.PaneID]; ok {
-				r.Herdr = ag.Status
+				r.Herdr = string(ag.Status.State)
 				r.Context = contextTokens(ag.Agent, sessionOf(ag, l))
 			}
 		}
@@ -932,7 +933,7 @@ func (a *app) board(s site, rows []row) string {
 	for _, o := range owners {
 		line := fmt.Sprintf("other orchestrators: %s has %d open (%s)", o, len(others[o]), short(strings.Join(others[o], ", "), 80))
 		// No pane means no watcher: those leads report into a log nobody reads.
-		if exists, err := paneExists(o); err == nil && !exists {
+		if exists, err := handleLive(o); err == nil && !exists {
 			line += " - pane gone, nobody watches them; take over with orch adopt <id>"
 		}
 		out = append(out, line)
@@ -1095,7 +1096,7 @@ func cmdWatch(a *app, args []string) error {
 		agents, err := agentMap()
 		if err != nil {
 			if !herdrDown {
-				say(fmt.Sprintf("herdr unreachable, watching status files only (%v)", err), false)
+				say(fmt.Sprintf("%s unreachable, watching status files only (%v)", strings.ToLower(backendLabel()), err), false)
 			}
 			herdrDown = true
 		} else {
@@ -1200,8 +1201,8 @@ func otherWatcherSeen(root, stateFile string, l *lead) *watchSeen {
 }
 
 // watchLead prints one line per actionable event for one lead and returns how
-// many it printed. agents is nil while Herdr is unreachable.
-func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent, cfg config, say func(string, bool), wk *wakeSink) int {
+// many it printed. agents is nil while the backend is unreachable.
+func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]AgentInfo, cfg config, say func(string, bool), wk *wakeSink) int {
 	id, now, emitted := ol.lead.ID, a.now().Unix(), 0
 	emitU := func(msg string, urgent bool) {
 		say(id+" "+msg, urgent)
@@ -1251,7 +1252,7 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 	if !ok {
 		if st.Herdr != "gone" {
 			reason := "pane closed"
-			if exists, err := paneExists(ol.lead.PaneID); err == nil && exists {
+			if exists, err := leadLive(ol.lead); err == nil && exists {
 				reason = "agent exited"
 			}
 			emit(fmt.Sprintf("gone: %s (pane %s); see orch status", reason, ol.lead.PaneID))
@@ -1275,10 +1276,11 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 			}
 		}
 	}
-	if ag.Status == "blocked" && st.Herdr != "blocked" {
+	state := ag.Status.State
+	if state == StateBlocked && st.Herdr != "blocked" {
 		emit("ui-blocked: waiting at a prompt in its pane; run orch peek " + id + ". If it shows a usage or credit limit, run: orch health set " + ol.lead.Harness + " limited --for <duration>")
 	}
-	if ag.Status == "idle" || ag.Status == "done" {
+	if state == StateIdle || state == StateDone {
 		if st.IdleSince == 0 {
 			st.IdleSince = now
 		}
@@ -1294,18 +1296,18 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]herdrAgent
 	}
 	if pending := pendingMessages(ol.dir); len(pending) == 0 {
 		st.RungFor = ""
-	} else if (ag.Status == "idle" || ag.Status == "done") && cfg.UnreadMinutes > 0 && st.RungFor != filepath.Base(pending[0]) {
+	} else if (state == StateIdle || state == StateDone) && cfg.UnreadMinutes > 0 && st.RungFor != filepath.Base(pending[0]) {
 		if info, err := os.Stat(pending[0]); err == nil && a.now().Sub(info.ModTime()) >= time.Duration(cfg.UnreadMinutes)*time.Minute {
-			if err := ringDoorbell(ol.lead, ol.dir, ag.Status); err == nil {
+			if err := ringDoorbell(ol.lead, ol.dir, string(state)); err == nil {
 				st.RungFor = filepath.Base(pending[0])
 				emit(fmt.Sprintf("reminder: %d unread message(s) for %dm; rang the doorbell again", len(pending), int(a.now().Sub(info.ModTime())/time.Minute)))
 			}
 		}
 	}
-	if ag.Status == "working" {
+	if state == StateWorking {
 		a.stallCheck(ol, st, ag, cfg, now, emit, wk)
 	}
-	st.Herdr = ag.Status
+	st.Herdr = string(state)
 	return emitted
 }
 
@@ -1352,12 +1354,15 @@ func cmdPeek(a *app, args []string) error {
 
 // readScreen returns the last n lines of a lead's pane.
 func readScreen(paneID string, n int) ([]string, error) {
-	// Herdr returns nothing for small --lines values, so always ask for 200+.
-	out, err := herdrCmd(herdrTimeout, "agent", "read", paneID, "--source", "recent-unwrapped", "--lines", strconv.Itoa(max(n, 200)))
+	b, err := useBackend()
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	out, err := b.Read(context.Background(), Handle(paneID), n)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	return lines[max(0, len(lines)-n):], nil
 }
 
@@ -1369,7 +1374,11 @@ func cmdFocus(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := herdrCmd(herdrTimeout, "agent", "focus", l.PaneID); err != nil {
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	if err := b.Focus(context.Background(), Handle(l.PaneID)); err != nil {
 		return err
 	}
 	_ = a.appendStatus(dir, "note", "focused "+l.Name, "", "orch")
@@ -1428,13 +1437,17 @@ func (a *app) closeLead(dir string, l *lead, note string) error {
 	if err := a.closeSubs(dir, l); err != nil {
 		return err
 	}
-	exists, err := paneExists(l.PaneID)
+	exists, err := leadLive(l)
 	if err != nil {
 		return err
 	}
 	if exists {
-		_, _ = herdrCmd(herdrTimeout, "pane", "close", l.PaneID)
-		if still, err := paneExists(l.PaneID); err != nil || still {
+		b, err := useBackend()
+		if err != nil {
+			return err
+		}
+		_ = b.Close(context.Background(), Handle(l.PaneID))
+		if still, err := leadLive(l); err != nil || still {
 			return fail("pane %s is still open after close", l.PaneID)
 		}
 	}
@@ -1468,7 +1481,7 @@ func cmdCompact(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	if st := agents[l.PaneID].Status; st != "idle" && st != "done" {
+	if st := agents[l.PaneID].Status.State; st != StateIdle && st != StateDone {
 		return fail("%s is %s; compact only between turns (wait for idle, or orch peek %s)", l.ID, st, l.ID)
 	}
 	focus := strings.Join(args[1:], " ")
@@ -1476,12 +1489,16 @@ func cmdCompact(a *app, args []string) error {
 		focus = compactFocus
 	}
 	before := contextTokens(agents[l.PaneID].Agent, sessionOf(agents[l.PaneID], l))
-	if _, err := herdrCmd(16*time.Minute, "agent", "prompt", l.PaneID, "/compact "+focus, "--wait", "--timeout", "900000"); err != nil {
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	if err := promptWait(context.Background(), b, Handle(l.PaneID), "/compact "+focus, 15*time.Minute); err != nil {
 		return err
 	}
 	resume := fmt.Sprintf("orch: your context was compacted. Re-read %s and %s if it exists, then go on with the work in your last inbox message.",
 		filepath.Join(dir, "task.md"), filepath.Join(dir, "handoff.md"))
-	if _, err := herdrCmd(herdrTimeout, "agent", "prompt", l.PaneID, resume); err != nil {
+	if err := b.Prompt(context.Background(), Handle(l.PaneID), resume); err != nil {
 		return err
 	}
 	if err := a.resolveContext(dir, "compacted"); err != nil {
@@ -1495,6 +1512,19 @@ func cmdCompact(a *app, args []string) error {
 	}
 	fmt.Fprintln(a.out, line)
 	return nil
+}
+
+// promptWait sends text and blocks until the agent settles: natively when the
+// backend can, otherwise by prompting and then waiting for a settled state.
+func promptWait(ctx context.Context, b *Active, h Handle, text string, timeout time.Duration) error {
+	if pw, ok := b.Backend.(PromptWaiter); ok {
+		return pw.PromptWait(ctx, h, text, timeout)
+	}
+	if err := b.Prompt(ctx, h, text); err != nil {
+		return err
+	}
+	_, err := b.Wait(ctx, h, []State{StateIdle, StateDone, StateBlocked}, timeout)
+	return err
 }
 
 // cmdRespawn replaces a lead whose context is spent with a fresh session on
@@ -1643,9 +1673,12 @@ func cmdAdopt(a *app, args []string) error {
 	if err := exactArgs(args, 1, "adopt <id>"); err != nil {
 		return err
 	}
+	if _, err := useBackend(); err != nil {
+		return err
+	}
 	me := orchID()
 	if me == "" {
-		return fail("adopt needs a Herdr pane (HERDR_PANE_ID is unset)")
+		return fail("adopt needs a pane of the active backend (no pane identity found)")
 	}
 	dir, l, err := a.requireLead(args[0])
 	if err != nil {
@@ -1698,9 +1731,13 @@ func cmdBecome(a *app, args []string) error {
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
-	pane := os.Getenv("HERDR_PANE_ID")
+	b, err := useBackend()
+	if err != nil {
+		return err
+	}
+	pane := orchID()
 	if pane == "" {
-		return fail("become needs a Herdr pane (HERDR_PANE_ID is unset)")
+		return fail("become needs a pane of the active backend (no pane identity found)")
 	}
 	marker := filepath.Join(rolesDir(), pane)
 	if *off {
@@ -1710,20 +1747,18 @@ func cmdBecome(a *app, args []string) error {
 		fmt.Fprintln(a.out, "orchestrator role off for this pane")
 		return nil
 	}
-	var res struct {
-		Result struct {
-			Pane herdrAgent `json:"pane"`
-		} `json:"result"`
+	session := ""
+	if ss, ok := b.Backend.(SelfSessioner); ok {
+		var err error
+		if session, err = ss.SelfSession(context.Background()); err != nil {
+			return err
+		}
 	}
-	if err := herdrJSON(&res, herdrTimeout, "pane", "current", "--current"); err != nil {
-		return err
-	}
-	session := res.Result.Pane.Session.Value
 	if err := os.MkdirAll(rolesDir(), 0o755); err != nil {
 		return err
 	}
-	b, _ := json.Marshal(map[string]any{"session": session, "at": a.now().Unix()})
-	if err := os.WriteFile(marker, b, 0o644); err != nil {
+	rec, _ := json.Marshal(map[string]any{"session": session, "at": a.now().Unix()})
+	if err := os.WriteFile(marker, rec, 0o644); err != nil {
 		return err
 	}
 	if session == "" {

@@ -76,7 +76,7 @@ func orchestratorActive(p hookPayload) bool {
 	case "lead":
 		return false
 	}
-	pane := os.Getenv("HERDR_PANE_ID")
+	pane := orchID()
 	if pane == "" {
 		return false
 	}

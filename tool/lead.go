@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -152,13 +154,90 @@ func cmdInbox(a *app, args []string) error {
 	return nil
 }
 
-// sessionOf is the harness session of a lead's agent: the one Herdr reports,
-// else the one orch chose at spawn.
-func sessionOf(ag herdrAgent, l *lead) string {
-	if ag.Session.Value != "" || l == nil {
-		return ag.Session.Value
+// sessionOf is the harness session of a lead's agent: the one the backend
+// reports, else the one orch chose at spawn.
+func sessionOf(ag AgentInfo, l *lead) string {
+	if ag.Session != "" || l == nil {
+		return ag.Session
 	}
 	return l.Session
+}
+
+// legacyBackendName is the backend a lead record without a Backend field
+// belongs to. The backend that predates the field sets it in its init.
+var legacyBackendName string
+
+// useBackend selects the backend for this process: ORCH_BACKEND, else
+// detection, else the early failure that names the registered backends.
+func useBackend() (*Active, error) {
+	cfg, _ := loadBackendConfig() // a bad value is reported where the config is loaded
+	return selectBackend(os.Environ(), cfg)
+}
+
+// backendLabel names the backend in user-facing text: the active one, else the
+// registered ones.
+func backendLabel() string {
+	title := func(n string) string { return strings.ToUpper(n[:1]) + n[1:] }
+	if b, err := useBackend(); err == nil {
+		return title(b.Name())
+	}
+	var names []string
+	for _, n := range registeredBackendNames() {
+		names = append(names, title(n))
+	}
+	return strings.Join(names, "/")
+}
+
+// worktreesManaged says the backend makes and removes each ship lead's
+// worktree itself, instead of leaving that to the lead.
+func worktreesManaged() bool {
+	b, err := useBackend()
+	return err == nil && b.Has(CapWorktreeManage)
+}
+
+// agentMap is every agent the backend knows, by handle.
+func agentMap() (map[string]AgentInfo, error) {
+	b, err := useBackend()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := b.List(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]AgentInfo, len(rows))
+	for _, ag := range rows {
+		m[string(ag.Handle)] = ag
+	}
+	return m, nil
+}
+
+// handleLive tells a closed pane apart from the backend being unreachable.
+func handleLive(h string) (bool, error) {
+	b, err := useBackend()
+	if err != nil {
+		return false, err
+	}
+	if _, err := b.Resolve(context.Background(), Handle(h)); err != nil {
+		if errors.Is(err, ErrGone) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// leadLive is handleLive for a lead's own pane. A record another backend wrote
+// is an error naming that backend, never a guess.
+func leadLive(l *lead) (bool, error) {
+	b, err := useBackend()
+	if err != nil {
+		return false, err
+	}
+	if l.Backend != "" && l.Backend != b.Name() {
+		return false, fail("lead %s belongs to backend %s, but the active backend is %s", l.ID, l.Backend, b.Name())
+	}
+	return handleLive(l.PaneID)
 }
 
 // newSessionID returns a random UUID for harnesses that take a session id.
