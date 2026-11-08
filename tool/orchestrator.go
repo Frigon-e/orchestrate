@@ -187,7 +187,7 @@ func reportBack(dir, id, kind, repo, base, sha string, cfg config, skill string)
 	if kind != "scout" && worktreesManaged() {
 		deliverable = fmt.Sprintf("commits on branch `%s`, in your own worktree `%s`: orch already made it from %s and you start inside it, so do not run `git worktree add` and never work in the main checkout. "+
 			"Name the branch and head sha in your done line; never merge into `%s` or push unless a message tells you to",
-			shipBranch(id), worktreePath(dir, id), sha, base)
+			shipBranch(id), leadWorktree(dir, id), sha, base)
 	}
 	if kind == "scout" {
 		deliverable = fmt.Sprintf("a self-contained report at `%s` (findings with file:line evidence, then a recommendation); no branch, no edits to the repo", filepath.Join(dir, "report.md"))
@@ -308,7 +308,7 @@ func (a *app) preflight(id string, ov *spawnOverride) (s site, dir string, fm ma
 	if err != nil {
 		return s, "", nil, nil, err
 	}
-	if self, err := b.Self(context.Background()); err != nil || self.Workspace == "" {
+	if self, err := b.Self(context.Background()); err != nil || (self.Workspace == "" && b.Has(CapLayout)) { // only a layout needs the caller's workspace
 		return s, "", nil, nil, fail("spawn must run inside a %s pane", backendLabel())
 	}
 	s, err = a.site()
@@ -404,7 +404,7 @@ func (a *app) spawn(id, brief string) error {
 	// The slot check, the pane and the lead record go under one guard, so two
 	// spawns cannot both see a free slot or both take the same task. The slow
 	// agent start and prompt below run outside it.
-	var paneID string
+	var paneID, wt string
 	var l *lead
 	managedShip := fm["kind"] != "scout" && worktreesManaged()
 	base := ""
@@ -429,7 +429,7 @@ func (a *app) spawn(id, brief string) error {
 		var pane, tabID, workspaceID string
 		if managedShip {
 			prev, _ := loadLead(dir)
-			pane, tabID, workspaceID, err = a.placeShip(s, dir, id, base, prev, env)
+			pane, tabID, workspaceID, wt, err = a.placeShip(s, dir, id, base, prev, env)
 		} else {
 			pane, tabID, err = placePane(myLeads(leads, me), s.repo, env)
 		}
@@ -443,7 +443,7 @@ func (a *app) spawn(id, brief string) error {
 		spec.Args = harnessArgs(fm, s.cfg, session)
 		spec.Place = Handle(pane)
 		if managedShip {
-			spec.Cwd = worktreePath(dir, id)
+			spec.Cwd = wt
 		}
 		if pane == "" { // no layout: one separate start, inside the guard so the slot stays taken
 			ident, err := b.Start(ctx, spec)
@@ -455,6 +455,9 @@ func (a *app) spawn(id, brief string) error {
 		paneID = pane
 		_ = b.Rename(ctx, Handle(paneID), name)
 		l = &lead{ID: id, Name: name, Harness: fm["harness"], Model: fm["model"], PaneID: paneID, TabID: tabID, SpawnedAt: a.now().Unix(), Owner: me, Epoch: epoch, WorkspaceID: workspaceID, Session: session, Backend: b.Name()}
+		if managedShip && wt != worktreePath(dir, id) { // the backend chose the location
+			l.WorktreePath = wt
+		}
 		return saveLead(dir, l)
 	})
 	if err != nil {
@@ -471,7 +474,7 @@ func (a *app) spawn(id, brief string) error {
 	}
 	launch := fmt.Sprintf("You are orchestrate lead %q. Read %s and follow it exactly, starting with its Report-back section.", id, filepath.Join(dir, "task.md"))
 	if managedShip { // a brief written outside Herdr still tells the lead to make the worktree
-		launch += fmt.Sprintf(" Your worktree already exists at %s on a branch orch made: start inside it and do not run `git worktree add`.", worktreePath(dir, id))
+		launch += fmt.Sprintf(" Your worktree already exists at %s on a branch orch made: start inside it and do not run `git worktree add`.", wt)
 	}
 	if brief != "" {
 		launch += " " + brief

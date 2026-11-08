@@ -172,11 +172,15 @@ func writeOrcaIdentity(rec orcaIdentityRecord) error {
 
 // orca JSON shapes
 
+// orcaTerminal is one `terminal list` row. Every field is optional: Orca's real
+// rows carry handle, title, worktreeId, worktreePath and tabId, and no paneKey
+// or status. A missing field is the empty string, never an error.
 type orcaTerminal struct {
-	Handle  string `json:"handle"`
-	PaneKey string `json:"paneKey"`
-	Title   string `json:"title"`
-	Status  string `json:"status"`
+	Handle       string `json:"handle"`
+	PaneKey      string `json:"paneKey"`
+	Title        string `json:"title"`
+	Status       string `json:"status"`
+	WorktreePath string `json:"worktreePath"`
 }
 
 // orcaAgentRow is one entry of a worktree's `agents` array in `worktree ps`.
@@ -565,6 +569,24 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 	if row, ok := findOrcaAgent(rows, live, rec.PaneKey); ok {
 		return orcaStatus(row), nil
 	}
+	// A ps row that names neither the terminal handle nor a pane key: the lone
+	// agent of the terminal's own worktree is its row.
+	if terms, err := b.terminals(ctx); err == nil {
+		for _, t := range terms {
+			if Handle(t.Handle) != live || t.WorktreePath == "" {
+				continue
+			}
+			var only []orcaAgentRow
+			for _, w := range rows {
+				if w.Path == t.WorktreePath {
+					only = append(only, w.Agents...)
+				}
+			}
+			if len(only) == 1 && only[0].Handle == "" && only[0].PaneKey == "" {
+				return orcaStatus(only[0]), nil
+			}
+		}
+	}
 	return AgentStatus{State: StateUnknown}, nil
 }
 
@@ -626,6 +648,9 @@ func (b *orcaBackend) List(ctx context.Context) ([]AgentInfo, error) {
 	for _, w := range rows {
 		for _, a := range w.Agents {
 			h := cmp3(a.Handle, a.PaneKey)
+			if h == "" { // nothing to address it by
+				continue
+			}
 			out = append(out, AgentInfo{
 				Handle: Handle(h), Name: a.Title, Agent: a.AgentType, Cwd: w.Path,
 				Status: orcaStatus(a), Session: a.SessionID,

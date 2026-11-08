@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -182,8 +183,9 @@ func pruneScan(s site, stale staleRule) ([]pruneItem, error) {
 	root, main := pruneRoot(s), resolvedPath(s.repo)
 	owned := map[string]bool{}
 	for _, ol := range openLeads(s.root) {
-		owned[resolvedPath(worktreePath(ol.dir, filepath.Base(ol.dir)))] = true
+		owned[resolvedPath(leadWorktree(ol.dir, filepath.Base(ol.dir)))] = true
 	}
+	recorded := recordedWorktrees(s.root)
 	var checkouts map[string]string
 	var checkoutsErr error
 	checkoutsRead := false
@@ -200,7 +202,7 @@ func pruneScan(s site, stale staleRule) ([]pruneItem, error) {
 			}
 		}
 		switch {
-		case !strings.HasPrefix(p, root+string(filepath.Separator)):
+		case !strings.HasPrefix(p, root+string(filepath.Separator)) && !recorded[p]:
 			it.keep = "outside the orch worktree root"
 		case w.locked:
 			it.keep = "locked"
@@ -226,7 +228,7 @@ func pruneScan(s site, stale staleRule) ([]pruneItem, error) {
 				}
 				if checkoutsErr != nil {
 					it.keep = backendLabel() + " state unknown"
-				} else if id, ok := checkouts[p]; ok {
+				} else if id, ok := checkouts[p]; ok && !recorded[p] { // a backend that lists every worktree it holds is no sign of use; the open-lead check above covers a running lead
 					it.keep = "open in " + backendLabel() + " workspace " + id
 				}
 			}
@@ -234,6 +236,46 @@ func pruneScan(s site, stale staleRule) ([]pruneItem, error) {
 		items = append(items, it)
 	}
 	return items, nil
+}
+
+// recordedWorktrees is every worktree path a lead record kept because the
+// backend chose the location, open or closed. Such a worktree is orch's although
+// it sits outside the orch worktree root.
+func recordedWorktrees(root string) map[string]bool {
+	out := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(root, "*", "lead.json"))
+	for _, f := range files {
+		if l, err := loadLead(filepath.Dir(f)); err == nil && l != nil && l.WorktreePath != "" {
+			out[resolvedPath(l.WorktreePath)] = true
+		}
+	}
+	return out
+}
+
+// removePruned removes one worktree orch's own checks passed, and returns why it
+// stayed when it did. A backend with a native archive hook, or a repo with an
+// archive script, goes through removeWorktreeWithArchive (hook, then backend
+// removal); otherwise it is a plain git worktree remove.
+func removePruned(s site, it pruneItem) string {
+	b, err := useBackend()
+	script, _ := repoHookScript(s.repo, "archive")
+	if err != nil || !b.Has(CapWorktreeManage) || (!b.Has(CapArchiveHook) && strings.TrimSpace(script) == "") {
+		if out, err := gitCombined(s.repo, "worktree", "remove", it.path); err != nil {
+			return "git refused: " + lastGitLine(out)
+		}
+		return ""
+	}
+	env := HookEnv{RootPath: s.repo, WorkspaceName: filepath.Base(it.path), WorktreePath: it.path}
+	err = removeWorktreeWithArchive(context.Background(), b, WorktreeSpec{Repo: s.repo, Path: it.path}, env, nil, &scriptHooks{Branch: it.branch})
+	switch hf, isHook := errors.AsType[*HookFailedError](err); {
+	case err == nil:
+		return ""
+	case isHook:
+		return archiveHookWhy(hf)
+	case errors.Is(err, ErrWorktreeDirty):
+		return "uncommitted changes"
+	}
+	return backendLabel() + " refused: " + err.Error()
 }
 
 // gitCombined runs git and returns its combined output, for refusal messages.
@@ -293,8 +335,8 @@ func cmdPrune(a *app, args []string) error {
 			kept = append(kept, fmt.Sprintf("kept %s: uncommitted changes", line))
 			continue
 		}
-		if out, err := gitCombined(s.repo, "worktree", "remove", it.path); err != nil {
-			kept = append(kept, fmt.Sprintf("kept %s: git refused: %s", line, lastGitLine(out)))
+		if why := removePruned(s, it); why != "" {
+			kept = append(kept, fmt.Sprintf("kept %s: %s", line, why))
 			continue
 		}
 		if it.stale {

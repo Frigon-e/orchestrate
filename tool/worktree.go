@@ -40,60 +40,91 @@ func resolvedPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// placeShip puts a ship lead in its own backend workspace on a worktree: made
-// fresh, or for a respawn reopened as it was left. The agent's pane is split
-// off the workspace's root pane so it gets the lead env, and the root pane is
-// closed once nothing else lives in it.
-func (a *app) placeShip(s site, dir, id, base string, prev *lead, env map[string]string) (pane, tab, workspace string, err error) {
+// leadWorktree is the ship lead's worktree: the path the backend reported and
+// the lead record kept, else the path orch computes.
+func leadWorktree(dir, id string) string {
+	if l, err := loadLead(dir); err == nil && l != nil && l.WorktreePath != "" {
+		return l.WorktreePath
+	}
+	return worktreePath(dir, id)
+}
+
+// placeShip puts a ship lead on a worktree: made fresh, or for a respawn
+// reopened as it was left. With a layout the agent's pane is split off the
+// workspace's root pane so it gets the lead env, and the root pane is closed once
+// nothing else lives in it. Without one the pane comes back empty and the caller
+// starts the agent in the returned worktree path, which is the backend's own
+// when it chose the location.
+func (a *app) placeShip(s site, dir, id, base string, prev *lead, env map[string]string) (pane, tab, workspace, wt string, err error) {
 	b, err := useBackend()
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	mgr, _, ok := capabilityAs[WorktreeManager](b, CapWorktreeManage)
 	if !ok || !b.Has(CapWorktreeManage) {
-		return "", "", "", fail("backend %s does not manage worktrees", b.Name())
+		return "", "", "", "", fail("backend %s does not manage worktrees", b.Name())
 	}
-	lay, ok := b.Backend.(Layout)
-	if !ok || !b.Has(CapLayout) {
-		return "", "", "", fail("backend %s cannot place a pane in a worktree workspace", b.Name())
+	var lay Layout
+	if l, ok := b.Backend.(Layout); ok && b.Has(CapLayout) {
+		lay = l
 	}
 	ctx := context.Background()
-	wt, branch := worktreePath(dir, id), shipBranch(id)
+	wt, branch := leadWorktree(dir, id), shipBranch(id)
 	fresh := prev == nil || worktreeBranch(s.repo, wt) == ""
 	spec := WorktreeSpec{Name: id, Branch: branch, Base: base, Repo: s.repo, Path: wt}
 	var made Worktree
 	if fresh {
-		if _, err := os.Lstat(wt); err == nil {
-			return "", "", "", fail("worktree path %s already exists; remove or move it before spawning %s", wt, id)
+		spec.Path = worktreePath(dir, id)
+		if _, err := os.Lstat(spec.Path); err == nil {
+			return "", "", "", "", fail("worktree path %s already exists; remove or move it before spawning %s", spec.Path, id)
 		}
 		if _, err := git(s.repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
-			return "", "", "", fail("branch %s already exists in %s; delete it (git branch -d %s) or pick another task id", branch, s.repo, branch)
+			return "", "", "", "", fail("branch %s already exists in %s; delete it (git branch -d %s) or pick another task id", branch, s.repo, branch)
 		}
-		made, err = mgr.CreateWorktree(ctx, spec)
+		var res HookResult
+		made, res, err = createWorktreeWithSetup(ctx, b, spec, HookEnv{RootPath: s.repo, WorkspaceName: id}, &scriptHooks{Branch: branch, TaskID: id})
+		if err != nil {
+			if made.Path != "" { // made, but its setup could not run
+				_ = mgr.RemoveWorktree(ctx, WorktreeSpec{Repo: s.repo, Path: made.Path})
+				_, _ = git(s.repo, "branch", "-d", branch)
+			}
+			return "", "", "", "", err
+		}
+		if res.Status == HookDone && res.ExitCode != 0 { // it ran and failed: reported, never rerun
+			line := fmt.Sprintf("setup hook exited %d in %s", res.ExitCode, made.Path)
+			_ = a.appendStatus(dir, "note", line, "", "orch")
+			fmt.Fprintf(a.out, "warning: %s\n", line)
+		}
 	} else {
 		made, err = mgr.OpenWorktree(ctx, spec)
+		if err != nil {
+			return "", "", "", "", err
+		}
 	}
-	if err != nil {
-		return "", "", "", err
+	if made.Path != "" {
+		wt = made.Path
 	}
 	undo := func() {
 		if fresh {
-			_ = mgr.RemoveWorktree(ctx, spec)
+			_ = mgr.RemoveWorktree(ctx, WorktreeSpec{Repo: s.repo, Path: wt})
 			_, _ = git(s.repo, "branch", "-d", branch)
 		}
 	}
 	if fresh {
 		a.linkEnv(s.repo, wt, dir)
 	}
+	if lay == nil {
+		return "", "", string(made.Workspace), wt, nil
+	}
 	split, err := lay.Split(ctx, made.Root, Spec{Direction: "right", Cwd: wt, Env: env})
 	if err != nil {
 		undo()
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if made.Panes <= 1 { // a reopened workspace may hold the user's own panes
 		_ = b.Close(ctx, made.Root)
 	}
-	return string(split.Handle), string(made.Tab), string(made.Workspace), nil
+	return string(split.Handle), string(made.Tab), string(made.Workspace), wt, nil
 }
 
 // linkEnv symlinks the checkout's .env into a new worktree, so the lead runs
@@ -125,7 +156,7 @@ func (a *app) linkEnv(repo, wt, dir string) {
 // worktree and branch only when nothing would be lost, and says why it kept
 // them otherwise. It never forces.
 func (a *app) removeShipWorktree(s site, dir string, l *lead, fm map[string]string) error {
-	wt := worktreePath(dir, l.ID)
+	wt := leadWorktree(dir, l.ID)
 	branch := worktreeBranch(s.repo, wt)
 	if branch == "" {
 		fmt.Fprintf(a.out, "worktree %s is already gone or on no branch; nothing removed\n", wt)
@@ -151,13 +182,13 @@ func (a *app) removeShipWorktree(s site, dir string, l *lead, fm map[string]stri
 	if err != nil {
 		return err
 	}
-	mgr, _, ok := capabilityAs[WorktreeManager](b, CapWorktreeManage)
-	if !ok || !b.Has(CapWorktreeManage) {
-		return fail("backend %s does not manage worktrees", b.Name())
-	}
-	if err := mgr.RemoveWorktree(context.Background(), WorktreeSpec{Repo: s.repo, Path: wt}); err != nil {
+	// orch's merged and clean checks ran above; the archive hook and the removal follow.
+	if err := removeWorktreeWithArchive(context.Background(), b, WorktreeSpec{Repo: s.repo, Path: wt}, HookEnv{RootPath: s.repo, WorkspaceName: l.ID, WorktreePath: wt}, nil, &scriptHooks{Branch: branch, TaskID: l.ID}); err != nil {
 		if errors.Is(err, ErrWorktreeDirty) {
 			return keep(backendLabel()+" reports it dirty", "Remove it yourself with: "+manual)
+		}
+		if hf, ok := errors.AsType[*HookFailedError](err); ok {
+			return keep(archiveHookWhy(hf), "Fix the hook or remove it yourself with: "+manual)
 		}
 		return err
 	}
@@ -169,4 +200,9 @@ func (a *app) removeShipWorktree(s site, dir string, l *lead, fm map[string]stri
 	}
 	fmt.Fprintln(a.out, line)
 	return nil
+}
+
+// archiveHookWhy words a failed archive hook for the "kept" line.
+func archiveHookWhy(hf *HookFailedError) string {
+	return fmt.Sprintf("worktree_archive_hook_failed: the archive hook exited %d", hf.ExitCode)
 }

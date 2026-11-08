@@ -177,6 +177,9 @@ type lead struct {
 	// Backend names the multiplexer backend that holds the lead's pane. A
 	// record written before this field existed is read as legacyBackendName.
 	Backend string `json:"backend,omitempty"`
+	// WorktreePath is the worktree path the backend reported when it chose a
+	// location of its own. Empty when it is where orch would put it (worktreePath).
+	WorktreePath string `json:"worktree_path,omitempty"`
 }
 
 // orchID names the orchestrator running this command by its backend identity,

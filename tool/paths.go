@@ -35,6 +35,16 @@ type repoConfig struct {
 	// HumanOnly lists question areas that only a person decides, whatever the
 	// agents answered (money, tax, legal). `orch sweep` routes them to the user.
 	HumanOnly []string `toml:"human_only"`
+	// Hooks are the repo's worktree scripts, the source of orch's own runner
+	// (a native hook run never reads them).
+	Hooks hooksConfig `toml:"hooks"`
+}
+
+// hooksConfig is the [hooks] table: the script run when a worktree is made and
+// the one run before it is removed.
+type hooksConfig struct {
+	Setup   string `toml:"setup"`
+	Archive string `toml:"archive"`
 }
 
 const maxNotes, maxNoteLen = 5, 160
@@ -325,6 +335,9 @@ func decodeStrict(path string, v any, otherKeys []string, otherFile string) erro
 		if removedKey(k) {
 			continue
 		}
+		if len(key) > 1 && key[0] == "backend" { // the table is a map; parseBackendConfig checks its shape
+			continue
+		}
 		if slices.ContainsFunc(otherKeys, func(o string) bool { return strings.EqualFold(o, k) }) {
 			return fail("%s: %q is not allowed here; it belongs in %s", path, k, otherFile)
 		}
@@ -333,7 +346,7 @@ func decodeStrict(path string, v any, otherKeys []string, otherFile string) erro
 	return nil
 }
 
-var repoKeys = []string{"base_branch", "lead_skills", "check", "quiet_minutes", "stall_minutes", "notes", "locks", "human_only"}
+var repoKeys = []string{"base_branch", "lead_skills", "check", "quiet_minutes", "stall_minutes", "notes", "locks", "human_only", "hooks"}
 
 // readRepoConfig decodes a repo file over the defaults already in rc.
 func readRepoConfig(path string, rc *repoConfig) error {

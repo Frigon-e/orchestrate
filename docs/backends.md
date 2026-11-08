@@ -79,6 +79,23 @@ other variable. Only orch's own runner also sets `ORCH_BRANCH` and `ORCH_TASK_ID
 - Remove through `removeWorktreeWithArchive`: orch's merged and clean checks run
   first, then the archive hook, then the removal. The backend never forces,
   never deletes the branch, never allows a failed archive hook.
+- Wiring: `orch spawn` creates the worktree through `createWorktreeWithSetup`
+  (a native `Started` never blocks; a runner script that exits non-zero is noted
+  in the status log and the spawn goes on). `orch close` and `orch prune` remove
+  through `removeWorktreeWithArchive`; a failing archive hook keeps the worktree
+  and prints `worktree_archive_hook_failed`. `orch prune` keeps a plain
+  `git worktree remove` only when the backend has no native archive hook and the
+  repo has no archive script.
+- The repo config takes `[hooks]` with `setup` and `archive` strings; any other
+  key under it is rejected.
+- A backend without `layout` is placed with one `Start` in the new worktree.
+  When the backend chose the worktree location, `lead.json` keeps it as
+  `worktree_path` (absent when it is where orch would put it). Callers that
+  still compute `worktreePath(dir, id)` are `verify`, `guard`, `stall`, `sub`,
+  `integration` and `wake_decision`; they are wrong for such a lead.
+- Orca rows: every field is optional. Real `terminal list` rows have `handle`,
+  `title`, `worktreeId`, `worktreePath`, `tabId`; a ps agent row that names no
+  handle or pane key is matched as the lone agent of its terminal's worktree.
 
 ## Env and identity
 
