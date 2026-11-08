@@ -151,7 +151,9 @@ func TestPruneKeepsEverythingWhenHerdrStateIsUnknown(t *testing.T) {
 			pruneFixture(h)
 			prep(h, t)
 			out := h.must("prune", "--apply")
-			if lineWith(out, "kept "+h.wt("a"), "Herdr state unknown") == "" {
+			// With no backend active the label names every registered backend
+			// ("Herdr/Orca"), so match the backend-neutral part.
+			if lineWith(out, "kept "+h.wt("a"), " state unknown") == "" {
 				t.Fatalf("orch/a not kept for unknown Herdr state:\n%s", out)
 			}
 			wantContains(t, out, "prune: 0 removed, 7 kept")
