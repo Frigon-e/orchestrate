@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,6 +36,10 @@ type WorktreeSpec struct {
 	// backend that picks its own location ignores it and reports the real one.
 	Repo string
 	Path string
+	// NativeSetup asks CreateWorktree to have the backend run the repo's setup
+	// script (worktree.setup-hook). Callers set it only when Has(setup-hook);
+	// without it the backend must not run the script, so orch's runner can.
+	NativeSetup bool
 }
 
 // Worktree is a created or opened worktree. Path is read from the backend's
@@ -93,6 +98,20 @@ type HookResult struct {
 // caller falls back to orch's runner. A hook that ran and failed is a
 // HookDone result with a non-zero ExitCode, or its own error, and is not rerun.
 var ErrHookRefused = errors.New("backend refused the hook before running it")
+
+// HookFailedError means a native hook ran and failed. It is not a refusal: the
+// caller reports it and does not rerun the hook or fall back.
+type HookFailedError struct {
+	Hook     string
+	ExitCode int
+	Err      error
+}
+
+func (e *HookFailedError) Error() string {
+	return fmt.Sprintf("%s hook failed with exit code %d: %v", e.Hook, e.ExitCode, e.Err)
+}
+
+func (e *HookFailedError) Unwrap() error { return e.Err }
 
 // SetupHook is the `worktree.setup-hook` capability.
 type SetupHook interface {
