@@ -201,11 +201,15 @@ type orcaAgentRow struct {
 }
 
 type orcaWorktreeRow struct {
-	ID     string         `json:"id"`
-	Path   string         `json:"path"`
-	Branch string         `json:"branch"`
-	Agents []orcaAgentRow `json:"agents"`
+	ID string `json:"id"`
+	// WorktreeID is the key `worktree ps` really uses; `worktree create` says id.
+	WorktreeID string         `json:"worktreeId"`
+	Path       string         `json:"path"`
+	Branch     string         `json:"branch"`
+	Agents     []orcaAgentRow `json:"agents"`
 }
+
+func (r orcaWorktreeRow) handle() string { return cmp3(r.ID, r.WorktreeID) }
 
 var orcaStates = map[string]State{
 	"idle": StateIdle, "working": StateWorking, "blocked": StateBlocked, "done": StateDone,
@@ -523,6 +527,16 @@ func (b *orcaBackend) Read(ctx context.Context, h Handle, lines int) (string, er
 func (b *orcaBackend) Close(ctx context.Context, h Handle) error {
 	return b.onHandle(ctx, h, func(live Handle) error {
 		_, err := orcaRun(ctx, orcaTimeout, "terminal", "close", "--terminal", string(live))
+		// A close right after a launch can answer tab_not_found while the
+		// terminal is still alive (seen against Orca 1.4.253); retry once.
+		if oe := asOrcaError(err); oe != nil && strings.Contains(oe.Message, "tab_not_found") {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			_, err = orcaRun(ctx, orcaTimeout, "terminal", "close", "--terminal", string(live))
+		}
 		return err
 	})
 }
@@ -667,7 +681,7 @@ type orcaWorktreeReply struct {
 }
 
 func (r orcaWorktreeReply) worktree(branch string) Worktree {
-	return Worktree{Path: r.Worktree.Path, Branch: cmp3(r.Worktree.Branch, branch), Workspace: Handle(r.Worktree.ID)}
+	return Worktree{Path: r.Worktree.Path, Branch: cmp3(r.Worktree.Branch, branch), Workspace: Handle(r.Worktree.handle())}
 }
 
 // CreateWorktree makes a parentless worktree. Orca picks the location; the path
@@ -717,7 +731,7 @@ func (b *orcaBackend) OpenWorktrees(ctx context.Context) (map[string]string, err
 	m := map[string]string{}
 	for _, r := range rows {
 		if r.Path != "" {
-			m[r.Path] = r.ID
+			m[r.Path] = r.handle()
 		}
 	}
 	return m, nil

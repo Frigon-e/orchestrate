@@ -880,3 +880,14 @@ func TestOrcaLeadRecordIsRefusedByHerdr(t *testing.T) {
 		t.Errorf("leadLive under orca = %v, %v; want live", live, err)
 	}
 }
+
+// Real `orca worktree ps` rows key the worktree as worktreeId, not id.
+func TestOrcaWorktreeRowHandleReadsWorktreeID(t *testing.T) {
+	var r orcaWorktreeRow
+	if err := json.Unmarshal([]byte(`{"worktreeId":"r::/p","path":"/p"}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.handle(); got != "r::/p" {
+		t.Fatalf("handle = %q, want r::/p", got)
+	}
+}
