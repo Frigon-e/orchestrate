@@ -333,3 +333,15 @@ func TestWiringOrcaAgentRowWithoutHandleIsMatchedByItsWorktree(t *testing.T) {
 		t.Fatalf("term_2 Status = %+v, %v; want blocked: permission", st, err)
 	}
 }
+
+// A running agent's real ps row carries a paneKey (never shown by terminal list)
+// and no terminalHandle; the lone agent of the terminal's worktree is its row.
+func TestWiringOrcaRunningAgentRowWithPaneKeyIsMatchedByItsWorktree(t *testing.T) {
+	fakeOrcaScript(t,
+		`{"terminals":[{"handle":"term_1","worktreePath":"/wt/a"}]}`,
+		`{"worktrees":[{"worktreeId":"a","path":"/wt/a","agents":[{"paneKey":"tab:leaf","state":"done","agentType":"claude","agentWait":null}]}]}`)
+	st, err := newOrcaBackend().Status(context.Background(), "term_1")
+	if err != nil || st.State != StateDone {
+		t.Fatalf("Status = %+v, %v; want done", st, err)
+	}
+}

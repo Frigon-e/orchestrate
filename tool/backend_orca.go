@@ -583,7 +583,8 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 	if row, ok := findOrcaAgent(rows, live, rec.PaneKey); ok {
 		return orcaStatus(row), nil
 	}
-	// A ps row that names neither the terminal handle nor a pane key: the lone
+	// A ps row that does not name the terminal handle (a running agent has a pane
+	// key Orca never shows in `terminal list`, seen on Orca 1.4.253): the lone
 	// agent of the terminal's own worktree is its row.
 	if terms, err := b.terminals(ctx); err == nil {
 		for _, t := range terms {
@@ -596,7 +597,7 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 					only = append(only, w.Agents...)
 				}
 			}
-			if len(only) == 1 && only[0].Handle == "" && only[0].PaneKey == "" {
+			if len(only) == 1 && only[0].Handle == "" {
 				return orcaStatus(only[0]), nil
 			}
 		}
