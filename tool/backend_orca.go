@@ -195,6 +195,7 @@ type orcaAgentRow struct {
 	Title         string          `json:"title"`
 	SessionID     string          `json:"sessionId"`
 	BlockedReason string          `json:"blockedReason"`
+	ToolName      string          `json:"toolName"`
 	AgentWait     json.RawMessage `json:"agentWait"`
 
 	worktreePath string
@@ -236,6 +237,9 @@ func orcaStatus(row orcaAgentRow) AgentStatus {
 			case json.Unmarshal(wait, &w) == nil:
 				reason = cmp3(w.BlockedReason, w.Reason, w.Detail)
 			}
+		}
+		if reason == "" && row.ToolName != "" {
+			reason = "waiting on a human: " + row.ToolName
 		}
 		if reason == "" {
 			reason = "waiting on a human"
@@ -583,10 +587,20 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 	if row, ok := findOrcaAgent(rows, live, rec.PaneKey); ok {
 		return orcaStatus(row), nil
 	}
-	// A ps row that does not name the terminal handle (a running agent has a pane
-	// key Orca never shows in `terminal list`, seen on Orca 1.4.253): the lone
-	// agent of the terminal's own worktree is its row.
-	if terms, err := b.terminals(ctx); err == nil {
+	// A running agent's ps row names a pane key, never the terminal handle.
+	// `terminal show` carries the same key as recordedPaneKey (Orca 1.4.253), so
+	// the match is exact even when several agents share a worktree.
+	pk := b.recordedPaneKey(ctx, live)
+	if pk != "" {
+		for _, w := range rows {
+			for _, a := range w.Agents {
+				if a.PaneKey == pk {
+					return orcaStatus(a), nil
+				}
+			}
+		}
+	} else if terms, err := b.terminals(ctx); err == nil {
+		// No pane key to match: the lone agent row of the terminal's own worktree.
 		for _, t := range terms {
 			if Handle(t.Handle) != live || t.WorktreePath == "" {
 				continue
@@ -602,7 +616,31 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 			}
 		}
 	}
+	// No agent row yet. A first Claude launch stops at its bypass-permissions
+	// confirmation, which Orca does not report: read it off the screen.
+	if screen, err := b.Read(ctx, live, 40); err == nil && strings.Contains(screen, "Bypass Permissions") && strings.Contains(screen, "Enter to confirm") {
+		return AgentStatus{State: StateBlocked, BlockedReason: "confirm Claude bypass-permissions mode"}, nil
+	}
 	return AgentStatus{State: StateUnknown}, nil
+}
+
+// recordedPaneKey is the pane key `terminal show` records for a terminal, or ""
+// when Orca does not say.
+func (b *orcaBackend) recordedPaneKey(ctx context.Context, live Handle) string {
+	res, err := orcaRun(ctx, orcaTimeout, "terminal", "show", "--terminal", string(live))
+	if err != nil {
+		return ""
+	}
+	var r struct {
+		RecordedPaneKey string `json:"recordedPaneKey"`
+		Terminal        struct {
+			RecordedPaneKey string `json:"recordedPaneKey"`
+		} `json:"terminal"`
+	}
+	if json.Unmarshal(res, &r) != nil {
+		return ""
+	}
+	return cmp3(r.RecordedPaneKey, r.Terminal.RecordedPaneKey)
 }
 
 // Wait polls Status until it is one of until or the timeout passes. For done and

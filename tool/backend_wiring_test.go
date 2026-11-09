@@ -345,3 +345,62 @@ func TestWiringOrcaRunningAgentRowWithPaneKeyIsMatchedByItsWorktree(t *testing.T
 		t.Fatalf("Status = %+v, %v; want done", st, err)
 	}
 }
+
+// Shapes below were captured from Orca 1.4.253: terminal show records the pane
+// key a running agent's ps row carries; a plan-approval wait is state waiting
+// with an agentWait object; the bypass confirmation has no ps row at all.
+func liveShapedOrca(t *testing.T, ps, screen string) {
+	t.Helper()
+	newOrcaHarness(t)
+	t.Setenv("ORCH_FAKE_ORCA", "")
+	t.Setenv("ORCH_ORCA", fakeRunner(t, "orca", `
+case "$1 $2" in
+"terminal list") echo '{"id":"r","ok":true,"result":{"terminals":[{"handle":"term_1","worktreePath":"/wt"},{"handle":"term_2","worktreePath":"/wt"}]}}';;
+"terminal show")
+  case "$4" in
+  term_1) echo '{"id":"r","ok":true,"result":{"recordedPaneKey":"tab1:leaf1"}}';;
+  *) echo '{"id":"r","ok":true,"result":{"recordedPaneKey":"tab2:leaf2"}}';;
+  esac;;
+"terminal read") cat <<'EOF'
+{"id":"r","ok":true,"result":{"terminal":{"tail":[`+screen+`]}}}
+EOF
+;;
+"worktree ps") cat <<'EOF'
+{"id":"r","ok":true,"result":{"worktrees":[`+ps+`]}}
+EOF
+;;
+*) echo '{"id":"r","ok":false,"error":{"code":"unknown_command","message":"x"}}'; exit 1;;
+esac`))
+}
+
+func TestWiringOrcaAgentsSharingAWorktreeAreToldApartByPaneKey(t *testing.T) {
+	liveShapedOrca(t, `{"worktreeId":"w","path":"/wt","agents":[`+
+		`{"paneKey":"tab1:leaf1","state":"done","agentType":"claude","agentWait":null},`+
+		`{"paneKey":"tab2:leaf2","state":"waiting","agentType":"claude","toolName":"ExitPlanMode","agentWait":{"source":"hook","since":1}}]}`, ``)
+	b := newOrcaBackend()
+	ctx := context.Background()
+	if st, err := b.Status(ctx, "term_1"); err != nil || st.State != StateDone {
+		t.Fatalf("term_1 Status = %+v, %v; want done", st, err)
+	}
+	st, err := b.Status(ctx, "term_2")
+	if err != nil || st.State != StateBlocked || st.BlockedReason != "waiting on a human: ExitPlanMode" {
+		t.Fatalf("term_2 Status = %+v, %v; want blocked: waiting on a human: ExitPlanMode", st, err)
+	}
+}
+
+func TestWiringOrcaBypassConfirmationReadsAsBlocked(t *testing.T) {
+	liveShapedOrca(t, `{"worktreeId":"w","path":"/wt","agents":[]}`,
+		`"  WARNING: Claude Code running in Bypass Permissions mode","  Yes, I accept","  Enter to confirm · Esc to cancel"`)
+	st, err := newOrcaBackend().Status(context.Background(), "term_1")
+	if err != nil || st.State != StateBlocked || !strings.Contains(st.BlockedReason, "bypass") {
+		t.Fatalf("Status = %+v, %v; want blocked on the bypass confirmation", st, err)
+	}
+}
+
+func TestWiringOrcaTerminalWithNoAgentRowAndPlainScreenIsUnknown(t *testing.T) {
+	liveShapedOrca(t, `{"worktreeId":"w","path":"/wt","agents":[]}`, `"$ "`)
+	st, err := newOrcaBackend().Status(context.Background(), "term_1")
+	if err != nil || st.State != StateUnknown {
+		t.Fatalf("Status = %+v, %v; want unknown", st, err)
+	}
+}
