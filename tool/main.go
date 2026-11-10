@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -164,6 +165,15 @@ func (a *app) run(args []string) int {
 	if !ok {
 		fmt.Fprintf(a.errw, "orch: unknown command %q\n\n%s", args[0], usage)
 		return 2
+	}
+	if commandNeedsBackend(args[0]) {
+		if b, berr := useBackend(); berr == nil {
+			var warn io.Writer
+			if os.Getenv("ORCH_DEBUG") != "" {
+				warn = a.errw
+			}
+			bridgeSelfEnv(context.Background(), b, os.LookupEnv, os.Setenv, warn)
+		}
 	}
 	err := fn(a, args[1:])
 	if err == nil || errors.Is(err, flag.ErrHelp) {
