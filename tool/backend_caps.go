@@ -135,6 +135,18 @@ type StateDirer interface {
 	StateDir() (string, bool)
 }
 
+// SelfEnver is the `identity.env` capability: the variables a backend could not
+// pass to an agent at launch (ORCH_ROLE, ORCH_TASK_DIR, ...), read back by the
+// agent's own orch process at startup. See bridgeSelfEnv.
+type SelfEnver interface {
+	SelfEnv(ctx context.Context) (map[string]string, error)
+}
+
+// noSelfEnv is orch's fallback: no env to add.
+type noSelfEnv struct{}
+
+func (noSelfEnv) SelfEnv(context.Context) (map[string]string, error) { return nil, nil }
+
 // Reserved contracts. Their names are taken; no backend implements them yet.
 
 // Waker is the `wake` capability: wake the orchestrator on a lead's report.
@@ -170,6 +182,7 @@ const (
 	CapGate           = "gate"
 	CapDispatch       = "dispatch"
 	CapBrowser        = "browser"
+	CapIdentityEnv    = "identity.env"
 )
 
 // capabilityDef is one registry row.
@@ -211,6 +224,7 @@ var (
 		CapGate:           {Name: CapGate, Contract: contractOf[Gater](), FallbackDoc: "orch's own gate"},
 		CapDispatch:       {Name: CapDispatch, Contract: contractOf[Dispatcher](), FallbackDoc: "orch's own dispatch"},
 		CapBrowser:        {Name: CapBrowser, Contract: contractOf[Browser](), FallbackDoc: "none"},
+		CapIdentityEnv:    {Name: CapIdentityEnv, Contract: contractOf[SelfEnver](), Fallback: noSelfEnv{}, FallbackDoc: "no env, nil"},
 	}
 )
 
