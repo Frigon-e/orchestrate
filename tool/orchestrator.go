@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,7 +405,8 @@ func (a *app) spawn(id, brief string) error {
 	// The slot check, the pane and the lead record go under one guard, so two
 	// spawns cannot both see a free slot or both take the same task. The slow
 	// agent start and prompt below run outside it.
-	var paneID, wt string
+	var paneID, wt, session, launch string
+	var promptedAtStart bool
 	var l *lead
 	managedShip := fm["kind"] != "scout" && worktreesManaged()
 	base := ""
@@ -436,14 +438,25 @@ func (a *app) spawn(id, brief string) error {
 		if err != nil {
 			return err
 		}
-		session := ""
-		if fm["harness"] == "pi" {
+		if managedShip && wt != worktreePath(dir, id) { // the backend chose the location: the brief must name it
+			if err := rewriteTaskPath(filepath.Join(dir, "task.md"), worktreePath(dir, id), wt); err != nil {
+				return err
+			}
+		}
+		layout := backendHasLayout(b)
+		session = ""
+		if layout && (fm["harness"] == "pi" || fm["harness"] == "claude") { // a backend without layout takes no extra args, so no session flag
 			session = newSessionID()
 		}
-		spec.Args = harnessArgs(fm, s.cfg, session)
+		spec.Args, spec.Model, spec.Effort = launchSettings(fm, s.cfg, session, layout)
 		spec.Place = Handle(pane)
 		if managedShip {
 			spec.Cwd = wt
+		}
+		if !layout { // the launch text rides on Start, so it cannot be typed into a confirmation screen
+			launch = launchPrompt(dir, id, managedShip, wt, brief)
+			spec.Prompt = launch
+			promptedAtStart = true
 		}
 		if pane == "" { // no layout: one separate start, inside the guard so the slot stays taken
 			ident, err := b.Start(ctx, spec)
@@ -472,16 +485,12 @@ func (a *app) spawn(id, brief string) error {
 		fmt.Fprintf(a.out, "opened pane %s for %s, but the agent is not ready (%v). Look with: orch peek %s; give up with: orch close %s --force\n", paneID, name, err, id, id)
 		return nil
 	}
-	launch := fmt.Sprintf("You are orchestrate lead %q. Read %s and follow it exactly, starting with its Report-back section.", id, filepath.Join(dir, "task.md"))
-	if managedShip { // a brief written outside Herdr still tells the lead to make the worktree
-		launch += fmt.Sprintf(" Your worktree already exists at %s on a branch orch made: start inside it and do not run `git worktree add`.", wt)
-	}
-	if brief != "" {
-		launch += " " + brief
-	}
-	if err := b.Prompt(ctx, Handle(paneID), launch); err != nil {
-		_ = a.appendStatus(dir, "note", "agent prompt failed in pane "+paneID, "", "orch")
-		return fail("opened pane %s for %s, but the launch prompt failed (%v). Look with: orch peek %s; give up with: orch close %s --force", paneID, name, err, id, id)
+	if !promptedAtStart {
+		launch = launchPrompt(dir, id, managedShip, wt, brief)
+		if err := b.Prompt(ctx, Handle(paneID), launch); err != nil {
+			_ = a.appendStatus(dir, "note", "agent prompt failed in pane "+paneID, "", "orch")
+			return fail("opened pane %s for %s, but the launch prompt failed (%v). Look with: orch peek %s; give up with: orch close %s --force", paneID, name, err, id, id)
+		}
 	}
 	_, waitErr := b.Wait(ctx, Handle(paneID), []State{StateWorking, StateBlocked}, 20*time.Second)
 	if err := a.appendStatus(dir, "working", "spawned in pane "+paneID, "", "orch"); err != nil {
@@ -500,6 +509,63 @@ func (a *app) spawn(id, brief string) error {
 	return nil
 }
 
+// launchPrompt is the first message a lead gets.
+func launchPrompt(dir, id string, managedShip bool, wt, brief string) string {
+	launch := fmt.Sprintf("You are orchestrate lead %q. Read %s and follow it exactly, starting with its Report-back section.", id, filepath.Join(dir, "task.md"))
+	if managedShip { // a brief written outside Herdr still tells the lead to make the worktree
+		launch += fmt.Sprintf(" Your worktree already exists at %s on a branch orch made: start inside it and do not run `git worktree add`.", wt)
+	}
+	if brief != "" {
+		launch += " " + brief
+	}
+	return launch
+}
+
+// rewriteTaskPath swaps the worktree path orch computed at `orch new` for the
+// one the backend chose. Equal paths, or a task.md that never named the
+// computed one, leave the file untouched.
+func rewriteTaskPath(taskPath, computed, real string) error {
+	if computed == real {
+		return nil
+	}
+	b, err := os.ReadFile(taskPath)
+	if err != nil {
+		return err
+	}
+	text := string(b)
+	if !strings.Contains(text, computed) {
+		return nil
+	}
+	return os.WriteFile(taskPath, []byte(strings.ReplaceAll(text, computed, real)), 0o644)
+}
+
+// backendHasLayout says the backend can make panes itself (Herdr), as opposed to
+// one that only starts an agent (Orca).
+func backendHasLayout(b *Active) bool {
+	_, ok := b.Backend.(Layout)
+	return ok && b.Has(CapLayout)
+}
+
+// launchSettings is what Start gets for a lead. With a layout the model and
+// effort travel as harness args, as before; without one Start takes them as
+// Spec fields and refuses args it cannot pass, so Args carries only the
+// configured extras. Model and effort are also set on Spec either way.
+func launchSettings(fm map[string]string, cfg config, session string, layout bool) (args []string, model, effort string) {
+	if fm["model"] != "default" {
+		model = fm["model"]
+	}
+	if fm["effort"] != "default" {
+		effort = fm["effort"]
+	}
+	if layout {
+		return harnessArgs(fm, cfg, session), model, effort
+	}
+	if fm["harness"] == "claude" {
+		return slices.Clone(cfg.ClaudeArgs), model, effort
+	}
+	return slices.Clone(cfg.PiArgs), model, effort
+}
+
 func harnessArgs(fm map[string]string, cfg config, session string) []string {
 	var out []string
 	model, effort := fm["model"], fm["effort"]
@@ -509,6 +575,9 @@ func harnessArgs(fm map[string]string, cfg config, session string) []string {
 		}
 		if effort != "default" {
 			out = append(out, "--effort", effort)
+		}
+		if session != "" {
+			out = append(out, "--session-id", session)
 		}
 		return append(out, cfg.ClaudeArgs...)
 	}
@@ -1292,7 +1361,7 @@ func (a *app) watchLead(ol openLead, st *watchSeen, agents map[string]AgentInfo,
 		if !waiting && !st.QuietAlerted && idleFor >= int64(cfg.QuietMinutes)*60 {
 			emit(fmt.Sprintf("quiet: idle %dm without a report; run orch peek %s", idleFor/60, id))
 			st.QuietAlerted = true
-			wk.alert(a, ol, ag, "quiet", idleFor/60, cfg.QuietMinutes, worktreeFingerprint(worktreePath(ol.dir, id)))
+			wk.alert(a, ol, ag, "quiet", idleFor/60, cfg.QuietMinutes, worktreeFingerprint(leadWorktree(ol.dir, id)))
 		}
 	} else {
 		st.IdleSince = 0
@@ -1435,6 +1504,34 @@ func cmdClose(a *app, args []string) error {
 	return a.removeShipWorktree(s, dir, l, fm)
 }
 
+// closeWait and closeInterval bound how long closeLead waits for a backend that
+// closes asynchronously; tests shorten them.
+var (
+	closeWait     = 5 * time.Second
+	closeInterval = 100 * time.Millisecond
+)
+
+// waitLeadClosed polls until the lead's pane is gone, or closeWait passes.
+func waitLeadClosed(l *lead) bool {
+	return pollGone(func() (bool, error) { return leadLive(l) }, closeWait, closeInterval)
+}
+
+// pollGone calls live every interval until it reports false, for up to wait. A
+// lookup error counts as still live.
+func pollGone(live func() (bool, error), wait, interval time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		still, err := live()
+		if err == nil && !still {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(interval)
+	}
+}
+
 // closeLead closes the lead's pane, frees its locks and logs note.
 func (a *app) closeLead(dir string, l *lead, note string) error {
 	if err := a.closeSubs(dir, l); err != nil {
@@ -1450,7 +1547,7 @@ func (a *app) closeLead(dir string, l *lead, note string) error {
 			return err
 		}
 		_ = b.Close(context.Background(), Handle(l.PaneID))
-		if still, err := leadLive(l); err != nil || still {
+		if !waitLeadClosed(l) {
 			return fail("pane %s is still open after close", l.PaneID)
 		}
 	}
@@ -1642,7 +1739,7 @@ func cmdRespawn(a *app, args []string) error {
 		brief = fmt.Sprintf("You replace a lead whose context filled up: read its handoff at %s before anything else. Its worktree and branch already exist; continue in them, and retake any lock the handoff names.", kept)
 	} else {
 		brief = fmt.Sprintf("You replace a lead whose provider failed mid-task; it left no handoff. Recover from disk: read the status log at %s, then run `git status` and `git log` in the worktree %s and read the diff against the base. Commit any uncommitted work that belongs to the task first, then continue the task. Its branch already exists; retake any lock it held. If the state is unclear, report `escalate` before changing anything.",
-			filepath.Join(dir, "status.log"), worktreePath(dir, l.ID))
+			filepath.Join(dir, "status.log"), leadWorktree(dir, l.ID))
 	}
 	if err := a.spawn(l.ID, brief); err != nil {
 		// A replacement that left a lead behind owns the new handoff path and
