@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 func leadDir(dir string) (string, error) {
@@ -160,7 +161,41 @@ func sessionOf(ag AgentInfo, l *lead) string {
 	if ag.Session != "" || l == nil {
 		return ag.Session
 	}
+	if l.Session == "" && l.Harness == "claude" && l.WorktreePath != "" {
+		// A backend that takes no --session-id (Orca) leaves the session unknown:
+		// the lead's worktree is its alone, so its newest transcript is the session.
+		return discoverClaudeSession(l.WorktreePath)
+	}
 	return l.Session
+}
+
+// claudeProjectName is how Claude names a working directory's transcript folder:
+// every character that is not a letter or digit becomes a dash.
+func claudeProjectName(dir string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, dir)
+}
+
+// discoverClaudeSession is the session id of the newest transcript Claude wrote
+// for the working directory dir, or "" when there is none.
+func discoverClaudeSession(dir string) string {
+	folder := filepath.Join(envOr("CLAUDE_CONFIG_DIR", expandHome("~/.claude")), "projects", claudeProjectName(dir))
+	paths, _ := filepath.Glob(filepath.Join(folder, "*.jsonl"))
+	var best string
+	var bestTime time.Time
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && (best == "" || st.ModTime().After(bestTime)) {
+			best, bestTime = p, st.ModTime()
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(best), ".jsonl")
 }
 
 // legacyBackendName is the backend a lead record without a Backend field

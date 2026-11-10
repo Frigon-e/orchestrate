@@ -274,3 +274,28 @@ func TestLeadWithoutWorkspaceClosesAndRespawnsAsBefore(t *testing.T) {
 		t.Fatalf("worktree gone: %v", err)
 	}
 }
+
+// A lead closed while its worktree was dirty is not stuck: once the work is
+// committed or discarded, a second `orch close` removes the worktree.
+func TestCloseAgainRemovesAWorktreeKeptTheFirstTime(t *testing.T) {
+	h := setup(t)
+	shippedLead(t, h)
+	wip := filepath.Join(h.wt("t1"), "wip.go")
+	os.WriteFile(wip, []byte("x"), 0o644)
+	wantContains(t, h.must("close", "t1"), "kept worktree "+h.wt("t1"), "it has uncommitted changes")
+	os.Remove(wip)
+	out := h.must("close", "t1")
+	wantContains(t, out, "already closed", "removed worktree "+h.wt("t1")+" and branch orch/t1")
+	if _, err := os.Stat(h.wt("t1")); err == nil {
+		t.Fatal("worktree directory still there")
+	}
+}
+
+func TestStatusHeaderNamesNoBackend(t *testing.T) {
+	h := setup(t)
+	h.task("t1")
+	out := h.must("status")
+	if strings.Contains(out, "HERDR") || !strings.Contains(out, "STATE") {
+		t.Fatalf("status header = %q; want a backend-neutral STATE column", out)
+	}
+}

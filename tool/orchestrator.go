@@ -1023,7 +1023,7 @@ func (a *app) board(s site, rows []row) string {
 	if len(rows) == 0 {
 		return strings.Join(append(out, "no tasks yet"), "\n")
 	}
-	out = append(out, fmt.Sprintf("%-20s %-5s %-16s %-8s %5s %6s  %s", "ID", "KIND", "AGENT", "HERDR", "CTX", "AGE", "LAST"))
+	out = append(out, fmt.Sprintf("%-20s %-5s %-16s %-8s %5s %6s  %s", "ID", "KIND", "AGENT", "STATE", "CTX", "AGE", "LAST"))
 	var decisions []string
 	for _, r := range rows {
 		ctx := "-"
@@ -1470,6 +1470,12 @@ func cmdClose(a *app, args []string) error {
 	}
 	dir, l, err := a.requireLead(pos[0])
 	if err != nil {
+		// A lead that is already closed may still have a worktree orch kept
+		// (dirty or unmerged at the time); try the removal again.
+		if cdir, cl := a.closedShipLead(pos[0]); cl != nil {
+			fmt.Fprintf(a.out, "%s is already closed; checking its worktree again\n", cl.Name)
+			return a.finishClosedShip(cdir, cl)
+		}
 		return err
 	}
 	state := lastState(leadEntries(readStatus(dir)))
@@ -1494,8 +1500,36 @@ func cmdClose(a *app, args []string) error {
 	if err := recordTriageOutcome(s, l.ID); err != nil {
 		fmt.Fprintf(a.errw, "orch: triage outcome for %s not written: %v\n", l.ID, err)
 	}
+	return a.finishClosedShip(dir, l)
+}
+
+// closedShipLead is the closed lead of task id that holds a ship worktree, or
+// nil.
+func (a *app) closedShipLead(id string) (string, *lead) {
+	s, err := a.site()
+	if err != nil {
+		return "", nil
+	}
+	dir, err := taskDir(s.root, id)
+	if err != nil {
+		return "", nil
+	}
+	l, err := loadLead(dir)
+	if err != nil || l == nil || l.ClosedAt == 0 || l.WorkspaceID == "" {
+		return "", nil
+	}
+	return dir, l
+}
+
+// finishClosedShip removes the closed lead's worktree and branch when nothing
+// would be lost.
+func (a *app) finishClosedShip(dir string, l *lead) error {
 	if l.WorkspaceID == "" {
 		return nil
+	}
+	s, err := a.site()
+	if err != nil {
+		return err
 	}
 	fm, _, err := readTask(filepath.Join(dir, "task.md"))
 	if err != nil {
