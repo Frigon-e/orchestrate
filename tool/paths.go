@@ -250,6 +250,9 @@ func loadBackendConfig() (backendConfig, error) {
 // repo with the same folder name gets a path hash added instead of sharing
 // the first one's state. It only reads, so a dry run still writes nothing.
 func runRoot(repo string) string {
+	if root := lastRoot(repo); root != "" {
+		return root
+	}
 	name := filepath.Base(repo)
 	plain := runRootNamed(name)
 	if owner := rootOwner(plain); owner == "" || owner == repo {
@@ -266,7 +269,46 @@ func runRootNamed(name string) string {
 	if dir := backendStateDir(); dir != "" {
 		return filepath.Join(dir, name, ".orchestrate")
 	}
-	return filepath.Join(expandHome("~/.local/state/orchestrate"), name)
+	return filepath.Join(defaultStateBase(), name)
+}
+
+// defaultStateBase is the state directory every process shares when its backend
+// names none (Orca has no state.dir), and where the last-root markers live.
+func defaultStateBase() string { return expandHome("~/.local/state/orchestrate") }
+
+func lastRootMarker(repo string) string {
+	sum := sha256.Sum256([]byte(repo))
+	return filepath.Join(defaultStateBase(), ".last-root", hex.EncodeToString(sum[:8]))
+}
+
+// lastRoot is, for a process outside any multiplexer, the run root the last
+// process that claimed this repo's state used, so a plain shell finds what an
+// Orca or Herdr session wrote. It is "" inside a multiplexer, under ORCH_HOME,
+// or when the marker is missing or points at a root another repo owns.
+func lastRoot(repo string) string {
+	if os.Getenv("ORCH_HOME") != "" {
+		return ""
+	}
+	if _, err := useBackend(); err == nil {
+		return ""
+	}
+	b, err := os.ReadFile(lastRootMarker(repo))
+	root := strings.TrimSpace(string(b))
+	if err != nil || root == "" || rootOwner(root) != repo {
+		return ""
+	}
+	return root
+}
+
+// recordLastRoot notes root as the one repo's state lives in now. Best effort.
+func recordLastRoot(root, repo string) {
+	if os.Getenv("ORCH_HOME") != "" {
+		return
+	}
+	m := lastRootMarker(repo)
+	if os.MkdirAll(filepath.Dir(m), 0o755) == nil {
+		_ = os.WriteFile(m, []byte(root+"\n"), 0o644)
+	}
 }
 
 // rootOwner is the repo path recorded in root, or "" when nobody claimed it.
@@ -288,11 +330,15 @@ func claimRoot(root, repo string) error {
 		if owner := rootOwner(root); owner != repo && owner != "" {
 			return fail("%s already belongs to %s; run orch again", root, owner)
 		}
+		recordLastRoot(root, repo)
 		return nil
 	}
 	defer f.Close()
-	_, err = f.WriteString(repo + "\n")
-	return err
+	if _, err = f.WriteString(repo + "\n"); err != nil {
+		return err
+	}
+	recordLastRoot(root, repo)
+	return nil
 }
 
 func rolesDir() string {

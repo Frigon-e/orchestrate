@@ -17,7 +17,7 @@ import (
 func setupFindings(home, repo, root string, lookPath func(string) (string, error)) []finding {
 	var fs []finding
 	add := func(sev, where, msg, fix string) { fs = append(fs, finding{sev, where, msg, fix}) }
-	inHerdr := os.Getenv("HERDR_ENV") == "1"
+	backend := detectBackendName(os.Environ())
 
 	// 1. orch on PATH.
 	orchBin := filepath.Join(home, ".local", "bin", "orch")
@@ -100,21 +100,31 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 	if _, err := lookPath("go"); err != nil {
 		add("warn", "setup", "go is not on PATH (orch builds itself with Go)", "install Go")
 	}
-	if inHerdr {
+	switch backend {
+	case "herdr":
 		if _, err := lookPath("herdr"); err != nil {
 			add("error", "setup", "herdr is not on PATH", "install Herdr or fix PATH")
 		}
+	case "orca":
+		bin := envOr("ORCH_ORCA", "orca")
+		if _, err := lookPath(bin); err != nil {
+			add("error", "setup", "orca is not on PATH", "install Orca or set ORCH_ORCA")
+		} else if _, err := runClaudeAuth(bin, "status", "--json"); err != nil {
+			add("warn", "setup", "orca status did not answer", "start the Orca app, then run: orca status")
+		}
+	case "":
+		add("warn", "setup", "no multiplexer backend detected (herdr and Orca checks skipped)", "run inside a multiplexer or set ORCH_BACKEND=<name>")
 	}
 
 	// 5. Claude trust for the worktrees dir.
-	if inHerdr {
+	if trustDir := backendTrustDir(backend, home, repo, root); trustDir != "" {
 		if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
 			var cj struct {
 				Projects map[string]struct {
 					Trusted bool `json:"hasTrustDialogAccepted"`
 				} `json:"projects"`
 			}
-			dir := filepath.Dir(root)
+			dir := trustDir
 			if json.Unmarshal(b, &cj) == nil && !cj.Projects[dir].Trusted {
 				add("warn", "setup", "Claude stops at its trust prompt in new lead worktrees ("+dir+")",
 					"set projects["+dir+"].hasTrustDialogAccepted to true in ~/.claude.json (a parent directory's entry is not inherited)")
@@ -156,6 +166,41 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 		}
 	}
 	return fs
+}
+
+// detectBackendName is the backend selectBackend would pick for env, by name,
+// without building it: ORCH_BACKEND, else the first registered backend whose
+// detect matches, else "".
+func detectBackendName(env []string) string {
+	getenv := envGetter(env)
+	regs := registeredBackends()
+	if want := getenv("ORCH_BACKEND"); want != "" {
+		for _, r := range regs {
+			if r.name == want {
+				return want
+			}
+		}
+		return ""
+	}
+	for _, r := range regs {
+		if r.detect(getenv) {
+			return r.name
+		}
+	}
+	return ""
+}
+
+// backendTrustDir is the directory whose Claude trust entry lead worktrees
+// need under backend, or "" when there is nothing to check. Herdr keeps
+// worktrees next to the run root; Orca keeps them in ~/orca/workspaces/<repo>.
+func backendTrustDir(backend, home, repo, root string) string {
+	switch backend {
+	case "herdr":
+		return filepath.Dir(root)
+	case "orca":
+		return filepath.Join(home, "orca", "workspaces", filepath.Base(repo))
+	}
+	return ""
 }
 
 // claudeAuthFindings warns when `<bin> auth status` says Claude Code is not

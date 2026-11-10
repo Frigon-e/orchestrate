@@ -10,6 +10,64 @@ import (
 
 func okLook(string) (string, error) { return "/bin/x", nil }
 
+// noBackendEnv makes the process look like a plain shell, whatever
+// multiplexer the test run itself sits in.
+func noBackendEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"HERDR_ENV", "ORCH_BACKEND", "ORCA_AGENT_SESSION_ID", "ORCA_PANE_KEY", "ORCA_TERMINAL_HANDLE"} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestSetupFindingsNoBackendSaysSo(t *testing.T) {
+	noBackendEnv(t)
+	home := t.TempDir()
+	fs := setupFindings(home, home, filepath.Join(home, "r"), okLook)
+	if !hasMsg(fs, "warn", "no multiplexer backend detected") || !hasMsg(fs, "warn", "~/.local/bin/orch is missing") {
+		t.Fatalf("want the no-backend note and the other checks, got %v", fs)
+	}
+}
+
+func TestSetupFindingsOrca(t *testing.T) {
+	noBackendEnv(t)
+	t.Setenv("ORCH_BACKEND", "orca")
+	home := t.TempDir()
+	repo := filepath.Join(home, "src", "myrepo")
+	root := filepath.Join(home, "state", "myrepo")
+	good := fakeRunner(t, "orca", `echo '{"ok":true}'`)
+	bad := fakeRunner(t, "orca", `exit 1`)
+	trustDir := filepath.Join(home, "orca", "workspaces", "myrepo")
+
+	t.Setenv("ORCH_ORCA", good)
+	fs := setupFindings(home, repo, root, okLook)
+	if hasMsg(fs, "error", "orca") || hasMsg(fs, "warn", "orca status") || hasMsg(fs, "warn", "no multiplexer") {
+		t.Fatalf("healthy orca must not warn: %v", fs)
+	}
+
+	t.Setenv("ORCH_ORCA", bad)
+	if !hasMsg(setupFindings(home, repo, root, okLook), "warn", "orca status did not answer") {
+		t.Fatal("want warn when orca status fails")
+	}
+
+	t.Setenv("ORCH_ORCA", good)
+	missing := func(string) (string, error) { return "", exec.ErrNotFound }
+	if !hasMsg(setupFindings(home, repo, root, missing), "error", "orca is not on PATH") {
+		t.Fatal("want error when orca is missing")
+	}
+	if hasMsg(setupFindings(home, repo, root, missing), "error", "herdr") {
+		t.Fatal("no herdr check under orca")
+	}
+
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{}}`, 0o644)
+	if !hasMsg(setupFindings(home, repo, root, okLook), "warn", "trust prompt") || !hasMsg(setupFindings(home, repo, root, okLook), "warn", trustDir) {
+		t.Fatal("want untrusted orca workspaces warn naming " + trustDir)
+	}
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+trustDir+`":{"hasTrustDialogAccepted":true}}}`, 0o644)
+	if hasMsg(setupFindings(home, repo, root, okLook), "warn", "trust prompt") {
+		t.Fatal("trusted dir must not warn")
+	}
+}
+
 func hasMsg(fs []finding, sev, sub string) bool {
 	for _, f := range fs {
 		if f.severity == sev && strings.Contains(f.msg, sub) {
@@ -30,7 +88,7 @@ func mustWrite(t *testing.T, p, body string, mode os.FileMode) {
 }
 
 func TestSetupFindingsOrchLink(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	if !hasMsg(setupFindings(home, home, filepath.Join(home, "r"), okLook), "warn", ".local/bin/orch is missing") {
 		t.Fatal("want missing warn")
@@ -52,7 +110,7 @@ func TestSetupFindingsOrchLink(t *testing.T) {
 }
 
 func TestSetupFindingsSkillLinks(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	if !hasMsg(setupFindings(home, home, root, okLook), "warn", ".agents/skills/orchestrate is missing") {
@@ -73,7 +131,7 @@ func TestSetupFindingsSkillLinks(t *testing.T) {
 }
 
 func TestSetupFindingsHooks(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	if !hasMsg(setupFindings(home, home, root, okLook), "warn", "settings.json is missing") {
@@ -109,7 +167,7 @@ func TestSetupFindingsTools(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	missing := func(string) (string, error) { return "", exec.ErrNotFound }
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	fs := setupFindings(home, home, root, missing)
 	if !hasMsg(fs, "error", "git is not") || !hasMsg(fs, "warn", "go is not") || hasMsg(fs, "error", "herdr") {
 		t.Fatalf("got %v", fs)
@@ -129,7 +187,7 @@ func TestSetupFindingsClaudeTrust(t *testing.T) {
 	root := filepath.Join(home, "wt", "repo", ".orchestrate")
 	dir := filepath.Dir(root)
 	cj := filepath.Join(home, ".claude.json")
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	mustWrite(t, cj, `{"projects":{}}`, 0o644)
 	if hasMsg(setupFindings(home, home, root, okLook), "warn", "trust prompt") {
 		t.Fatal("no check outside herdr")
@@ -149,7 +207,7 @@ func TestSetupFindingsClaudeTrust(t *testing.T) {
 }
 
 func TestSetupFindingsRootOwner(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	repo := filepath.Join(home, "repo")
@@ -167,7 +225,7 @@ func TestSetupFindingsRootOwner(t *testing.T) {
 }
 
 func TestSetupFindingsPrunableWorktree(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	repo := filepath.Join(home, "repo")
 	os.MkdirAll(repo, 0o755)
@@ -197,7 +255,7 @@ func TestSetupFindingsPrunableWorktree(t *testing.T) {
 }
 
 func TestSetupFindingsGuardBinary(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	skill := filepath.Join(home, ".agents", "skills", "orchestrate")
@@ -233,7 +291,7 @@ func fixOf(fs []finding, sub string) string {
 }
 
 func TestSetupFindingsPiExtension(t *testing.T) {
-	t.Setenv("HERDR_ENV", "")
+	noBackendEnv(t)
 	home := t.TempDir()
 	root := filepath.Join(home, "r")
 	ext := filepath.Join(home, ".pi", "agent", "extensions", "ctx-reminder.ts")
