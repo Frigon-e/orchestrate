@@ -229,7 +229,7 @@ func (a *app) subStart(args []string) error {
 	if eff == "" {
 		eff = "high"
 	}
-	wt := worktreePath(dir, l.ID)
+	wt := leadWorktree(dir, l.ID)
 	env := map[string]string{"ORCH_ROLE": "sub", "ORCH_PARENT": l.ID}
 	b, err := useBackend()
 	if err != nil {

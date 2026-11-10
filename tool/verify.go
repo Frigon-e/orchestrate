@@ -49,7 +49,7 @@ func cmdVerify(a *app, args []string) error {
 		fmt.Fprintf(a.out, "verify: skipped\nreason: %s is a %s task; there is no code to verify\n", id, fm["kind"])
 		return nil
 	}
-	wt := worktreePath(dir, id)
+	wt := leadWorktree(dir, id)
 	if st, err := os.Stat(wt); err != nil || !st.IsDir() {
 		return fail("no worktree at %s: the lead has not created it yet", wt)
 	}
