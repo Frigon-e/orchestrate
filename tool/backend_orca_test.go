@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -129,6 +130,19 @@ func fakeOrca(path string, args []string) int {
 			Worktree: strings.TrimPrefix(val("--worktree"), "path:"), Agent: val("--agent"), State: "working", Wait: "null", Out: []string{"started", val("--prompt")}}
 		st.Terms = append(st.Terms, t)
 		return reply(map[string]any{"outcome": map[string]any{"kind": "terminal", "handle": t.Handle}})
+	case "terminal create":
+		st.Next++
+		wt := strings.TrimPrefix(val("--worktree"), "path:")
+		if !slices.ContainsFunc(st.Trees, func(w *orcaFakeTree) bool { return w.Path == wt }) {
+			st.Trees = append(st.Trees, &orcaFakeTree{ID: "repo1::" + wt, Path: wt})
+		}
+		// The command is `sh '<script>'`; the script's first line names the agent.
+		script, _ := os.ReadFile(strings.Trim(strings.TrimPrefix(val("--command"), "sh "), "'"))
+		first, _, _ := strings.Cut(string(script), "\n")
+		t := &orcaFakeTerm{Handle: fmt.Sprintf("term_%d", st.Next), PaneKey: fmt.Sprintf("pane:%d", st.Next), Title: val("--title"),
+			Worktree: wt, Agent: strings.TrimPrefix(first, "# orch orca launch "), State: "working", Wait: "null", Out: []string{"started", string(script)}}
+		st.Terms = append(st.Terms, t)
+		return reply(map[string]any{"terminal": map[string]any{"handle": t.Handle, "tabId": "tab", "paneKey": t.PaneKey, "worktreeId": "repo1::" + wt}})
 	case "terminal list":
 		var rows []map[string]any
 		for _, t := range st.Terms {
@@ -411,13 +425,12 @@ func TestOrcaLaunchedAgentWithoutRowIsNotRunning(t *testing.T) {
 	}
 }
 
-func TestOrcaStartPassesNoEnvNoPermissionFlagAndWritesIdentity(t *testing.T) {
+func TestOrcaStartWithoutArgsOrEnvUsesAgentLaunchAndWritesIdentity(t *testing.T) {
 	h := newOrcaHarness(t)
 	b := newOrcaBackend()
 	wt := filepath.Join(h.tmp, "wt")
 	h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
-	id, err := b.Start(context.Background(), Spec{Agent: "claude", Harness: "claude", Cwd: wt, Prompt: "go", Name: "n", Model: "sonnet",
-		Env: map[string]string{"ORCH_ROLE": "lead", "ORCA_PANE_KEY": "leak", "HERDR_PANE_ID": "leak"}})
+	id, err := b.Start(context.Background(), Spec{Agent: "claude", Harness: "claude", Cwd: wt, Prompt: "go", Name: "n", Model: "sonnet"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,8 +453,8 @@ func TestOrcaStartPassesNoEnvNoPermissionFlagAndWritesIdentity(t *testing.T) {
 		t.Errorf("identity = %+v, want orca term_1 keyed by pane:1", id)
 	}
 	rec, ok := readOrcaIdentity(string(id.Handle))
-	if !ok || rec.ID != id.ID || rec.Env["ORCH_ROLE"] != "lead" || len(rec.Env) != 1 {
-		t.Errorf("identity file = %+v, %v; want ORCH_ROLE only", rec, ok)
+	if !ok || rec.ID != id.ID || len(rec.Env) != 0 {
+		t.Errorf("identity file = %+v, %v; want no env", rec, ok)
 	}
 	// The agent's own orch calls find the same identity from its terminal env.
 	t.Setenv("ORCA_TERMINAL_HANDLE", "term_1")
@@ -955,43 +968,106 @@ func TestOrcaStatusFillsMissingPaneKey(t *testing.T) {
 	}
 }
 
-func TestOrcaStartLiftsModelAndEffortFromArgs(t *testing.T) {
-	for _, args := range [][]string{
-		{"--model", "opus", "--effort", "high", "--session-id", "abc"},
-		{"--model=opus", "--effort=high"},
-	} {
-		h := newOrcaHarness(t)
-		wt := filepath.Join(h.tmp, "wt")
-		h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
-		if _, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: wt, Prompt: "go", Args: args}); err != nil {
-			t.Fatal(err)
-		}
-		j := strings.Join(h.calls("agent launch")[0], " ")
-		if !strings.Contains(j, "--model opus --effort high") || strings.Contains(j, "session-id") {
-			t.Errorf("args %v: launch = %q", args, j)
-		}
-	}
-	// An explicit Model wins over the one in Args.
-	h := newOrcaHarness(t)
+// orcaScript runs Start and returns the launcher script the terminal create
+// command named, plus the create call.
+func orcaScript(t *testing.T, h *orcaHarness, spec Spec) (script string, call []string, id Identity) {
+	t.Helper()
 	wt := filepath.Join(h.tmp, "wt")
 	h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
-	if _, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: wt, Model: "sonnet", Args: []string{"--model", "opus"}}); err != nil {
+	spec.Cwd = wt
+	id, err := newOrcaBackend().Start(context.Background(), spec)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if j := strings.Join(h.calls("agent launch")[0], " "); !strings.Contains(j, "--model sonnet") || strings.Contains(j, "opus") {
-		t.Errorf("launch = %q", j)
+	if n := len(h.calls("agent launch")); n != 0 {
+		t.Fatalf("agent launch ran %d times; Args/Env must go through terminal create", n)
+	}
+	creates := h.calls("terminal create")
+	if len(creates) != 1 {
+		t.Fatalf("terminal create calls = %v", creates)
+	}
+	call = creates[0]
+	cmd := flagValue(call, "--command")
+	path, ok := strings.CutPrefix(cmd, "sh ")
+	if !ok || len(cmd) > 200 {
+		t.Fatalf("command = %q; want a short `sh <script>`", cmd)
+	}
+	path = strings.Trim(path, "'")
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("script %s: %v, %v; want mode 0600", path, st, err)
+	}
+	b, _ := os.ReadFile(path)
+	return string(b), call, id
+}
+
+func TestOrcaStartWithArgsAndEnvRunsLauncherScript(t *testing.T) {
+	h := newOrcaHarness(t)
+	prompt := "read 'task.md'\nthen \"go\" $HOME `x`"
+	script, call, id := orcaScript(t, h, Spec{Agent: "claude", Harness: "claude", Name: "lead-t1", Model: "sonnet", Effort: "high", Prompt: prompt,
+		Args: []string{"--session-id", "S1", "--tools", "a b"},
+		Env:  map[string]string{"ORCH_ROLE": "lead", "ORCA_PANE_KEY": "leak", "HERDR_PANE_ID": "leak", "Q": "it's"}})
+	if got := flagValue(call, "--title"); got != "lead-t1" {
+		t.Errorf("title = %q", got)
+	}
+	if got := flagValue(call, "--worktree"); got != "path:"+filepath.Join(h.tmp, "wt") {
+		t.Errorf("worktree = %q", got)
+	}
+	want := "exec env 'ORCH_ROLE=lead' 'Q=it'\"'\"'s' 'claude' '--dangerously-skip-permissions' '--model' 'sonnet' '--effort' 'high' '--session-id' 'S1' '--tools' 'a b' " + shellQuote(prompt) + "\n"
+	if !strings.HasSuffix(script, want) || strings.Contains(script, "leak") {
+		t.Errorf("script = %q\nwant suffix %q and no leaked env", script, want)
+	}
+	if id.Handle != "term_1" || id.ID != "pane:1" {
+		t.Errorf("identity = %+v, want term_1 keyed by the reply pane key", id)
+	}
+	rec, ok := readOrcaIdentity("term_1")
+	if !ok || rec.PaneKey != "pane:1" || rec.Env["ORCH_ROLE"] != "lead" || rec.Env["Q"] != "it's" || len(rec.Env) != 2 || rec.Name != "lead-t1" {
+		t.Errorf("identity file = %+v, %v", rec, ok)
+	}
+	// The prompt in the script survives sh: run the script's words back through sh.
+	out, err := exec.Command("sh", "-c", strings.Replace(script, "exec env", "printf '%s\\n'", 1)).Output()
+	if err != nil || !strings.Contains(string(out), prompt+"\n") {
+		t.Errorf("prompt did not round-trip through sh: %q, %v", out, err)
 	}
 }
 
-func TestOrcaStartRejectsUnsupportedArgs(t *testing.T) {
-	h := newOrcaHarness(t)
-	_, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: h.tmp,
-		Args: []string{"--model", "opus", "--permission-mode", "dontAsk", "--tools", "x"}})
-	if err == nil || !strings.Contains(err.Error(), "--permission-mode") || !strings.Contains(err.Error(), "--tools") {
-		t.Fatalf("err = %v, want it to name the unsupported args", err)
+func TestOrcaStartClaudePermissionFlagRule(t *testing.T) {
+	for _, c := range []struct {
+		args   []string
+		bypass bool
+	}{
+		{[]string{"--session-id", "S"}, true},
+		{[]string{"--dangerously-skip-permissions"}, true}, // present once, not doubled
+		{[]string{"--permission-mode", "dontAsk"}, false},
+		{[]string{"--permission-mode=plan"}, false},
+		{[]string{"--allow-dangerously-skip-permissions"}, false},
+	} {
+		h := newOrcaHarness(t)
+		script, _, _ := orcaScript(t, h, Spec{Agent: "claude", Harness: "claude", Args: c.args})
+		if n := strings.Count(script, "'--dangerously-skip-permissions'"); (n == 1) != c.bypass || n > 1 {
+			t.Errorf("args %v: bypass count %d, want present=%v\n%s", c.args, n, c.bypass, script)
+		}
 	}
-	if n := len(h.calls("agent launch")); n != 0 {
-		t.Errorf("launch ran %d times despite the error", n)
+	// pi never gets the claude flag, and maps effort to --thinking.
+	h := newOrcaHarness(t)
+	script, _, _ := orcaScript(t, h, Spec{Agent: "pi", Harness: "pi", Model: "m", Effort: "high", Args: []string{"-p"}, Prompt: "go"})
+	if !strings.HasSuffix(script, "'pi' '--model' 'm' '--thinking' 'high' '-p' 'go'\n") {
+		t.Errorf("pi script = %q", script)
+	}
+}
+
+func TestOrcaStartDoesNotDuplicateModelFlagsFromArgs(t *testing.T) {
+	h := newOrcaHarness(t)
+	script, _, _ := orcaScript(t, h, Spec{Agent: "claude", Harness: "claude", Model: "sonnet", Effort: "high", Args: []string{"--model", "sonnet", "--effort=high"}})
+	if strings.Count(script, "model") != 1 || strings.Count(script, "effort") != 1 {
+		t.Errorf("script repeats model/effort flags: %q", script)
+	}
+}
+
+func TestOrcaStartAgentLaunchRefusesEffortWithoutModel(t *testing.T) {
+	h := newOrcaHarness(t)
+	_, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: h.tmp, Effort: "high"})
+	if err == nil || !strings.Contains(err.Error(), "--effort") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

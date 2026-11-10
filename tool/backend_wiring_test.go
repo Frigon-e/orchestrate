@@ -82,9 +82,9 @@ func TestWiringSpawnPlacesLeadOnBackendWithoutLayout(t *testing.T) {
 	if n := len(w.orca.calls("worktree create")); n != 1 {
 		t.Fatalf("worktree create calls = %d, want 1", n)
 	}
-	launch := w.orca.calls("agent launch")
+	launch := w.orca.calls("terminal create")
 	if len(launch) != 1 || flagValue(launch[0], "--worktree") != "path:"+w.orcaPath() {
-		t.Fatalf("agent launch = %v, want one start in the Orca-chosen path %s", launch, w.orcaPath())
+		t.Fatalf("terminal create = %v, want one start in the Orca-chosen path %s", launch, w.orcaPath())
 	}
 	l := w.lead("t1")
 	if l.WorktreePath != w.orcaPath() || l.WorkspaceID == "" || l.Backend != "orca" {

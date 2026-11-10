@@ -444,11 +444,12 @@ func (a *app) spawn(id, brief string) error {
 			}
 		}
 		layout := backendHasLayout(b)
+		takesArgs := layout || backendTakesLaunchArgs(b)
 		session = ""
-		if layout && (fm["harness"] == "pi" || fm["harness"] == "claude") { // a backend without layout takes no extra args, so no session flag
+		if takesArgs && (fm["harness"] == "pi" || fm["harness"] == "claude") { // a backend that cannot take args cannot take a session flag
 			session = newSessionID()
 		}
-		spec.Args, spec.Model, spec.Effort = launchSettings(fm, s.cfg, session, layout)
+		spec.Args, spec.Model, spec.Effort = launchSettings(fm, s.cfg, session, takesArgs)
 		spec.Place = Handle(pane)
 		if managedShip {
 			spec.Cwd = wt
@@ -546,18 +547,29 @@ func backendHasLayout(b *Active) bool {
 	return ok && b.Has(CapLayout)
 }
 
-// launchSettings is what Start gets for a lead. With a layout the model and
-// effort travel as harness args, as before; without one Start takes them as
-// Spec fields and refuses args it cannot pass, so Args carries only the
-// configured extras. Model and effort are also set on Spec either way.
-func launchSettings(fm map[string]string, cfg config, session string, layout bool) (args []string, model, effort string) {
+// LaunchArgTaker is implemented by a backend without layout whose Start can
+// still pass Spec.Args and Spec.Env to the agent (Orca, through a launcher
+// script). A backend that cannot does not implement it.
+type LaunchArgTaker interface{ TakesLaunchArgs() bool }
+
+func backendTakesLaunchArgs(b *Active) bool {
+	t, ok := b.Backend.(LaunchArgTaker)
+	return ok && t.TakesLaunchArgs()
+}
+
+// launchSettings is what Start gets for a lead. When the backend takes launch
+// args (layout, or LaunchArgTaker) the model and effort travel as harness args
+// with the session id; otherwise Start takes them as Spec fields and refuses
+// args it cannot pass, so Args carries only the configured extras. Model and
+// effort are also set on Spec either way.
+func launchSettings(fm map[string]string, cfg config, session string, takesArgs bool) (args []string, model, effort string) {
 	if fm["model"] != "default" {
 		model = fm["model"]
 	}
 	if fm["effort"] != "default" {
 		effort = fm["effort"]
 	}
-	if layout {
+	if takesArgs {
 		return harnessArgs(fm, cfg, session), model, effort
 	}
 	if fm["harness"] == "claude" {

@@ -411,55 +411,43 @@ func (b *orcaBackend) onHandle(ctx context.Context, h Handle, fn func(live Handl
 	return err
 }
 
-// Start launches an agent as a terminal in the worktree at spec.Cwd. It passes
-// no permission flag and no env: Orca's own launch defaults apply, so a Claude
-// agent may stop at Orca's confirmation prompt, which Status reports as blocked.
-// The agent is not running until Status says so.
+// TakesLaunchArgs: Start passes Spec.Args and Spec.Env through a launcher script.
+func (*orcaBackend) TakesLaunchArgs() bool { return true }
+
+// Start launches an agent as a terminal in the worktree at spec.Cwd. Without
+// Args and Env it uses `agent launch`, so Orca's own launch defaults apply and a
+// Claude agent may stop at Orca's confirmation prompt, which Status reports as
+// blocked. With Args or Env it runs a launcher script through `terminal create
+// --command` (see startCommand). The agent is not running until Status says so.
 func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 	kind := cmp3(spec.Harness, spec.Agent)
-	model, effort, prompt, err := orcaLaunchOptions(spec)
-	if err != nil {
-		return Identity{}, err
-	}
-	args := []string{"agent", "launch", "--agent", kind, "--surface", "terminal"}
-	if spec.Cwd != "" {
-		abs, err := filepath.Abs(spec.Cwd)
-		if err != nil {
-			return Identity{}, err
-		}
-		args = append(args, "--worktree", "path:"+abs)
-	}
-	if prompt != "" {
-		args = append(args, "--prompt", prompt)
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-		if effort != "" {
-			args = append(args, "--effort", effort)
+	env := map[string]string{} // ORCA_* never reaches a child; Orca sets its own in the terminal
+	for _, kv := range childEnv("orca", nil, spec.Env) {
+		if k, v, _ := strings.Cut(kv, "="); !strings.HasPrefix(k, "ORCA_") {
+			env[k] = v
 		}
 	}
-	res, err := orcaRun(ctx, 120*time.Second, args...)
-	if err != nil {
-		return Identity{}, err
+	var handle, paneKey string
+	var err error
+	if len(spec.Args) > 0 || len(env) > 0 {
+		handle, paneKey, err = b.startCommand(ctx, spec, kind, env)
+	} else {
+		handle, err = b.startLaunch(ctx, spec, kind)
 	}
-	handle, err := orcaLaunchHandle(res)
 	if err != nil {
 		return Identity{}, err
 	}
 	rec := orcaIdentityRecord{ID: handle, Handle: handle, Backend: "orca", Name: spec.Name}
-	// The launcher's reply has no pane key; `terminal show` records it. If Orca
+	// The launch reply may have no pane key; `terminal show` records it. If Orca
 	// does not say yet, Status or List fills it in the first time they see it.
-	if pk := b.recordedPaneKey(ctx, Handle(handle)); pk != "" {
-		rec.PaneKey, rec.ID = pk, pk
+	if paneKey == "" {
+		paneKey = b.recordedPaneKey(ctx, Handle(handle))
 	}
-	// ORCA_* never reaches a child through the launcher; keep the rest of the
-	// requested env in the identity file for the child's orch calls.
-	rec.Env = map[string]string{}
-	for _, kv := range childEnv("orca", nil, spec.Env) {
-		if k, v, _ := strings.Cut(kv, "="); !strings.HasPrefix(k, "ORCA_") {
-			rec.Env[k] = v // Orca sets its own ORCA_* in the terminal
-		}
+	if paneKey != "" {
+		rec.PaneKey, rec.ID = paneKey, paneKey
 	}
+	// The env also lives in the identity file for the child's own orch calls.
+	rec.Env = env
 	if err := writeOrcaIdentity(rec); err != nil {
 		return Identity{}, err
 	}
@@ -469,53 +457,126 @@ func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 	return Identity{ID: rec.ID, Handle: Handle(handle), Backend: "orca"}, nil
 }
 
-// orcaLaunchOptions folds spec.Args into the launch options. `agent launch`
-// takes only --model and --effort (plus the prompt), so those are lifted when
-// Model or Effort is empty. The pure session flag orch adds, --session-id <id>,
-// is dropped: Orca chooses its own session. Any other argument cannot reach the
-// agent, so it is an error rather than a silent drop.
-func orcaLaunchOptions(spec Spec) (model, effort, prompt string, err error) {
-	model, effort, prompt = spec.Model, spec.Effort, spec.Prompt
-	var bad []string
-	for i := 0; i < len(spec.Args); i++ {
-		a := spec.Args[i]
-		flag, val, hasVal := strings.Cut(a, "=")
-		take := func() (string, bool) {
-			if hasVal {
-				return val, true
-			}
-			if i+1 < len(spec.Args) && !strings.HasPrefix(spec.Args[i+1], "--") {
-				i++
-				return spec.Args[i], true
-			}
-			return "", false
+// startLaunch is `agent launch`: agent, model, effort, prompt and worktree only.
+func (b *orcaBackend) startLaunch(ctx context.Context, spec Spec, kind string) (string, error) {
+	if spec.Effort != "" && spec.Model == "" {
+		return "", fail("orca agent launch takes --effort only with --model")
+	}
+	args := []string{"agent", "launch", "--agent", kind, "--surface", "terminal"}
+	if spec.Cwd != "" {
+		abs, err := filepath.Abs(spec.Cwd)
+		if err != nil {
+			return "", err
 		}
-		switch flag {
-		case "--model", "--effort":
-			v, ok := take()
-			switch {
-			case !ok:
-				bad = append(bad, a)
-			case flag == "--model" && model == "":
-				model = v
-			case flag == "--effort" && effort == "":
-				effort = v
-			}
-		case "--session-id":
-			if _, ok := take(); !ok {
-				bad = append(bad, a)
-			}
-		default:
-			bad = append(bad, a)
+		args = append(args, "--worktree", "path:"+abs)
+	}
+	if spec.Prompt != "" {
+		args = append(args, "--prompt", spec.Prompt)
+	}
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
+		if spec.Effort != "" {
+			args = append(args, "--effort", spec.Effort)
 		}
 	}
-	if len(bad) > 0 {
-		return "", "", "", fail("orca agent launch cannot pass these arguments to the agent: %s", strings.Join(bad, " "))
+	res, err := orcaRun(ctx, 120*time.Second, args...)
+	if err != nil {
+		return "", err
 	}
-	if effort != "" && model == "" {
-		return "", "", "", fail("orca agent launch takes --effort only with --model")
+	return orcaLaunchHandle(res)
+}
+
+// startCommand runs the agent through `terminal create --command sh <script>`:
+// the script holds the env, the args and the prompt, so none of them is typed
+// into the terminal (a long typed line overflows the pty input queue). It
+// returns the handle and the pane key of the reply.
+func (b *orcaBackend) startCommand(ctx context.Context, spec Spec, kind string, env map[string]string) (handle, paneKey string, err error) {
+	if spec.Cwd == "" {
+		return "", "", fail("orca terminal create needs a worktree: Spec.Cwd is empty")
 	}
-	return model, effort, prompt, nil
+	abs, err := filepath.Abs(spec.Cwd)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(orcaIdentityDir(), 0o700); err != nil {
+		return "", "", err
+	}
+	f, err := os.CreateTemp(orcaIdentityDir(), "launch-*.sh") // 0600
+	if err != nil {
+		return "", "", err
+	}
+	_, werr := f.WriteString(orcaLaunchScript(kind, orcaLaunchArgv(spec, kind), env))
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(f.Name())
+		return "", "", werr
+	}
+	args := []string{"terminal", "create", "--worktree", "path:" + abs, "--command", "sh " + shellQuote(f.Name())}
+	if spec.Name != "" {
+		args = append(args, "--title", spec.Name)
+	}
+	res, err := orcaRun(ctx, 120*time.Second, args...)
+	if err != nil {
+		os.Remove(f.Name())
+		return "", "", err
+	}
+	var r struct {
+		Terminal struct {
+			Handle  string `json:"handle"`
+			PaneKey string `json:"paneKey"`
+		} `json:"terminal"`
+	}
+	if err := json.Unmarshal(res, &r); err != nil || r.Terminal.Handle == "" {
+		return "", "", fail("orca terminal create returned no terminal handle")
+	}
+	return r.Terminal.Handle, r.Terminal.PaneKey, nil
+}
+
+// orcaLaunchArgv is the agent's argv after its name. Model and effort become
+// flags the way harnessArgs does it, unless the caller's Args already carry them.
+// A Claude agent gets --dangerously-skip-permissions (what `agent launch` adds,
+// and what keeps it past the trust prompt) unless Args set a permission choice.
+func orcaLaunchArgv(spec Spec, kind string) []string {
+	has := func(flag string) bool {
+		return slices.ContainsFunc(spec.Args, func(a string) bool { return a == flag || strings.HasPrefix(a, flag+"=") })
+	}
+	var out []string
+	if kind == "claude" && !has("--dangerously-skip-permissions") && !has("--permission-mode") && !has("--allow-dangerously-skip-permissions") {
+		out = append(out, "--dangerously-skip-permissions")
+	}
+	effortFlag := "--effort"
+	if kind == "pi" {
+		effortFlag = "--thinking"
+	}
+	if spec.Model != "" && !has("--model") {
+		out = append(out, "--model", spec.Model)
+	}
+	if spec.Effort != "" && !has(effortFlag) {
+		out = append(out, effortFlag, spec.Effort)
+	}
+	out = append(out, spec.Args...)
+	if spec.Prompt != "" {
+		out = append(out, spec.Prompt)
+	}
+	return out
+}
+
+// orcaLaunchScript is the sh script the terminal runs. The first line names the
+// agent; the env rides on `env`, so it lives only in the agent's process.
+func orcaLaunchScript(kind string, argv []string, env map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# orch orca launch %s\nexec env", strings.ReplaceAll(kind, "\n", " "))
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		fmt.Fprintf(&b, " %s", shellQuote(k+"="+env[k]))
+	}
+	fmt.Fprintf(&b, " %s", shellQuote(kind))
+	for _, a := range argv {
+		fmt.Fprintf(&b, " %s", shellQuote(a))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // orcaLaunchHandle reads the terminal handle of a launch. The reply names the

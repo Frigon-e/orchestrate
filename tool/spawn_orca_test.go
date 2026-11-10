@@ -12,6 +12,7 @@ import (
 // hand the launch text to Start, not type it into a terminal afterwards.
 func TestSpawnOrcaRewritesTaskPathLaunchesWithPromptAndModel(t *testing.T) {
 	w := wiringSetup(t)
+	os.WriteFile(os.Getenv("ORCH_CONFIG"), []byte("max_leads = 5\nclaude_args = [\"--permission-mode\", \"auto\"]\n"), 0o644)
 	w.task("t1")
 	task := w.dir("t1") + "/task.md"
 	computed := worktreePath(w.dir("t1"), "t1")
@@ -24,21 +25,30 @@ func TestSpawnOrcaRewritesTaskPathLaunchesWithPromptAndModel(t *testing.T) {
 	if strings.Contains(text, computed) || !strings.Contains(text, w.orcaPath()) {
 		t.Fatalf("task.md still names the computed path, or lacks %s:\n%s", w.orcaPath(), text)
 	}
-	launch := w.orca.calls("agent launch")
-	if len(launch) != 1 {
-		t.Fatalf("agent launch calls = %v, want 1", launch)
+	if got := w.orca.calls("agent launch"); len(got) != 0 {
+		t.Fatalf("agent launch calls = %v; a lead's args and env need terminal create", got)
 	}
-	if p := flagValue(launch[0], "--prompt"); !strings.Contains(p, "You are orchestrate lead \"t1\"") || !strings.Contains(p, w.orcaPath()) {
-		t.Fatalf("launch --prompt = %q, want the launch text naming %s", p, w.orcaPath())
+	creates := w.orca.calls("terminal create")
+	if len(creates) != 1 {
+		t.Fatalf("terminal create calls = %v, want 1", creates)
 	}
-	if m, e := flagValue(launch[0], "--model"), flagValue(launch[0], "--effort"); m != "sonnet" || e != "high" {
-		t.Fatalf("launch model/effort = %q/%q, want sonnet/high", m, e)
+	l := w.lead("t1")
+	if l.Session == "" {
+		t.Fatal("claude lead has no session id under Orca")
+	}
+	path := strings.Trim(strings.TrimPrefix(flagValue(creates[0], "--command"), "sh "), "'")
+	script := string(mustRead(t, path))
+	for _, want := range []string{"'--session-id' '" + l.Session + "'", "'--model' 'sonnet'", "'--effort' 'high'", "'ORCH_ROLE=lead'",
+		"You are orchestrate lead \"t1\"", w.orcaPath()} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("launcher script lacks %q:\n%s", want, script)
+		}
+	}
+	if !strings.Contains(script, "'--permission-mode' 'auto'") || strings.Contains(script, "--dangerously-skip-permissions") {
+		t.Fatalf("launcher script must carry claude_args and no bypass flag with a permission mode:\n%s", script)
 	}
 	if got := w.orca.calls("terminal send"); len(got) != 0 {
 		t.Fatalf("terminal send calls = %v; the launch text must not be typed after Start", got)
-	}
-	if l := w.lead("t1"); l.Session != "" {
-		t.Fatalf("session = %q; a backend without layout takes no --session-id", l.Session)
 	}
 }
 
