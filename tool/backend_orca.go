@@ -283,13 +283,14 @@ var (
 	_ SetupHook       = (*orcaBackend)(nil)
 	_ ArchiveHook     = (*orcaBackend)(nil)
 	_ BlockedReasoner = (*orcaBackend)(nil)
+	_ SelfEnver       = (*orcaBackend)(nil)
 )
 
 func (*orcaBackend) Name() string { return "orca" }
 
 // Declares does not list layout: Orca has no pane split or tab we drive.
 func (*orcaBackend) Declares() []string {
-	return []string{CapWorktreeManage, CapSetupHook, CapArchiveHook, CapBlockedReason}
+	return []string{CapWorktreeManage, CapSetupHook, CapArchiveHook, CapBlockedReason, CapIdentityEnv}
 }
 
 func (*orcaBackend) ProvidesBlockedReason() {}

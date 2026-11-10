@@ -171,3 +171,11 @@ worktree (`*_not_found`) and a dirty worktree (`worktree_dirty`), that `--repo
 path:<dir>` is accepted, and that `terminal list` carries the pane key. The
 Orca fake in `tool/backend_orca_test.go` encodes these assumptions; change both
 together when they are checked.
+
+## Run root without state.dir
+
+A backend with no `state.dir` capability (Orca) keeps its run root at `~/.local/state/orchestrate/<repo>`. A plain shell outside any multiplexer follows the `.last-root` marker in that directory to the root the last session claimed, so `orch status` from a plain shell finds the Orca session's state.
+
+## identity.env
+
+Orca's `agent launch` takes no environment, so the Orca backend records a lead's requested variables in an identity file. On startup orch calls `SelfEnv` and sets each recorded variable that is not already set, never overwriting and never setting `ORCA_*` or `HERDR_*`. This is how an Orca lead gets `ORCH_ROLE`, `ORCH_TASK_DIR` and `ORCH_EPOCH`.
