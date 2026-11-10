@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -370,7 +371,8 @@ func (b *orcaBackend) Resolve(ctx context.Context, h Handle) (Handle, error) {
 	}
 	if ok && rec.PaneKey != "" {
 		for _, t := range terms {
-			if t.PaneKey == rec.PaneKey && t.Handle != "" {
+			// A real `terminal list` row has no paneKey; `terminal show` does.
+			if t.Handle != "" && (t.PaneKey == rec.PaneKey || b.recordedPaneKey(ctx, Handle(t.Handle)) == rec.PaneKey) {
 				b.mu.Lock()
 				b.alias[h] = Handle(t.Handle)
 				b.mu.Unlock()
@@ -414,6 +416,10 @@ func (b *orcaBackend) onHandle(ctx context.Context, h Handle, fn func(live Handl
 // The agent is not running until Status says so.
 func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 	kind := cmp3(spec.Harness, spec.Agent)
+	model, effort, prompt, err := orcaLaunchOptions(spec)
+	if err != nil {
+		return Identity{}, err
+	}
 	args := []string{"agent", "launch", "--agent", kind, "--surface", "terminal"}
 	if spec.Cwd != "" {
 		abs, err := filepath.Abs(spec.Cwd)
@@ -422,13 +428,13 @@ func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 		}
 		args = append(args, "--worktree", "path:"+abs)
 	}
-	if spec.Prompt != "" {
-		args = append(args, "--prompt", spec.Prompt)
+	if prompt != "" {
+		args = append(args, "--prompt", prompt)
 	}
-	if spec.Model != "" {
-		args = append(args, "--model", spec.Model)
-		if spec.Effort != "" {
-			args = append(args, "--effort", spec.Effort)
+	if model != "" {
+		args = append(args, "--model", model)
+		if effort != "" {
+			args = append(args, "--effort", effort)
 		}
 	}
 	res, err := orcaRun(ctx, 120*time.Second, args...)
@@ -440,12 +446,10 @@ func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 		return Identity{}, err
 	}
 	rec := orcaIdentityRecord{ID: handle, Handle: handle, Backend: "orca", Name: spec.Name}
-	if terms, err := b.terminals(ctx); err == nil {
-		for _, t := range terms {
-			if t.Handle == handle && t.PaneKey != "" {
-				rec.PaneKey, rec.ID = t.PaneKey, t.PaneKey
-			}
-		}
+	// The launcher's reply has no pane key; `terminal show` records it. If Orca
+	// does not say yet, Status or List fills it in the first time they see it.
+	if pk := b.recordedPaneKey(ctx, Handle(handle)); pk != "" {
+		rec.PaneKey, rec.ID = pk, pk
 	}
 	// ORCA_* never reaches a child through the launcher; keep the rest of the
 	// requested env in the identity file for the child's orch calls.
@@ -462,6 +466,55 @@ func (b *orcaBackend) Start(ctx context.Context, spec Spec) (Identity, error) {
 		_ = b.Rename(ctx, Handle(handle), spec.Name)
 	}
 	return Identity{ID: rec.ID, Handle: Handle(handle), Backend: "orca"}, nil
+}
+
+// orcaLaunchOptions folds spec.Args into the launch options. `agent launch`
+// takes only --model and --effort (plus the prompt), so those are lifted when
+// Model or Effort is empty. The pure session flag orch adds, --session-id <id>,
+// is dropped: Orca chooses its own session. Any other argument cannot reach the
+// agent, so it is an error rather than a silent drop.
+func orcaLaunchOptions(spec Spec) (model, effort, prompt string, err error) {
+	model, effort, prompt = spec.Model, spec.Effort, spec.Prompt
+	var bad []string
+	for i := 0; i < len(spec.Args); i++ {
+		a := spec.Args[i]
+		flag, val, hasVal := strings.Cut(a, "=")
+		take := func() (string, bool) {
+			if hasVal {
+				return val, true
+			}
+			if i+1 < len(spec.Args) && !strings.HasPrefix(spec.Args[i+1], "--") {
+				i++
+				return spec.Args[i], true
+			}
+			return "", false
+		}
+		switch flag {
+		case "--model", "--effort":
+			v, ok := take()
+			switch {
+			case !ok:
+				bad = append(bad, a)
+			case flag == "--model" && model == "":
+				model = v
+			case flag == "--effort" && effort == "":
+				effort = v
+			}
+		case "--session-id":
+			if _, ok := take(); !ok {
+				bad = append(bad, a)
+			}
+		default:
+			bad = append(bad, a)
+		}
+	}
+	if len(bad) > 0 {
+		return "", "", "", fail("orca agent launch cannot pass these arguments to the agent: %s", strings.Join(bad, " "))
+	}
+	if effort != "" && model == "" {
+		return "", "", "", fail("orca agent launch takes --effort only with --model")
+	}
+	return model, effort, prompt, nil
 }
 
 // orcaLaunchHandle reads the terminal handle of a launch. The reply names the
@@ -583,7 +636,7 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 	if err != nil {
 		return AgentStatus{}, err
 	}
-	rec, _ := readOrcaIdentity(string(h))
+	rec, ok := readOrcaIdentity(string(h))
 	if row, ok := findOrcaAgent(rows, live, rec.PaneKey); ok {
 		return orcaStatus(row), nil
 	}
@@ -592,6 +645,10 @@ func (b *orcaBackend) Status(ctx context.Context, h Handle) (AgentStatus, error)
 	// the match is exact even when several agents share a worktree.
 	pk := b.recordedPaneKey(ctx, live)
 	if pk != "" {
+		if ok && rec.PaneKey == "" {
+			rec.PaneKey = pk
+			_ = writeOrcaIdentity(rec)
+		}
 		for _, w := range rows {
 			for _, a := range w.Agents {
 				if a.PaneKey == pk {
@@ -692,15 +749,52 @@ func (b *orcaBackend) Wait(ctx context.Context, h Handle, until []State, timeout
 	}
 }
 
+// List keys each agent by its terminal handle, the key Status and Close take. A
+// ps row carries only a pane key, so it is matched to a terminal through the
+// identity files and then through each worktree terminal's recordedPaneKey. A
+// row with no known terminal is listed under its pane key.
 func (b *orcaBackend) List(ctx context.Context) ([]AgentInfo, error) {
 	rows, err := b.ps(ctx)
 	if err != nil {
 		return nil, err
 	}
+	byKey := map[string]string{}
+	for _, rec := range orcaIdentities() {
+		if rec.PaneKey != "" {
+			byKey[rec.PaneKey] = rec.Handle
+		}
+	}
+	var terms []orcaTerminal
+	termsRead := false
 	var out []AgentInfo
 	for _, w := range rows {
 		for _, a := range w.Agents {
-			h := cmp3(a.Handle, a.PaneKey)
+			h := a.Handle
+			if h == "" && a.PaneKey != "" {
+				h = byKey[a.PaneKey]
+				if h == "" {
+					if !termsRead {
+						terms, _ = b.terminals(ctx)
+						termsRead = true
+					}
+					for _, t := range terms {
+						if t.WorktreePath != w.Path || t.Handle == "" {
+							continue
+						}
+						pk := cmp3(t.PaneKey, b.recordedPaneKey(ctx, Handle(t.Handle)))
+						if pk == "" {
+							continue
+						}
+						byKey[pk] = t.Handle
+						if rec, ok := readOrcaIdentity(t.Handle); ok && rec.PaneKey == "" {
+							rec.PaneKey = pk
+							_ = writeOrcaIdentity(rec)
+						}
+					}
+					h = byKey[a.PaneKey]
+				}
+			}
+			h = cmp3(h, a.PaneKey)
 			if h == "" { // nothing to address it by
 				continue
 			}
@@ -711,6 +805,55 @@ func (b *orcaBackend) List(ctx context.Context) ([]AgentInfo, error) {
 		}
 	}
 	return out, nil
+}
+
+// orcaIdentities reads every identity file.
+func orcaIdentities() []orcaIdentityRecord {
+	files, _ := filepath.Glob(filepath.Join(orcaIdentityDir(), "*.json"))
+	var out []orcaIdentityRecord
+	for _, f := range files {
+		var rec orcaIdentityRecord
+		if b, err := os.ReadFile(f); err == nil && json.Unmarshal(b, &rec) == nil && rec.Handle != "" {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// SelfEnv is the env recorded for the calling terminal's launch: found by
+// ORCA_TERMINAL_HANDLE, else by ORCA_PANE_KEY. Empty when nothing is recorded.
+func (*orcaBackend) SelfEnv(ctx context.Context) (map[string]string, error) {
+	rec, ok := readOrcaIdentity(os.Getenv("ORCA_TERMINAL_HANDLE"))
+	if pk := os.Getenv("ORCA_PANE_KEY"); !ok && pk != "" {
+		for _, r := range orcaIdentities() {
+			if r.PaneKey == pk {
+				rec, ok = r, true
+				break
+			}
+		}
+	}
+	env := map[string]string{}
+	if ok {
+		maps.Copy(env, rec.Env)
+	}
+	return env, nil
+}
+
+// orcaTerminalGone says `terminal list` no longer has h. A failed list is not
+// proof either way, so it reports false.
+func orcaTerminalGone(ctx context.Context, h Handle) bool {
+	gone, err := newOrcaBackend().Gone(ctx, h)
+	return err == nil && gone
+}
+
+// Gone reports whether the terminal has left `terminal list`; Close polls it.
+func (b *orcaBackend) Gone(ctx context.Context, h Handle) (bool, error) {
+	terms, err := b.terminals(ctx)
+	if err != nil {
+		return false, err
+	}
+	cur := b.current(h)
+	return !slices.ContainsFunc(terms, func(t orcaTerminal) bool { return Handle(t.Handle) == cur || Handle(t.Handle) == h }), nil
 }
 
 // worktree.manage

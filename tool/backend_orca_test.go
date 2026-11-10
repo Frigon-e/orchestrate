@@ -29,6 +29,8 @@ type orcaFakeTerm struct {
 	Reason string   `json:"reason"`
 	Out    []string `json:"out"`
 	Exited bool     `json:"exited"`
+	// Unlisted hides the terminal from `terminal list` (its ps row stays).
+	Unlisted bool `json:"unlisted"`
 }
 
 type orcaFakeTree struct {
@@ -130,9 +132,18 @@ func fakeOrca(path string, args []string) int {
 	case "terminal list":
 		var rows []map[string]any
 		for _, t := range st.Terms {
-			rows = append(rows, map[string]any{"handle": t.Handle, "paneKey": t.PaneKey, "title": t.Title, "status": "running"})
+			if t.Unlisted {
+				continue
+			}
+			rows = append(rows, map[string]any{"handle": t.Handle, "worktreePath": t.Worktree, "tabId": "tab", "leafId": "leaf", "title": t.Title})
 		}
 		return reply(map[string]any{"terminals": rows})
+	case "terminal show":
+		t, code := term()
+		if t == nil {
+			return code
+		}
+		return reply(map[string]any{"terminal": map[string]any{"handle": t.Handle, "title": t.Title}, "recordedPaneKey": t.PaneKey})
 	case "terminal read":
 		t, code := term()
 		if t == nil {
@@ -182,7 +193,7 @@ func fakeOrca(path string, args []string) int {
 				if t.Worktree != w.Path || t.Agent == "" {
 					continue
 				}
-				a := map[string]any{"state": t.State, "agentType": t.Agent, "paneKey": t.PaneKey, "terminalHandle": t.Handle, "title": t.Title}
+				a := map[string]any{"state": t.State, "agentType": t.Agent, "paneKey": t.PaneKey, "title": t.Title}
 				switch t.Wait {
 				case "null":
 					a["agentWait"] = nil
@@ -889,5 +900,136 @@ func TestOrcaWorktreeRowHandleReadsWorktreeID(t *testing.T) {
 	}
 	if got := r.handle(); got != "r::/p" {
 		t.Fatalf("handle = %q, want r::/p", got)
+	}
+}
+
+func TestOrcaListKeysAgentsByTerminalHandle(t *testing.T) {
+	h := newOrcaHarness(t)
+	b := newOrcaBackend()
+	id := h.startAgent(b)
+	// Drop the identity file so List must find the terminal through terminal show.
+	if err := os.Remove(orcaIdentityPath(string(id.Handle))); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := b.List(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Handle != id.Handle {
+		t.Fatalf("List = %+v, %v; want one row keyed by %s", rows, err, id.Handle)
+	}
+}
+
+func TestOrcaListKeepsPaneKeyWhenTerminalUnknown(t *testing.T) {
+	h := newOrcaHarness(t)
+	b := newOrcaBackend()
+	id := h.startAgent(b)
+	_ = os.Remove(orcaIdentityPath(string(id.Handle)))
+	h.edit(func(st *orcaFakeState) { st.Terms[0].Unlisted = true })
+	rows, err := b.List(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Handle != "pane:1" {
+		t.Fatalf("List = %+v, %v; want one row keyed by its pane key", rows, err)
+	}
+}
+
+func TestOrcaStartStoresPaneKey(t *testing.T) {
+	h := newOrcaHarness(t)
+	id := h.startAgent(newOrcaBackend())
+	rec, ok := readOrcaIdentity(string(id.Handle))
+	if !ok || rec.PaneKey != "pane:1" {
+		t.Fatalf("identity = %+v, %v; want pane key pane:1", rec, ok)
+	}
+}
+
+func TestOrcaStatusFillsMissingPaneKey(t *testing.T) {
+	h := newOrcaHarness(t)
+	b := newOrcaBackend()
+	id := h.startAgent(b)
+	rec, _ := readOrcaIdentity(string(id.Handle))
+	rec.PaneKey = ""
+	if err := writeOrcaIdentity(rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Status(context.Background(), id.Handle); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := readOrcaIdentity(string(id.Handle)); rec.PaneKey != "pane:1" {
+		t.Errorf("pane key after Status = %q, want pane:1", rec.PaneKey)
+	}
+}
+
+func TestOrcaStartLiftsModelAndEffortFromArgs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--model", "opus", "--effort", "high", "--session-id", "abc"},
+		{"--model=opus", "--effort=high"},
+	} {
+		h := newOrcaHarness(t)
+		wt := filepath.Join(h.tmp, "wt")
+		h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
+		if _, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: wt, Prompt: "go", Args: args}); err != nil {
+			t.Fatal(err)
+		}
+		j := strings.Join(h.calls("agent launch")[0], " ")
+		if !strings.Contains(j, "--model opus --effort high") || strings.Contains(j, "session-id") {
+			t.Errorf("args %v: launch = %q", args, j)
+		}
+	}
+	// An explicit Model wins over the one in Args.
+	h := newOrcaHarness(t)
+	wt := filepath.Join(h.tmp, "wt")
+	h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
+	if _, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: wt, Model: "sonnet", Args: []string{"--model", "opus"}}); err != nil {
+		t.Fatal(err)
+	}
+	if j := strings.Join(h.calls("agent launch")[0], " "); !strings.Contains(j, "--model sonnet") || strings.Contains(j, "opus") {
+		t.Errorf("launch = %q", j)
+	}
+}
+
+func TestOrcaStartRejectsUnsupportedArgs(t *testing.T) {
+	h := newOrcaHarness(t)
+	_, err := newOrcaBackend().Start(context.Background(), Spec{Agent: "claude", Cwd: h.tmp,
+		Args: []string{"--model", "opus", "--permission-mode", "dontAsk", "--tools", "x"}})
+	if err == nil || !strings.Contains(err.Error(), "--permission-mode") || !strings.Contains(err.Error(), "--tools") {
+		t.Fatalf("err = %v, want it to name the unsupported args", err)
+	}
+	if n := len(h.calls("agent launch")); n != 0 {
+		t.Errorf("launch ran %d times despite the error", n)
+	}
+}
+
+func TestOrcaSelfEnvReturnsRecordedEnv(t *testing.T) {
+	h := newOrcaHarness(t)
+	b := newOrcaBackend()
+	wt := filepath.Join(h.tmp, "wt")
+	h.edit(func(st *orcaFakeState) { st.Trees = append(st.Trees, &orcaFakeTree{ID: "r::" + wt, Path: wt}) })
+	id, err := b.Start(context.Background(), Spec{Agent: "claude", Cwd: wt, Env: map[string]string{"ORCH_ROLE": "lead"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORCA_TERMINAL_HANDLE", string(id.Handle))
+	if env, err := b.SelfEnv(context.Background()); err != nil || env["ORCH_ROLE"] != "lead" {
+		t.Errorf("by handle: %v, %v", env, err)
+	}
+	t.Setenv("ORCA_TERMINAL_HANDLE", "")
+	t.Setenv("ORCA_PANE_KEY", "pane:1")
+	if env, _ := b.SelfEnv(context.Background()); env["ORCH_ROLE"] != "lead" {
+		t.Errorf("by pane key: %v", env)
+	}
+	t.Setenv("ORCA_PANE_KEY", "nope")
+	if env, err := b.SelfEnv(context.Background()); err != nil || len(env) != 0 {
+		t.Errorf("unknown = %v, %v; want empty", env, err)
+	}
+}
+
+func TestOrcaGoneAfterClose(t *testing.T) {
+	h := newOrcaHarness(t)
+	b := newOrcaBackend()
+	id := h.startAgent(b)
+	if g, err := b.Gone(context.Background(), id.Handle); err != nil || g {
+		t.Fatalf("Gone before close = %v, %v", g, err)
+	}
+	if err := b.Close(context.Background(), id.Handle); err != nil {
+		t.Fatal(err)
+	}
+	if !orcaTerminalGone(context.Background(), id.Handle) {
+		t.Error("orcaTerminalGone = false after close")
 	}
 }
