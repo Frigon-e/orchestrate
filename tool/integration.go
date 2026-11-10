@@ -89,7 +89,7 @@ func (a *app) integrate(s site, dir, id string, fm map[string]string, candidate 
 		return err
 	}
 	return withFlock(filepath.Join(idir, "lock"), func() error {
-		if err := unchangedCandidate(worktreePath(dir, id), candidate); err != nil {
+		if err := unchangedCandidate(leadWorktree(dir, id), candidate); err != nil {
 			return fail("candidate changed before integration: %v", err)
 		}
 		tip, err := integrationTip(s.repo, branch)
@@ -220,7 +220,7 @@ func requireMerged(s site, dir, id string, fm map[string]string) error {
 			return fail("dependency %s is done but not merged into %s: run orch verify %s", dep, branch, dep)
 		}
 	}
-	if _, err := os.Stat(worktreePath(dir, id)); err == nil {
+	if _, err := os.Stat(leadWorktree(dir, id)); err == nil {
 		return nil // a respawned lead keeps the base its worktree was cut from
 	}
 	short, err := git(s.repo, "rev-parse", "--short=12", tip)

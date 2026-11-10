@@ -201,7 +201,7 @@ func resolveWakeOutcomes(s site) error {
 		}
 		fp, _ := r.Meta["fingerprint"].(string)
 		changed := false
-		if cur := worktreeFingerprint(worktreePath(dir, r.Subject)); cur != "" && cur != fp {
+		if cur := worktreeFingerprint(leadWorktree(dir, r.Subject)); cur != "" && cur != fp {
 			changed = true
 		}
 		out := map[string]any{

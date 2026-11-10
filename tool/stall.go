@@ -212,7 +212,7 @@ func (a *app) stallCheck(ol openLead, st *watchSeen, ag herdrAgent, cfg config, 
 	id := ol.lead.ID
 	if now-st.LastSample >= stallSampleSecs || st.FPSince == 0 {
 		st.LastSample = now
-		if fp := worktreeFingerprint(worktreePath(ol.dir, id)); fp != st.FP || st.FPSince == 0 {
+		if fp := worktreeFingerprint(leadWorktree(ol.dir, id)); fp != st.FP || st.FPSince == 0 {
 			st.FP, st.FPSince = fp, now
 			st.StallAlerted, st.LoopAlerted = false, ""
 		}

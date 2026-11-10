@@ -243,7 +243,7 @@ func cmdDoctor(a *app, args []string) error {
 			add("warn", id, "reported done with a decision still open", "orch status, then resolve it with orch send --resolve <key>")
 		}
 		if fm["kind"] == "ship" && lastState(leadEntries(readStatus(ol.dir))) == "done" {
-			if out, err := git(worktreePath(ol.dir, id), "status", "--porcelain"); err == nil && out != "" {
+			if out, err := git(leadWorktree(ol.dir, id), "status", "--porcelain"); err == nil && out != "" {
 				add("warn", id, "done, but its worktree has uncommitted changes", "orch send "+id+" \"commit or discard your changes\"")
 			}
 		}

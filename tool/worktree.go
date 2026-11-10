@@ -74,7 +74,6 @@ func (a *app) placeShip(s site, dir, id, base string, prev *lead, env map[string
 	spec := WorktreeSpec{Name: id, Branch: branch, Base: base, Repo: s.repo, Path: wt}
 	var made Worktree
 	if fresh {
-		spec.Path = worktreePath(dir, id)
 		if _, err := os.Lstat(spec.Path); err == nil {
 			return "", "", "", "", fail("worktree path %s already exists; remove or move it before spawning %s", spec.Path, id)
 		}
