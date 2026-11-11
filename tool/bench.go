@@ -1144,7 +1144,7 @@ func cmdBench(a *app, args []string) error {
 	}
 	switch args[0] {
 	case "--help", "-h":
-		fmt.Fprintln(a.out, "bench: record/import snapshots; key add/rescore; spec add; list/show; compare/report; verify/migrate; export/import-archive; readme. Use orch bench <command> --help for flags.")
+		fmt.Fprintln(a.out, "bench: record/import snapshots; run (replay eval); key add/rescore; spec add; list/show; compare/report; verify/migrate; export/import-archive; readme. Use orch bench <command> --help for flags.")
 		return nil
 	case "record", "import":
 		fs := a.flags("bench " + args[0])
@@ -1179,6 +1179,8 @@ func cmdBench(a *app, args []string) error {
 		}
 		fmt.Fprintf(a.out, "bench: %s/%s (recorded, or already present)\n", r.Suite, r.ID)
 		return nil
+	case "run":
+		return cmdBenchRun(a, args[1:])
 	case "list":
 		return cmdBenchList(a, args[1:])
 	case "show":
@@ -1243,7 +1245,7 @@ func cmdBench(a *app, args []string) error {
 	case "import-archive":
 		return cmdBenchImportArchive(a, args[1:])
 	}
-	return fail("unknown bench command %q; use record, import, list, show, compare, key, spec, report, verify, migrate, export, import-archive or readme", args[0])
+	return fail("unknown bench command %q; use record, import, run, list, show, compare, key, spec, report, verify, migrate, export, import-archive or readme", args[0])
 }
 func cmdBenchKey(a *app, args []string) error {
 	if len(args) == 0 {
@@ -1416,6 +1418,8 @@ checklist, dossiers and shadow rows. Original sessions are paths only and can va
   The first run initializes a suite definition. Later definition changes go to
   reports/suite-proposals/<sha256>.toml; the existing suite.toml stays byte-identical.
   Every run also retains its own arm definition. Reports never apply proposals.
+- <suite>/tasks.toml: replay tasks ([[task]] id, commit, hidden, check, setup, prompt)
+  for orch bench run; arms with kind = "replay" in suite.toml configure the agent.
 - <suite>/keys/key-N.json: normalized versioned key and class counts.
   key-N.original.json preserves the input; key-N.md preserves provenance and prompt.
 - <suite>/runs/YYYYMMDD-HHMM-label/run.json: schema_version 2. Build, inputs,
@@ -1448,6 +1452,9 @@ checklist, dossiers and shadow rows. Original sessions are paths only and can va
   No overlap fuzzy match or model calls. Old scores stay labeled legacy.
 - History: orch bench report crm-v1-reuse --runs run3,arm1 --since 2026-01-01 --key 2 --baseline run3 --md --save
   --json returns the report data. Without --save, print to stdout.
+- Replay: orch bench run my-suite --tasks a,b --arms x,y --repeats 2 --parallel 2
+  Replays past commits of the suite repo as agent tasks (kind "replay" runs).
+  --dry-run validates and prints each claude command; --summary prints stored results.
 - Create this guide if missing: orch bench readme. An existing README stays byte-identical.
 
 Gate integration: orch gate spec.md --only group:api --experiment arm1 --bench-suite crm-v1-reuse
@@ -1458,5 +1465,5 @@ older keys remain available. Classes with fewer than 20 items need more evidence
 A config diff changing multiple factors is confounded, not a causal experiment.
 Exact historical commands/builds that were not captured remain unknown.
 
-Out of scope: bench run (executing suite arms), and a cross-system usage ledger.
+Out of scope: a cross-system usage ledger.
 `
