@@ -46,6 +46,15 @@ var lspHelps = map[string]lspHelp{
 	"hover": {"orch lsp hover <path:line:col> [--json]",
 		"Type and doc at a position (line and column are 1-based).",
 		[]string{"orch lsp hover pay/pay.go:7:18"}},
+	"warm": {"orch lsp warm [path]",
+		"Starts the daemon if needed and opens the language servers of the repo holding path (default: the current directory), without waiting for them to index.",
+		[]string{"orch lsp warm", "orch lsp warm web/"}},
+	"status": {"orch lsp status [--json]",
+		"Daemon pid and memory, live repos with their servers (pid, RSS), idle time and last sync.",
+		[]string{"orch lsp status", "orch lsp status --json"}},
+	"stop": {"orch lsp stop",
+		"Stops the daemon and its servers.",
+		[]string{"orch lsp stop"}},
 }
 
 const lspHomeText = `orch lsp - symbol questions by name, answered by the language servers (read-only)
@@ -56,7 +65,12 @@ const lspHomeText = `orch lsp - symbol questions by name, answered by the langua
   orch lsp impls Name [--limit N]    implementations of an interface or method, default limit 30
   orch lsp symbols path/to/file      outline of the file: kind name line
   orch lsp hover path:line:col       type and doc at a position (1-based)
+  orch lsp warm [path]               start the daemon and open the servers of path's repo (default cwd), no wait
+  orch lsp status [--json]           daemon, live repos, servers with pid and RSS, idle time, last sync
+  orch lsp stop                      stop the daemon
 
+Calls are answered by warm language servers kept by a per-user daemon (started on first use, exits after
+30 idle minutes); ORCH_LSP_DAEMON=off answers in the calling process, one fresh server per call.
 Name is Name, pkg.Name or Type.Method. An ambiguous name lists its candidates; qualify it.
 Several names for def, refs, callers or impls are answered under "## Name" headers.
 --json prints the same data as JSON. Exit 1: no such symbol. Exit 2: usage error or no language server.
@@ -98,6 +112,25 @@ func lspPrintHelp(a *app, verb string) {
 }
 
 func cmdLsp(a *app, args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "serve":
+			return cmdLspServe(a, args[1:])
+		case "warm", "status", "stop":
+			return cmdLspOp(a, args)
+		}
+	}
+	if lspWantsDaemon(args) {
+		if err, ok := lspViaDaemon(a, args); ok {
+			return err
+		}
+	}
+	return lspExec(a, args, nil)
+}
+
+// lspExec runs a verb in this process. With a pool (the daemon) the servers
+// come from it and outlive the call; without one each call starts its own.
+func lspExec(a *app, args []string, pool *lspPool) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		lspPrintHelp(a, "")
 		return nil
@@ -138,8 +171,11 @@ func cmdLsp(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	r := &lspRun{e: e, sessions: map[string]*lspSession{}, whys: map[string]string{}}
+	r := &lspRun{e: e, sessions: map[string]*lspSession{}, whys: map[string]string{}, pool: pool}
 	defer r.close()
+	if pool != nil {
+		pool.begin(e)
+	}
 	var answers []lspAnswer
 	switch verb {
 	case "symbols":
@@ -228,9 +264,13 @@ type lspRun struct {
 	e        *codeEnv
 	sessions map[string]*lspSession
 	whys     map[string]string
+	pool     *lspPool // the daemon's servers; nil when the call owns its servers
 }
 
 func (r *lspRun) close() {
+	if r.pool != nil {
+		return
+	}
 	for _, s := range r.sessions {
 		if s != nil {
 			s.c.close()
@@ -574,7 +614,13 @@ func (r *lspRun) sessionIn(l *langDef, dir string) (*lspSession, string) {
 	if s, ok := r.sessions[key]; ok {
 		return s, r.whys[key]
 	}
-	s, why := openServer(e.Code, serverFor(e, l), dir, []string{dir})
+	var s *lspSession
+	var why string
+	if r.pool != nil {
+		s, why = r.pool.session(e, l, dir)
+	} else {
+		s, why = openServer(e.Code, serverFor(e, l), dir, []string{dir})
+	}
 	r.sessions[key], r.whys[key] = s, why
 	return s, why
 }

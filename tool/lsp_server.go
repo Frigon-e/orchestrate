@@ -94,8 +94,13 @@ func (s stdServer) failed(tried []string, _ error) string {
 	return s.l.ID + " language server(s) " + strings.Join(tried, ", ") + " did not complete the handshake with references"
 }
 
-// goplsServer is the trusted gopls of the checkout, run as `gopls serve`.
-type goplsServer struct{ bin string }
+// goplsServer is the trusted gopls of the checkout, run as `gopls serve`, or,
+// inside the lsp daemon (remote), as a forwarder to the shared gopls daemon the
+// editor plugins use (`gopls -remote=auto`).
+type goplsServer struct {
+	bin    string
+	remote bool
+}
 
 func (s goplsServer) commands(string) ([]lspCmd, string) {
 	if s.bin == "" {
@@ -103,6 +108,9 @@ func (s goplsServer) commands(string) ([]lspCmd, string) {
 	}
 	if _, err := exec.LookPath(s.bin); err != nil {
 		return nil, s.bin + " was not found"
+	}
+	if s.remote {
+		return []lspCmd{{s.bin, []string{"-remote=auto", "-remote.listen.timeout=10m"}}}, ""
 	}
 	return []lspCmd{{s.bin, []string{"serve"}}}, ""
 }

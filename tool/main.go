@@ -175,7 +175,11 @@ func (a *app) run(args []string) int {
 			bridgeSelfEnv(context.Background(), b, os.LookupEnv, os.Setenv, warn)
 		}
 	}
-	err := fn(a, args[1:])
+	return a.report(fn(a, args[1:]))
+}
+
+// report prints the error of a command to stderr and returns its exit code.
+func (a *app) report(err error) int {
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
