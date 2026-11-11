@@ -56,8 +56,47 @@ func denySedInplace(line string) bool {
 		if (name == "sed" || name == "gsed") && inPlaceEdit(args) {
 			return true
 		}
-		if name == "perl" && anyOf(args, inPlace.MatchString) {
+		if name == "perl" && perlInPlace(args) {
 			return true
+		}
+	}
+	return false
+}
+
+// perlInPlace reports a -i among perl's own switches. A switch cluster is read
+// letter by letter: a letter that takes a value (-M, -I, -e ...) ends it, so
+// -MTime::HiRes or -Ilib/util is not -i. Switches end at -- or the script name.
+func perlInPlace(args []string) bool {
+	for k := 0; k < len(args); k++ {
+		a := args[k]
+		if a == "--" || len(a) < 2 || a[0] != '-' {
+			return false
+		}
+		for j := 1; j < len(a); j++ {
+			c := a[j]
+			if c == 'i' {
+				return true
+			}
+			if strings.IndexByte("eE", c) >= 0 {
+				if j == len(a)-1 {
+					k++ // the code is the next argument
+				}
+				break
+			}
+			if c == 'l' || c == '0' { // an optional number follows, then more switches
+				digits := "01234567"
+				if c == '0' && j+1 < len(a) && a[j+1] == 'x' {
+					digits = "0123456789abcdefABCDEF"
+					j++
+				}
+				for j+1 < len(a) && strings.IndexByte(digits, a[j+1]) >= 0 {
+					j++
+				}
+				continue
+			}
+			if strings.IndexByte("MmIxCdDV", c) >= 0 {
+				break
+			}
 		}
 	}
 	return false
