@@ -609,7 +609,10 @@ type tsChoice struct{ bin, why string }
 var (
 	tsChoiceMu   sync.Mutex
 	tsChoiceMemo = map[string]tsChoice{}
+	tsChoiceAt   time.Time // when tsChoiceMemo was last emptied
 )
+
+const tsChoiceTTL = time.Minute
 
 func tsServerChoiceUncached(code string) (string, string) {
 	if p := os.Getenv("ORCH_TSLS"); p != "" {
@@ -819,13 +822,23 @@ func runTSServer(jobs []tsJob, facts map[tsJob]*symFact, cacheDir, code string, 
 	}
 	sort.Strings(others)
 	allRoots := append(slices.Clone(rootList), others...)
-	sess, why := openServer(code, tsServer{}, allRoots[0], allRoots)
+	var sess *lspSession
+	pooled := false
+	if p := activeLspPool.Load(); p != nil {
+		// Inside the lsp daemon the server outlives the call.
+		sess, why = p.tsSession(code, allRoots...)
+		pooled = true
+	} else {
+		sess, why = openServer(code, tsServer{}, allRoots[0], allRoots)
+	}
 	if sess == nil {
 		return "no TypeScript facts: " + why
 	}
 	c := sess.c
 	note := ""
-	defer c.close()
+	if !pooled {
+		defer c.close()
+	}
 	// A project answers with empty results until it has loaded. Rather than
 	// asking again and again, an empty answer makes the server's projects prove
 	// they loaded (their first file has an outline); after that an empty answer

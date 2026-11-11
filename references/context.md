@@ -9,7 +9,12 @@ Agents look code up in this order, most specific tool first:
 2. Known symbol: `orch lsp def|refs|callers|impls <Name>` (`Name`, `pkg.Name` or
    `Type.Method`), `orch lsp symbols <file>` for an outline and `orch lsp hover
    <path:line:col>` for a type. Exit 1 means not found and 2 means no language
-   server for that language; `orch lsp --help` lists the flags.
+   server for that language; `orch lsp --help` lists the flags. Calls are
+   answered by warm language servers kept by a per-user daemon (`orch lsp
+   serve`, started on first use, socket `<cache>/lsp/daemon.sock`, exits after 30
+   idle minutes); `orch lsp warm [path]`, `status` and `stop` manage it, and
+   `ORCH_LSP_DAEMON=off` answers in the calling process instead. The daemon
+   tells its servers about dirty files and HEAD changes before each answer.
 3. Exact text: `rg` (`rg -n -w`, `-F`, `-g 'GLOB'`).
 4. File names: `fd`.
 5. Read with the native read tool (Pi `read`, Claude `Read`), using offset and

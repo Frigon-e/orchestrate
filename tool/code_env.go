@@ -71,7 +71,12 @@ type codeEnv struct {
 
 func newCodeEnv(code string, o codeOpts) *codeEnv {
 	tsChoiceMu.Lock()
-	tsChoiceMemo = map[string]tsChoice{}
+	// The lsp daemon keeps the answer for a minute: finding the server costs
+	// about 400 ms on a large monorepo and would be paid on every call.
+	if activeLspPool.Load() == nil || time.Since(tsChoiceAt) > tsChoiceTTL {
+		tsChoiceMemo = map[string]tsChoice{}
+		tsChoiceAt = time.Now()
+	}
 	tsChoiceMu.Unlock()
 	applyCtxLangs(o.Cfg.CtxLangs)
 	e := &codeEnv{Code: code, ReadOnly: ctxReadOnly(), JB: jbcontextBin(), Gopls: goplsBin(), RG: envOr("ORCH_RG", "rg"), Policy: o.Cfg.CtxIndex,
