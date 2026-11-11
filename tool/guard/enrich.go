@@ -23,7 +23,7 @@ import (
 // Grep tool) a PostToolUse hook appends a few language-server facts the search
 // output does not already show. Every failure is silent: no error, no block.
 
-const enrichBudgetDefault = 800 * time.Millisecond
+const enrichBudgetDefault = 1500 * time.Millisecond
 
 var (
 	enrichStrip  = strings.NewReplacer(`\b`, "", `\<`, "", `\>`, "")

@@ -82,7 +82,9 @@ func homePath(p string) string {
 	return p
 }
 
-// docLine is the first line of the comment block right above line ln (1-based).
+// docLine is the first sentence of the comment block right above line ln
+// (1-based). Wrapped comment lines are joined until the sentence ends or the
+// paragraph does, so the summary is not cut at the source line break.
 func docLine(lines []string, ln int) string {
 	top := -1
 	for i := ln - 2; i >= 0; i-- {
@@ -96,15 +98,38 @@ func docLine(lines []string, ln int) string {
 	if top < 0 {
 		return ""
 	}
+	var parts []string
 	for i := top; i < ln-1; i++ {
 		t := strings.TrimSpace(lines[i])
 		t = strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(t, "/**"), "/*"), "/*"))
 		t = strings.TrimSpace(strings.TrimSuffix(t, "*/"))
-		if t != "" && t != "*" {
-			return short(t, 140)
+		if t == "" || t == "*" {
+			if len(parts) > 0 {
+				break // end of the first paragraph
+			}
+			continue
+		}
+		parts = append(parts, t)
+		if s := strings.Join(parts, " "); sentenceEnd(s) >= 0 || len(s) >= 160 {
+			break
 		}
 	}
-	return ""
+	s := strings.Join(parts, " ")
+	if i := sentenceEnd(s); i >= 0 {
+		s = s[:i+1]
+	}
+	return short(s, 160)
+}
+
+// sentenceEnd is the index of the period that ends the first sentence of s,
+// or -1. A period counts when it ends s or is followed by a space.
+func sentenceEnd(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' && (i == len(s)-1 || s[i+1] == ' ') {
+			return i
+		}
+	}
+	return -1
 }
 
 func splitWhere(where string) (string, int) {

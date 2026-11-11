@@ -137,6 +137,26 @@ func TestLspNameIndexSkipsTheReceiver(t *testing.T) {
 	}
 }
 
+func TestLspDocIsTheFirstSentenceAcrossWrappedLines(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"wrapped", "// Syncer applies node documents for one enrolled node. It is not safe for\n// concurrent use.\ntype Syncer struct{}", "Syncer applies node documents for one enrolled node."},
+		{"sentence spans lines", "// capacityHealth is a node's health for the capacity export: online only when\n// the last contact is fresh. Stale nodes are offline.\nfunc capacityHealth()", "capacityHealth is a node's health for the capacity export: online only when the last contact is fresh."},
+		{"no period stops at the paragraph", "// Greet asks s to speak\n//\n// More detail.\nfunc Greet()", "Greet asks s to speak"},
+		{"dotted name is not an end", "// Run calls pkg.Do and exits.\nfunc Run()", "Run calls pkg.Do and exits."},
+		{"block comment", "/**\n * Load reads the file. Then parses it.\n */\nfunction load()", "Load reads the file."},
+		{"no comment", "x := 1\nfunc F()", ""},
+	} {
+		lines := strings.Split(tc.src, "\n")
+		if got := docLine(lines, len(lines)); got != tc.want {
+			t.Errorf("%s: docLine = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestLspHoverText(t *testing.T) {
 	got := hoverText(json.RawMessage(`{"contents":{"kind":"markdown","value":"` + "```go\\nfunc Greet(s Speaker) string\\n```\\n\\nGreet speaks." + `"}}`))
 	if got != "func Greet(s Speaker) string\nGreet speaks." {
