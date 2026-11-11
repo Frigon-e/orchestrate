@@ -178,7 +178,12 @@ func TestLspDaemonTypeScriptSeesEdits(t *testing.T) {
 	h.gitIn(repo, "add", ".")
 	h.gitIn(repo, "commit", "-q", "-m", "ts")
 	t.Setenv("ORCH_LSP_DAEMON", "off")
+	// A declaration scan can find barFn without a server; only a running
+	// server answers "no such symbol" (exit 1) for a missing name.
 	if r := runLspIn(repo, "def", "barFn"); r.code != 0 {
+		t.Skipf("this tsc does not run as a language server here: %+v", r)
+	}
+	if r := runLspIn(repo, "def", "absentProbeFn"); r.code != 1 {
 		t.Skipf("this tsc does not run as a language server here: %+v", r)
 	}
 	t.Setenv("ORCH_LSP_DAEMON", "")
