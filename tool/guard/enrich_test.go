@@ -142,6 +142,9 @@ func TestEnrichNamesAreTheSymbolsOfTheSearchPattern(t *testing.T) {
 		`go test ./... | grep capacityHealth`:          "",
 		`cat out.txt | rg capacityHealth`:              "",
 		`grep capacityHealth notes.txt`:                "",
+		`grep -n "^capacityHealth" ../go.mod`:          "",
+		`rg capacityHealth go.sum schema.sql`:          "",
+		`rg capacityHealth app.go schema.sql`:          "capacityHealth",
 		`cd internal && rg -n capacityHealth . | head`: "capacityHealth",
 	} {
 		var names []string

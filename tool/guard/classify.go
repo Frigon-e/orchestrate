@@ -12,7 +12,9 @@ var (
 	jbValue  = set("--project-path", "--git-remote-url", "--limit", "--revision", "-p", "--path-filter", "--branch")
 	lspValue = set("--limit")
 
-	docExtensions = set("md", "txt", "json", "yaml", "yml", "toml")
+	// Text and data files: a name searched only in these is not a code symbol.
+	// go.mod, go.sum and go.work count by their extension.
+	docExtensions = set("md", "txt", "json", "yaml", "yml", "toml", "mod", "sum", "work", "lock", "sql", "csv", "ini", "cfg", "conf", "env", "log", "xml")
 	docTypes      = union(docExtensions, set("markdown"))
 
 	ident    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)

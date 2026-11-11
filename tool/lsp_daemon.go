@@ -605,12 +605,24 @@ func (d *lspDaemon) warm(a *app, req lspReq) error {
 	fmt.Fprintf(a.out, "warming %s (%s)\n", e.Code, strings.Join(names, ", "))
 	go func() {
 		d.runMu.Lock()
-		defer d.runMu.Unlock()
 		applyLspEnv(req.Env)
 		activeLspPool.Store(d.pool)
-		defer activeLspPool.Store(nil)
+		var started []*lspSession
 		for _, j := range jobs {
-			d.pool.session(e, j.l, j.dir)
+			if s, _ := d.pool.session(e, j.l, j.dir); s != nil {
+				started = append(started, s)
+			}
+		}
+		activeLspPool.Store(nil)
+		d.runMu.Unlock()
+		// A started server has not loaded the workspace yet (gopls loads its
+		// packages on the first query, seconds on a large repo), so one
+		// throwaway symbol query makes the first real lookup fast. It runs
+		// outside runMu so lookups in other roots are not held up.
+		for _, s := range started {
+			if s.caps.WS {
+				go s.c.call("workspace/symbol", map[string]any{"query": "orchWarmPrime"}, 2*time.Minute)
+			}
 		}
 	}()
 	return nil
