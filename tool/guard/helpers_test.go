@@ -85,7 +85,8 @@ func situationPaths(t testing.TB, f toolguardFile) map[string]string {
 }
 
 // guardEnv is every variable the guards read; a run sets the ones it names and clears the rest.
-var guardEnv = []string{"ORCH_TOOL_GUARD", "ORCH_TOOL_GUARD_SKIP", "ORCH_TOOL_GUARD_STATE_DIR", "ORCH_LOOKUP_COACH", "ORCH_LOOKUP_LOG"}
+var guardEnv = []string{"ORCH_TOOL_GUARD", "ORCH_TOOL_GUARD_SKIP", "ORCH_TOOL_GUARD_STATE_DIR", "ORCH_LOOKUP_COACH", "ORCH_LOOKUP_LOG",
+	"ORCH_LSP_ENRICH", "ORCH_CACHE_DIR", "ORCH_BIN", "ORCH_LSP_ENRICH_BUDGET_MS"}
 
 // A runner runs one hook event through some implementation of the guards.
 type runner interface {
@@ -120,8 +121,7 @@ func (inProc) pre(t *testing.T, payload []byte, pathDir string, env map[string]s
 }
 
 func (inProc) coach(t *testing.T, payload []byte, stateDir string, env map[string]string) (int, string) {
-	// The shared coach cases expect concept-first, which deny-search-first replaces.
-	e := map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": stateDir, "ORCH_TOOL_GUARD_SKIP": "search-first"}
+	e := map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": stateDir, "ORCH_LSP_ENRICH": "off"}
 	for k, v := range env {
 		e[k] = v
 	}
@@ -186,7 +186,7 @@ func (goBinary) pre(t *testing.T, payload []byte, pathDir string, env map[string
 }
 
 func (goBinary) coach(t *testing.T, payload []byte, stateDir string, env map[string]string) (int, string) {
-	e := map[string]string{"ORCH_TOOL_GUARD_SKIP": "search-first"}
+	e := map[string]string{"ORCH_LSP_ENRICH": "off"}
 	for k, v := range env {
 		e[k] = v
 	}

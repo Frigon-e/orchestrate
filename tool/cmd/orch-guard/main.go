@@ -2,7 +2,9 @@
 //
 // For Claude Code, `pre` handles a PreToolUse event (the deny rules and
 // deny-big-read) and `coach` handles PostToolUse, PostToolUseFailure and
-// UserPromptSubmit (the lookup log and reminders). A block is exit 2 with the
+// UserPromptSubmit (the lookup log, reminders and the language-server facts
+// appended to a symbol search). `enrich` prints only those facts for one
+// PostToolUse event. A block is exit 2 with the
 // reason on stderr; anything else exits 0.
 //
 // With --harness pi the same two modes take the JSON request of the pi
@@ -32,9 +34,18 @@ func main() {
 		fmt.Println(fingerprint)
 		return
 	}
+	if len(args) == 1 && args[0] == "enrich" {
+		// One PostToolUse event in, the language-server facts out (nothing when silent).
+		if data, err := io.ReadAll(os.Stdin); err == nil {
+			if ev, ok := guard.ParseEvent(data); ok {
+				guard.EnrichOnly(ev, os.Stdout)
+			}
+		}
+		return
+	}
 	pi := len(args) == 3 && args[1] == "--harness" && args[2] == "pi"
 	if (len(args) != 1 && !pi) || (args[0] != "pre" && args[0] != "coach") {
-		fmt.Fprintln(os.Stderr, "usage: orch-guard pre|coach [--harness pi] < event.json, or orch-guard --version")
+		fmt.Fprintln(os.Stderr, "usage: orch-guard pre|coach [--harness pi] < event.json, orch-guard enrich < event.json, or orch-guard --version")
 		os.Exit(1)
 	}
 	code := 0

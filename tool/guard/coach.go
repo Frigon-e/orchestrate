@@ -53,12 +53,9 @@ type State struct {
 	BlocksInRow      int    `json:"blocks_in_row,omitempty"`
 	FallbackReminded bool   `json:"fallback_reminded,omitempty"`
 	Open             []Open `json:"open,omitempty"`
-	// deny-search-first: Prompt+1 of the window it last blocked in, and the repos
-	// jbcontext has indexed (the probe result, false included).
-	SearchFirstPrompt int             `json:"search_first_prompt,omitempty"`
-	JBIndexed         map[string]bool `json:"jb_indexed,omitempty"`
-	// SearchFirstWaited is Prompt+1 of the window that already waited for a sibling lookup.
-	SearchFirstWaited int `json:"search_first_waited,omitempty"`
+	// Enriched maps a symbol name already enriched with language-server facts to
+	// the dirty-file fingerprint it was enriched at (see enrich.go).
+	Enriched map[string]string `json:"enriched,omitempty"`
 }
 
 // Turn is one assistant message and how many lookups it made: nr non-read, rd reads.
@@ -74,16 +71,15 @@ func isGood(tool string) bool   { return tool == "jbcontext" || strings.HasPrefi
 func strPtr(s string) *string { return &s }
 
 // step advances the state for one lookup and returns the reminder that fires
-// (skipConcept drops concept-first, which deny-search-first already covers),
 // and whether the reminder before it was followed.
-func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders, skipConcept bool) (*string, *bool) {
+func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders bool) (*string, *bool) {
 	var followed *bool
 	if reminders && s.Pending != nil && *s.Pending != "" {
 		var f bool
 		switch *s.Pending {
 		case "concept-first":
 			f = tool == "jbcontext"
-		case "lookup-ladder", "search-first":
+		case "lookup-ladder":
 			f = isGood(tool)
 		default:
 			f = strings.HasPrefix(tool, "lsp:")
@@ -102,7 +98,7 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 	var candidates []string
 	if isSearch(tool) && !s.FirstSearchDone {
 		s.FirstSearchDone = true
-		if !s.ConceptSeen && !skipConcept {
+		if !s.ConceptSeen {
 			candidates = append(candidates, "concept-first")
 		}
 	}
@@ -427,6 +423,19 @@ func coachPrompt(ev *Event, stdout io.Writer) error {
 // logs the lookup and may write a reminder as hook JSON on stdout. It never
 // blocks; the caller ignores the error, so a coach bug cannot disturb a session.
 func Coach(ev *Event, stdout io.Writer) error {
+	// The enrichment does not depend on ORCH_TOOL_GUARD or ORCH_LOOKUP_COACH. It
+	// is written on every path that does not write a reminder with it.
+	enriched := Enrich(ev)
+	written := false
+	eventName := ev.Str("hook_event_name")
+	if eventName == "" {
+		eventName = "PostToolUse"
+	}
+	defer func() {
+		if enriched != "" && !written {
+			writeContext(stdout, eventName, enriched)
+		}
+	}()
 	if os.Getenv("ORCH_TOOL_GUARD") == "off" {
 		return nil
 	}
@@ -469,7 +478,13 @@ func Coach(ev *Event, stdout io.Writer) error {
 		return err
 	}
 	defer f.Close()
-	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching, searchFirstActive())
+	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching)
+	if enriched != "" && reminder != nil && *reminder == "symbol-via-lsp" {
+		// The facts answer it: no reminder, and the window stays unreminded.
+		state.Pending = nil
+		state.Fired = withoutKey(state.Fired, fmt.Sprintf("symbol-via-lsp@%d", state.Prompt))
+		reminder = nil
+	}
 	if err := saveState(f, state); err != nil {
 		return err
 	}
@@ -508,11 +523,22 @@ func Coach(ev *Event, stdout io.Writer) error {
 		}
 	}
 	if reminder != nil {
-		eventName := ev.Str("hook_event_name")
-		if eventName == "" {
-			eventName = "PostToolUse"
+		written = true
+		if enriched != "" {
+			writeContext(stdout, eventName, coachPrefix+coachText[*reminder]+"\n"+enriched)
+		} else {
+			writeReminder(stdout, eventName, *reminder)
 		}
-		writeReminder(stdout, eventName, *reminder)
 	}
 	return nil
+}
+
+func withoutKey(list []string, key string) []string {
+	out := []string{}
+	for _, k := range list {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	return out
 }

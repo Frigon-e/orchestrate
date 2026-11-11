@@ -37,11 +37,34 @@ func TestMain(m *testing.M) {
 
 func TestBinaryBlocksWithExit2AndTheReasonOnStderr(t *testing.T) {
 	paths := situationPaths(t, loadToolguard(t))
-	code, stdout, stderr := execHook(t, childEnv(nil, "PATH="+paths["fd-rg"]), jsonBytes(t, bashEvent("grep -rn x src")), guardBin, "pre")
-	want := "orch tool guard (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; " +
-		"use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n" + testLadder + "\n"
-	if code != 2 || stderr != want || stdout != "" {
+	code, stdout, stderr := execHook(t, childEnv(nil, "PATH="+paths["fd-rg"]), jsonBytes(t, bashEvent("sed -i 's/a/b/' x.go")), guardBin, "pre")
+	if code != 2 || !strings.HasPrefix(stderr, "orch tool guard (deny-sed-inplace): ") || stdout != "" {
 		t.Fatalf("exit %d, stderr %q, stdout %q", code, stderr, stdout)
+	}
+}
+
+func TestBinaryEnrichPrintsOnlyTheFactsAndNothingWhenSilent(t *testing.T) {
+	b := newEnrichBox(t)
+	env := map[string]string{"ORCH_BIN": os.Getenv("ORCH_BIN"), "FAKE_DIR": b.fake, "ORCH_CACHE_DIR": t.TempDir(),
+		"ORCH_TOOL_GUARD_STATE_DIR": t.TempDir(), "ORCH_LSP_ENRICH_BUDGET_MS": "5000"}
+	run := func(cmd string) string {
+		code, stdout, stderr := execHook(t, childEnv(env), jsonBytes(t, b.bash("cli", cmd, "").fields), guardBin, "enrich")
+		if code != 0 || stderr != "" {
+			t.Fatalf("exit %d, stderr %q", code, stderr)
+		}
+		return stdout
+	}
+	raw := run("rg -n capacityHealth internal/panel/app")
+	var generic map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
+		t.Fatalf("not hook JSON: %q", raw)
+	}
+	hook := generic["hookSpecificOutput"]
+	if hook["hookEventName"] != "PostToolUse" || !strings.HasPrefix(hook["additionalContext"], "lsp capacityHealth (func): ") {
+		t.Errorf("enrich output %q", raw)
+	}
+	if silent := run(`rg -n "failed to load" internal`); silent != "" {
+		t.Errorf("a plain-text search printed %q", silent)
 	}
 }
 

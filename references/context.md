@@ -107,29 +107,17 @@ the Claude hooks run, `hooks/bin/orch-guard`) and applies the replies; the
 protocol is in `hooks/claude/README.md`. `scripts/orch` sets `ORCH_GUARD_BIN` for
 the pi leads it launches, and a missing or slow binary fails open.
 
-The guard carries five small deny rules over shell commands, each a table entry
-with a name, a matcher and a reason, plus two more for pi's own `grep` and `find`
-tools: `deny-find-chains` (find `-exec`/`-delete`, and a search tool feeding a
-grep), `deny-find` (a plain `find` over a tree while `fd` is installed),
-`deny-sed-inplace` (`sed -i`, `perl -pi`), `deny-cat-head-tail` (one bare `cat`
-or `sed -n` on a file; `head` and `tail` are not blocked) and `deny-grep-rg` (a
-plain `grep`, `egrep`, `fgrep`, `ag` or `git grep` over files or a directory,
-while `rg` is installed; `rg` itself is never blocked). `deny-builtin-grep` and
-`deny-builtin-find` refuse pi's own `grep` and `find` tools while `rg` or `fd` is
-installed; with the replacement absent they are the fallback and are allowed.
-
-A search block is two lines: what is blocked with the replacement (`rg` for
-content, `fd` for file names), then the lookup order above. Reading a file is the
-exception: `deny-cat-head-tail` always names the built-in `read` with offset and
-limit. Allowed: a grep filtering another command's output, a read that feeds a
-pipe or a redirect, `tail -f`, several files to `cat`, a `find` reading a pipe,
-`rg`, and `fd`. A blocked command line is blocked every time and does not run on
-a retry; from the third block in a row the reason adds `Blocked 3 times: use the
-replacement above; this guard does not give way.` `ORCH_TOOL_GUARD=off` turns the
-guard off and `ORCH_TOOL_GUARD_SKIP=find-chains,find,sed-inplace,cat-head-tail,grep-rg`
-disables rules by name; the group name `builtin-search` disables both built-in
-search rules. The decision tables run the extension in node against the real
-binary: `go test -run 'CtxReminder' .` in `tool`.
+The guard carries two small deny rules: `deny-sed-inplace` (`sed -i`, `perl -pi`)
+and `deny-big-read` (a whole-file read of a file over 30 KB). The lookup blocks
+(grep, find, cat, search-first and pi's built-in grep and find) are gone: a
+search runs, and `orch-guard enrich` appends the `orch lsp` facts the search
+did not show (see `hooks/claude/README.md`, "LSP enrichment"). A blocked command
+line is blocked every time; from the third block in a row the reason adds
+`Blocked 3 times: use the replacement above; this guard does not give way.`
+`ORCH_TOOL_GUARD=off` turns the guard off and
+`ORCH_TOOL_GUARD_SKIP=sed-inplace,big-read` disables rules by name. The decision
+tables run the extension in node against the real binary:
+`go test -run 'CtxReminder' .` in `tool`.
 
 The lookup coach is a non-blocking part of the same binary (`orch-guard coach`),
 run by the same extension and by the Claude hooks. It logs every lookup

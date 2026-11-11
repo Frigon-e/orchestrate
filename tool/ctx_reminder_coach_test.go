@@ -171,7 +171,7 @@ const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(B
 console.log(JSON.stringify({ handlers: Object.keys(handlers).sort(), lines, added, logged, logFile: existsSync(file) }));
 `
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(mustJSON(t, turns)))
-	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_LOOKUP_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_GUARD_BIN=" + guardBin(t), "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD=", "ORCH_TOOL_GUARD_SKIP=search-first"}, env...))
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_LOOKUP_READY=", "ORCH_TOOL_GUARD_STATE_DIR=" + state, "ORCH_GUARD_BIN=" + guardBin(t), "ORCH_LOOKUP_COACH=", "ORCH_LOOKUP_LOG=", "ORCH_TOOL_GUARD="}, env...))
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, raw)

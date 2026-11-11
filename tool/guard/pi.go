@@ -68,33 +68,6 @@ type Open struct {
 
 var shellSearches = set("rg", "grep", "egrep", "fgrep", "ag", "fd", "find")
 
-// builtinRule refuses one of pi's own search tools while its shell replacement is on PATH.
-type builtinRule struct {
-	name, id, group, tool string
-	replaced              func(t tools) bool
-	reason                string
-}
-
-var builtinRules = []builtinRule{
-	{"deny-builtin-grep", "builtin-grep", "builtin-search", "grep", func(t tools) bool { return t.rg },
-		Marker + " (deny-builtin-grep): the built-in grep tool is blocked; " +
-			"use rg in bash (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n" + ladder},
-	{"deny-builtin-find", "builtin-find", "builtin-search", "find", func(t tools) bool { return t.fd },
-		Marker + " (deny-builtin-find): the built-in find tool is blocked; " +
-			"use fd in bash (fd PATTERN dir, fd -e go, fd -g '*.ts').\n" + ladder},
-}
-
-func activeBuiltinRules() []builtinRule {
-	skip := skipped()
-	var out []builtinRule
-	for _, r := range builtinRules {
-		if !skip[r.id] && !skip[r.name] && !skip[r.group] {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // jsString is JavaScript's String(v ?? "") for the scalars a tool call carries.
 func jsString(v any) string {
 	switch t := v.(type) {
@@ -270,14 +243,7 @@ func PiPre(ev *Event) PiResponse {
 		}
 		return PiResponse{Block: true, Reason: reason}
 	}
-	// The built-in searches are the way around the shell rules, so they are
-	// refused the same way while the shell replacement is on PATH.
 	if guardOn {
-		for _, r := range activeBuiltinRules() {
-			if r.tool == tool && r.replaced(t) && insideRepository(cwd, jsString(input["path"])) {
-				return block(r.reason)
-			}
-		}
 		if tool == "read" && !bigReadSkipped() {
 			if reason := piBigReadReason(cwd, input); reason != "" {
 				return block(reason)
@@ -296,37 +262,6 @@ func PiPre(ev *Event) PiResponse {
 		for _, r := range activeRules(forPi) {
 			if r.match(line, t) {
 				return block(r.reason(t, line))
-			}
-		}
-	}
-	if guardOn && searchFirstActive() && searchFirstRelevant(line) {
-		if found, ok := lookupShell(line); ok && isGood(found.tool) {
-			state.ConceptSeen = true
-		} else if reason, pattern := searchFirstReason(line, cwd, state.State, t); reason != "" {
-			session := ev.Str("session")
-			if state.SearchFirstWaited != state.Prompt+1 {
-				state.SearchFirstWaited = state.Prompt + 1
-				state.close() // release the lock while a sibling lookup may run
-				if waitForLookup(func() bool {
-					fresh := openState(session)
-					fresh.close()
-					return fresh.ConceptSeen
-				}) {
-					state = openState(session)
-					return PiResponse{}
-				}
-				state = openState(session)
-				reason, pattern = searchFirstReason(line, cwd, state.State, t)
-			}
-			if reason != "" {
-				state.SearchFirstPrompt = state.Prompt + 1
-				state.Pending = strPtr(searchFirstID)
-				repo := gitRoot(cwd)
-				if repo == "" {
-					repo = cwd
-				}
-				searchFirstLog("pi", session, repo, pattern)
-				return block(reason)
 			}
 		}
 	}
@@ -494,7 +429,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	}
 	var out PiResponse
 	// A search outside the repository is not guarded, so it gets no note.
-	if onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) && !rgCandidateLine(tool, input, cwd) {
+	if onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) {
 		marked := false
 		for _, part := range content {
 			marked = marked || strings.Contains(part, "Lookup order:")
@@ -515,7 +450,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	state := openState(session)
 	defer state.close()
 	turn := piTurn(ev)
-	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn, searchFirstActive())
+	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn)
 	if reminder != nil {
 		out.AppendText = append(out.AppendText, coachPrefix+coachText[*reminder])
 	}
