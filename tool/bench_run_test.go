@@ -100,6 +100,33 @@ func TestBenchRunCellRecordsReplayMetrics(t *testing.T) {
 	}
 }
 
+// Each cell builds with its own Go cache, shared by its agent and its check and
+// deleted with the worktree, so finished cells leave no build cache behind.
+func TestBenchRunCellsGetOwnGoCacheRemovedAfter(t *testing.T) {
+	h := benchHarness(t)
+	seen := filepath.Join(h.tmp, "gocache-seen")
+	benchRunFixture(t, h, `mkdir -p "$GOCACHE/00" && echo "agent $GOCACHE" >> `+seen+"\n"+fakeReplayClaude)
+	tasks := filepath.Join(benchDir(), "rp", "tasks.toml")
+	b := string(mustRead(t, tasks))
+	writeFiles(t, filepath.Dir(tasks), map[string]string{"tasks.toml": strings.Replace(b, `check = "test -f x_test.go"`, `check = "echo check $GOCACHE >> `+seen+` && test -f x_test.go"`, 1)})
+	t.Setenv("GOCACHE", filepath.Join(h.tmp, "shared-gocache"))
+	h.must("bench", "run", "rp", "--tasks", "t1", "--arms", "base", "--repeats", "2", "--parallel", "1")
+	byCell := map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(string(mustRead(t, seen))), "\n") {
+		f := strings.Fields(l)
+		if len(f) != 2 || f[1] == filepath.Join(h.tmp, "shared-gocache") {
+			t.Fatalf("cell used the shared cache or none: %q", l)
+		}
+		byCell[f[1]] = true
+		if _, e := os.Stat(f[1]); !os.IsNotExist(e) {
+			t.Errorf("cell cache %s left behind: %v", f[1], e)
+		}
+	}
+	if lines := strings.Count(string(mustRead(t, seen)), "\n"); lines != 4 || len(byCell) != 2 {
+		t.Errorf("want agent and check of 2 cells on 2 caches, got %d lines, caches %v", lines, byCell)
+	}
+}
+
 func TestBenchRunFailuresStillRecord(t *testing.T) {
 	h := benchHarness(t)
 	benchRunFixture(t, h, fakeReplayClaude)

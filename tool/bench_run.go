@@ -442,12 +442,14 @@ func benchBool(b bool) float64 {
 	return 0
 }
 
-// benchReplayStep runs sh -c in dir with a time limit, killing the process group on expiry.
-func benchReplayStep(dir, script string, limit time.Duration, out io.Writer) (timedOut bool, err error) {
+// benchReplayStep runs sh -c in dir with a time limit and env added to the
+// environment, killing the process group on expiry.
+func benchReplayStep(dir, script string, env []string, limit time.Duration, out io.Writer) (timedOut bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := processCommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = out, out
 	err = cmd.Run()
 	return ctx.Err() != nil, err
@@ -464,6 +466,10 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 		return nil, e
 	}
 	defer os.RemoveAll(stage)
+	// The cell's own Go cache, removed with the stage. Go keys compiled packages
+	// by source path, so a shared cache grows by a full build for every worktree
+	// and none of it is reused. An arm's env can still set GOCACHE.
+	cellEnv := []string{"GOCACHE=" + filepath.Join(stage, "gocache")}
 	wt, e := os.MkdirTemp(wtParent, label+"-")
 	if e != nil {
 		return nil, e
@@ -496,7 +502,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 	var wall time.Duration
 	if c.Task.Setup != "" {
 		var buf bytes.Buffer
-		to, e := benchReplayStep(wt, c.Task.Setup, benchReplayStepTimeout, &buf)
+		to, e := benchReplayStep(wt, c.Task.Setup, cellEnv, benchReplayStepTimeout, &buf)
 		if e != nil || to {
 			setupFailed = true
 			reason := "timeout"
@@ -520,7 +526,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.Arm.TimeoutMinute)*time.Minute)
 		cmd := processCommandContext(ctx, runnerBinary("claude"), benchReplayArgv(c, session)...)
 		cmd.Dir = wt
-		cmd.Env = append(append(os.Environ(), benchReplayEnv(c.Arm.Env)...), "ORCH_TOOL_GUARD=off", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off")
+		cmd.Env = append(append(append(os.Environ(), cellEnv...), benchReplayEnv(c.Arm.Env)...), "ORCH_TOOL_GUARD=off", "ORCH_LOOKUP_COACH=off", "ORCH_LOOKUP_LOG=off")
 		cmd.Stdout, cmd.Stderr = so, se
 		start := time.Now()
 		runErr := cmd.Run()
@@ -590,7 +596,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 				warnings = append(warnings, "restore hidden tests failed")
 			}
 		}
-		to, e := benchReplayStep(wt, c.Task.Check, benchReplayStepTimeout, &chk)
+		to, e := benchReplayStep(wt, c.Task.Check, cellEnv, benchReplayStepTimeout, &chk)
 		pass = e == nil && !to && !strings.Contains(chk.String(), "restore hidden tests failed")
 		if to {
 			warnings = append(warnings, "check timed out")

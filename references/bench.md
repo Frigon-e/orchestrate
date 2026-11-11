@@ -333,7 +333,10 @@ Cells run in the order repeat, task, arm, so arms interleave in time. Each cell:
 
 1. Adds a detached worktree at `commit^` under `$ORCH_CACHE_DIR/bench-wt/<suite>`
    (the user cache directory when unset). Only this throwaway checkout is removed
-   afterwards, unless `--keep-worktrees`.
+   afterwards, unless `--keep-worktrees`. Setup, agent and check share a
+   `GOCACHE` of the cell's own, deleted when the cell ends (an arm `env` can
+   override it): Go caches builds per source path, so a shared cache grows by a
+   full build for each worktree and fills the disk on a long suite.
 2. Runs `setup` if set. A setup failure records the cell with an error and skips the agent.
 3. Runs headless `claude -p` with the arm's model, `--setting-sources`, plugin
    dirs and budget, plus `ORCH_TOOL_GUARD=off ORCH_LOOKUP_COACH=off
