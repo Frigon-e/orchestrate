@@ -1,0 +1,28 @@
+{
+  "description": "Append orch lsp facts after a symbol search; warm the language server at session start",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${ORCH_GUARD_BIN:-$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard}\" enrich",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "(nohup orch lsp warm \"$PWD\" >/dev/null 2>&1 &) ; exit 0",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
