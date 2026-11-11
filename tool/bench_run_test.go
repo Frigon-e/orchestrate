@@ -146,7 +146,7 @@ func TestBenchRunSummaryMedians(t *testing.T) {
 	h.must("bench", "run", "rp", "--tasks", "t1", "--arms", "base", "--repeats", "2", "--parallel", "1")
 	out := h.must("bench", "run", "rp", "--summary")
 	var row string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(l, "t1") {
 			row = l
 		}

@@ -510,7 +510,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 	}
 	solution := map[string]bool{}
 	if names, e := benchGit(repo, "diff", "--name-only", c.Task.Commit+"^", c.Task.Commit); e == nil && names != "" {
-		for _, n := range strings.Split(names, "\n") {
+		for n := range strings.SplitSeq(names, "\n") {
 			solution[n] = true
 		}
 	}
@@ -801,7 +801,7 @@ func cmdBenchRun(a *app, args []string) error {
 	}
 	split := func(s string) []string {
 		var out []string
-		for _, p := range strings.Split(s, ",") {
+		for p := range strings.SplitSeq(s, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				out = append(out, p)
 			}
@@ -829,9 +829,7 @@ func cmdBenchRun(a *app, args []string) error {
 	work := make(chan benchReplayCell)
 	failed := 0
 	for i := 0; i < *parallel; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for c := range work {
 				var buf bytes.Buffer
 				r, e := benchReplayCell1(a, suite, repo, c, *keep, &buf)
@@ -845,7 +843,7 @@ func cmdBenchRun(a *app, args []string) error {
 				a.out.Write(buf.Bytes())
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	for _, c := range cells {
 		work <- c
