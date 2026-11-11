@@ -32,7 +32,7 @@ request  { event, session, turn, cwd, tool, input, toolCallId, content?, isError
 reply    { block?, reason?, appendText?, message? }
 ```
 
-`event` is `tool_call`, `tool_result`, `tool_execution_end` or `before_agent_start`. `content` holds one string per result part (`""` for a part that is not text). `resultHook` says the extension could register a `tool_result` handler; without one, the first blocked search carries the reminder itself. `block` and `reason` answer `tool_call`; `appendText` is text parts to add to a tool result; `message` is the hidden ladder message for `before_agent_start`. The extension owns only the wiring: which handlers to register, the 5 s timeout, and failing open (a missing binary, a timeout or an unreadable reply allows the call and prints one warning per session to stderr). The binary is `$ORCH_GUARD_BIN`, which `scripts/orch` sets for pi leads and orch sets for gate panes, else `~/.agents/skills/orchestrate/hooks/bin/orch-guard`. The pi-only rules (`deny-builtin-grep`, `deny-builtin-find`, the inside-repository exemption, the give-way counter after three blocks in a row, the search note, pi's texts) live in the binary, and so does pi's coach state: the per-session state file, keyed by the pi session id.
+`event` is `tool_call`, `tool_result`, `tool_execution_end` or `before_agent_start`. `content` holds one string per result part (`""` for a part that is not text). `resultHook` says the extension could register a `tool_result` handler; without one, the first blocked search carries the reminder itself. `block` and `reason` answer `tool_call`; `appendText` is text parts to add to a tool result; `message` is the hidden ladder message for `before_agent_start`. The extension owns only the wiring: which handlers to register, the 5 s timeout, and failing open (a missing binary, a timeout or an unreadable reply allows the call and prints one warning per session to stderr). The binary is `$ORCH_GUARD_BIN`, which `scripts/orch` sets for pi leads and orch sets for gate panes, else `~/.agents/skills/orchestrate/hooks/bin/orch-guard`. The pi-only parts (the give-way counter after three blocks in a row, the search note, pi's texts) live in the binary, and so does pi's coach state: the per-session state file, keyed by the pi session id.
 
 **Build and staleness.**
 
@@ -42,29 +42,18 @@ reply    { block?, reason?, appendText?, message? }
 
 ## Tool guard
 
-The rules live in `tool/guard/rules.go`; each row names a rule group the binary enforces. `deny-grep-rg` keeps its id for compatibility: it blocks `grep`, `egrep`, `fgrep`, `ag` and `git grep`, and never `rg`.
+The rules live in `tool/guard/rules.go`; each row names a rule the binary enforces. Only two block: `deny-sed-inplace` and `deny-big-read`. The lookup blocks (`deny-search-first`, `deny-grep-rg`, `deny-find`, `deny-find-chains`, `deny-cat-head-tail`, and pi's `deny-builtin-grep` and `deny-builtin-find`) are removed: a search just runs, and `orch-guard enrich` (below) adds language-server facts after it.
 
 | Rule group | Rule | Blocks | Does not touch |
 |---|---|---|---|
-| `find-chains` | `deny-find-chains`, `deny-find` | `find` with `-exec/-execdir/-ok/-okdir/-delete`; a search tool (`find`, `fd`, `rg`, `ag`) feeding `grep`/`ag`, or `xargs grep`/`rg`/`ag`; a plain `find` over a tree while `fd` is on PATH | a `find` reading stdin (it formats a pipe), `fd ... \| rg pattern` (it filters file names), a quoted word or a path that merely contains `find`, `fd` alone, and a plain `find` when `fd` is not installed |
 | `sed-inplace` | `deny-sed-inplace` | `sed`/`gsed` with `-i`, `-i.bak`, `-i ''` or `--in-place`; `perl` with `-i` or `-pi` | `sed` that prints to stdout, a piped transform (`git diff \| sed 's/^/  /'`), `grep -i` |
-| `cat-head-tail` | `deny-cat-head-tail` | a bare `cat` or `sed -n` over exactly one file | `head`, `tail`, several files, a pipe on either side, a redirect, `cat` reading stdin |
-| `grep-rg` | `deny-grep-rg` | `grep`, `egrep`, `fgrep`, `ag`, `git grep` over files or a directory, while `rg` is on PATH | `rg` itself, a `grep` filtering another command's output (`go test ./... \| grep FAIL`), `grep -q` as a condition, `grep` reading stdin, a quoted word, and every `grep` when `rg` is not installed (there is no replacement to name) |
 | `big-read` | `deny-big-read` | Claude's `Read` of a regular file over 30720 bytes (`bigReadBytes` in `tool/guard/bigread.go`) with neither `offset` nor `limit` | a read with `offset` or `limit` (either one), `pages`, images (png, jpg, jpeg, gif, webp), PDFs, notebooks (`.ipynb`), a file at or under the limit, a missing path, a directory, and any other tool |
-| `search-first` | `deny-search-first` | the first `rg` of a user prompt, in any segment of the line (an `rg` filtering a pipe is skipped): a lowercase phrase with a space (`refund before payment`, repo indexed by jbcontext) goes to `jbcontext search`, with any identifiers in it named for `orch lsp def`; identifiers alone (`camelCase`, `PascalCase`, `pkg.Name`, `func.*Name`, `type Name\b`, `A\|B\|C`, ALL_CAPS beside them) go to `orch lsp def NAMES` / `orch lsp refs NAME`. Once per prompt; the retry passes, and the Claude coach drops `concept-first` while it is on. The jbcontext index answer is shared by sessions in `jbindex.json` (24 h, 1 h when not indexed). Each pi prompt also starts a background `jbcontext index --only-incremental` of its checkout, at most every 10 minutes (`ORCH_JB_REFRESH=off`); Claude has jbcontext's own SessionStart and SessionEnd index hooks. Off with `ORCH_TOOL_GUARD_SKIP=search-first`. Lives in `tool/guard/searchfirst.go` | `rg -F`, `--files`, a file target, doc-only targets, paths outside the repo, any prompt window with a jbcontext or `orch lsp` lookup already run, and any pattern that may be exact text: an anchor (`^package`), punctuation or digits (`<DataTable`, `@xl`, `429`), sentence case (`Not run`), ALL_CAPS alone (`DEVSTACK_ADMIN_URL`), single words or snake_case (`theme`, `received_at`), or names mixed with such words |
 
-Claude's own `Grep` and `Glob` tools are not guarded: there is no `deny-builtin-search` rule, and `install_settings.py --apply` removes an owned hook that the fragment no longer lists, so an older install loses it on the next run.
+Claude's own `Grep` and `Glob` tools are not guarded, and neither are pi's `grep` and `find`.
 
 ### What a block says
 
-A search block is two lines: what is blocked with the replacement, then one ladder line.
-
-```
-orch tool guard (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).
-Lookup order: jbcontext search "<one behavior>" if the location is unknown, orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, fd for file names; send independent lookups in one message.
-```
-
-`deny-find` and `deny-find-chains` name `fd` the same way (`fd PATTERN dir`, `fd -e go`, `fd -g '*.ts'`; a chain says "use fd, or rg -g 'GLOB' PATTERN for content"). With no `fd` on PATH a plain `find` is allowed (Claude Code does not load `Glob` by default on macOS, so there is nothing else to name), and a chain names a plain `find` or `rg` and skips the ladder. `deny-sed-inplace` always names `Edit` and `deny-cat-head-tail` always names the exact `Read` call for the blocked line (`Read file_path=FILE offset=N limit=K` for a `sed -n N,Mp`, `Read file_path=FILE` for a `cat`), to send as a parallel call, and says cat and sed output is not a Read so a later Edit fails. pi (`--harness pi`) names its own tool (`read path=FILE ...`) and, since pi accepts relative paths, adds no absolute-path note.
+A block names its replacement: `deny-sed-inplace` always names `Edit`. pi (`--harness pi`) names its own tool.
 
 ### Big whole-file reads
 
@@ -73,9 +62,17 @@ Whatever a session reads stays in context and is re-read on every later turn, so
 A blocked command stays blocked on every retry. Two switches are the human escapes, same as pi:
 
 - `ORCH_TOOL_GUARD=off` disables all the rules.
-- `ORCH_TOOL_GUARD_SKIP=find-chains,sed-inplace,cat-head-tail,grep-rg` disables rules by short name or full name. Plain `find` has its own id, `find` (or `deny-find`), inside the `find-chains` group.
+- `ORCH_TOOL_GUARD_SKIP=sed-inplace,big-read` disables rules by short name or full name.
 
-`prefer-read-tool.sh` stays. It is a non-blocking reminder for the wider reader set (`less`, `more`, `bat`, `nl`, and `sed` without `-n` as well), so it complements `deny-cat-head-tail`; it is not replaced by it. It is a shell script and is not part of the binary. Register both if you want the block and the reminder.
+`prefer-read-tool.sh` stays. It is a non-blocking reminder for the wider reader set (`less`, `more`, `bat`, `nl`, and `sed` without `-n` as well), so it is not replaced by anything in the binary. It is a shell script and is not part of the binary.
+
+## LSP enrichment
+
+`orch-guard enrich` reads one PostToolUse event on stdin and prints only the `hookSpecificOutput` JSON, or nothing. The Claude coach calls the same code (`Enrich` in `tool/guard/enrich.go`) on every PostToolUse, so a registered coach hook enriches too; the `plugins/lsp-enrich` plugin registers `enrich` alone (Bash and Grep) for installs without the coach. It needs no `ORCH_TOOL_GUARD` or `ORCH_LOOKUP_COACH` setting.
+
+When a Bash `rg`, `grep -r`/`-R` or `git grep`, or the Grep tool, searches for symbol names, it appends `lsp <Name> (<kind>): <signature>` plus a few indented lines (definition, callers, references, implementations) limited to the search's own scope, and drops what the search output already showed. The facts come from `orch lsp def|refs|callers|impls --json` (binary `$ORCH_BIN`, else `orch` on PATH, run from the event cwd). It is silent for plain-text patterns (`-i`, `-F` with a space, doc-only targets, names under 4 characters or not identifiers), a name with no definition or more than 10, a scope it cannot parse, a name already enriched in the session while the dirty files are unchanged, and any failure. The total budget is 800 ms (`ORCH_LSP_ENRICH_BUDGET_MS`); when the first query times out it starts `orch lsp warm <cwd>` detached and stays silent. Output shrinks with the number of names (1 name up to 12 lines, 2 up to 5, 3-4 two each, 5 or more the first 4 plus `+K names: orch lsp def A B C`), ending with `more: orch lsp <verb> <name>` when something was cut. When it fires, the `symbol-via-lsp` reminder is dropped.
+
+`ORCH_LSP_ENRICH=off` disables it. Every decision is logged as one JSON line in `<ORCH_CACHE_DIR, else the user cache dir>/orchestrate/lsp-enrich.jsonl` (not gated by `ORCH_LOOKUP_LOG`; `ORCH_CACHE_DIR` is used as given).
 
 ## Lookup coach
 
@@ -105,7 +102,7 @@ Tests: `cd tool && go test ./guard/...` (the Claude hook, temp state dir, synthe
 
 ## Tests
 
-`toolguard_cases.json` is one decision table for both harnesses: every case names the command, the PATH situation (`fd-rg` with both installed, `rg` only, `fd` only, or `none`) and the rule that must block it, or no rule when it is allowed. Its `readCases` table covers `deny-big-read` (file name, size in bytes, extra `Read` arguments, block or allow; the test makes the files in a temp directory, and pi's `read` tool runs the same table). Its `builtinCases` table covers pi's own `grep` and `find` tools, which are blocked while `rg` (for grep) or `fd` (for find) is on PATH and allowed for a path outside the session's repository.
+`toolguard_cases.json` is one decision table for both harnesses: every case names the command, the PATH situation (`fd-rg` with both installed, `rg` only, `fd` only, or `none`) and the rule that must block it, or no rule when it is allowed. Its `readCases` table covers `deny-big-read` (file name, size in bytes, extra `Read` arguments, block or allow; the test makes the files in a temp directory, and pi's `read` tool runs the same table). Its `builtinCases` table pins that pi's own `grep` and `find` tools are allowed. The cases of the removed lookup rules are kept with no rule, so a removed block cannot come back unnoticed.
 
 `tool/guard/toolguard_test.go` runs every case through the real binary with only stub tools on PATH, plus the two switches, the non-Bash and broken-stdin paths, the reasons byte for byte and the big-read rule with its fail-open paths. `TestCtxReminderSharedToolguardCases` and `TestCtxReminderSharedBuiltinSearchCases` (`tool/ctx_reminder_test.go`) run the same file through the pi extension and the binary, so a disagreement between the two harnesses fails a test.
 

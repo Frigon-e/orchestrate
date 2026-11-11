@@ -11,19 +11,13 @@ import (
 // The decision tables are hooks/claude/toolguard_cases.json, shared with the pi
 // guard; these tests assert the Claude side of them, as toolguard_test.py did.
 
-// replacement is what a block must name, given the tools on PATH and the rule. A
-// plain find and a grep are only blocked when fd or rg is on PATH, so they
-// always name it; a find chain with no fd names a plain find.
+// replacement is what a block must name, by rule: only sed-inplace is left.
 var replacement = map[string]map[string]string{
-	"fd-rg": {"find-chains": "use fd", "find": "use fd", "sed-inplace": "built-in Edit", "cat-head-tail": "Read file_path=", "grep-rg": "use rg"},
-	"rg":    {"find-chains": "run a plain find", "sed-inplace": "built-in Edit", "cat-head-tail": "Read file_path=", "grep-rg": "use rg"},
-	"fd":    {"find-chains": "use fd", "find": "use fd", "sed-inplace": "built-in Edit", "cat-head-tail": "Read file_path=", "grep-rg": "use rg"},
-	"none":  {"find-chains": "run a plain find", "sed-inplace": "built-in Edit", "cat-head-tail": "Read file_path=", "grep-rg": "use rg"},
+	"fd-rg": {"sed-inplace": "built-in Edit"},
+	"rg":    {"sed-inplace": "built-in Edit"},
+	"fd":    {"sed-inplace": "built-in Edit"},
+	"none":  {"sed-inplace": "built-in Edit"},
 }
-
-const testLadder = `Lookup order: jbcontext search "<one behavior>" if the location is unknown, ` +
-	"orch lsp def|refs|callers <Name> for a known symbol, rg for exact text, " +
-	"fd for file names; send independent lookups in one message."
 
 func nonBlank(s string) int {
 	n := 0
@@ -89,18 +83,18 @@ func TestBashCasesBlockAndAllow(t *testing.T) {
 // checked here; the case file is what the tests above execute.
 func TestRequiredCasesArePresent(t *testing.T) {
 	required := []struct{ command, situation, rule string }{
-		{`find . -name '*.log' -exec rm {} \;`, "fd-rg", "find-chains"},
-		{"find . -name '*.ts' | grep -v node_modules", "fd-rg", "find-chains"},
-		{"find . -type f | xargs grep -l TODO", "fd-rg", "find-chains"},
+		{`find . -name '*.log' -exec rm {} \;`, "fd-rg", ""},
+		{"find . -name '*.ts' | grep -v node_modules", "fd-rg", ""},
+		{"find . -type f | xargs grep -l TODO", "fd-rg", ""},
 		{"sed -i 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"sed -i.bak 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"sed -i '' 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"gsed -i 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"sed --in-place 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
-		{"cat notes.txt", "fd-rg", "cat-head-tail"},
+		{"cat notes.txt", "fd-rg", ""},
 		{"head -n 20 notes.txt", "fd-rg", ""},
 		{"tail -c 100 notes.txt", "fd-rg", ""},
-		{"sudo cat /etc/hosts", "fd-rg", "cat-head-tail"},
+		{"sudo cat /etc/hosts", "fd-rg", ""},
 		{"sed 's/foo/bar/' file.txt", "fd-rg", ""},
 		{"git diff | sed 's/^/  /'", "fd-rg", ""},
 		{"tail -f /var/log/app.log", "fd-rg", ""},
@@ -108,13 +102,13 @@ func TestRequiredCasesArePresent(t *testing.T) {
 		{"cat notes.txt | grep TODO", "fd-rg", ""},
 		{"head -n 5 file | wc -l", "fd-rg", ""},
 		{"cat notes.txt > copy.txt", "fd-rg", ""},
-		{`grep -rn "findUser" src`, "fd-rg", "grep-rg"},
+		{`grep -rn "findUser" src`, "fd-rg", ""},
 		{"ls my-find-exec-project/", "fd-rg", ""},
-		{"grep -rn x src", "fd-rg", "grep-rg"},
+		{"grep -rn x src", "fd-rg", ""},
 		{"rg Foo internal/", "fd-rg", ""},
 		{"go test ./... | grep FAIL", "fd-rg", ""},
 		{"rg -n foo tool", "fd-rg", ""},
-		{"grep -rn foo .", "fd-rg", "grep-rg"},
+		{"grep -rn foo .", "fd-rg", ""},
 		{"grep -rn foo .", "none", ""},
 	}
 	have := map[[2]string]string{}
@@ -134,42 +128,18 @@ func TestRequiredCasesArePresent(t *testing.T) {
 // ORCH_TOOL_GUARD=off and ORCH_TOOL_GUARD_SKIP are the only escapes.
 func TestSwitchesDisableRules(t *testing.T) {
 	paths := situationPaths(t, loadToolguard(t))
-	sample := map[string]string{
-		"find-chains":   "fd -e go | grep Gateway",
-		"find":          "find . -name '*.ts'",
-		"sed-inplace":   "sed -i 's/a/b/' file.txt",
-		"cat-head-tail": "cat notes.txt",
-		"grep-rg":       "grep -rn x src",
+	payload := jsonBytes(t, bashEvent("sed -i 's/a/b/' file.txt"))
+	if code, _ := (inProc{}).pre(t, payload, paths["fd-rg"], nil); code != 2 {
+		t.Fatal("sed -i is not blocked without a switch")
 	}
-	run := func(rule string, env map[string]string) (int, string) {
-		return inProc{}.pre(t, jsonBytes(t, bashEvent(sample[rule])), paths["fd-rg"], env)
-	}
-	for rule := range sample {
-		if code, stderr := run(rule, map[string]string{"ORCH_TOOL_GUARD": "off"}); code != 0 {
-			t.Errorf("ORCH_TOOL_GUARD=off did not disable %s: %s", rule, stderr)
+	for name, env := range map[string]map[string]string{
+		"ORCH_TOOL_GUARD=off": {"ORCH_TOOL_GUARD": "off"},
+		"skip by short name":  {"ORCH_TOOL_GUARD_SKIP": "sed-inplace"},
+		"skip by full name":   {"ORCH_TOOL_GUARD_SKIP": "deny-sed-inplace"},
+	} {
+		if code, stderr := (inProc{}).pre(t, payload, paths["fd-rg"], env); code != 0 {
+			t.Errorf("%s did not disable deny-sed-inplace: %s", name, stderr)
 		}
-	}
-	skipFour := "find-chains,sed-inplace,cat-head-tail,grep-rg"
-	for _, rule := range strings.Split(skipFour, ",") {
-		if code, stderr := run(rule, map[string]string{"ORCH_TOOL_GUARD_SKIP": skipFour}); code != 0 {
-			t.Errorf("the four-name skip did not disable %s: %s", rule, stderr)
-		}
-	}
-	// Plain find is a separate rule id, so the four-name skip leaves it on.
-	if code, stderr := run("find", map[string]string{"ORCH_TOOL_GUARD_SKIP": skipFour}); code != 2 || !strings.Contains(stderr, "(deny-find)") {
-		t.Errorf("the four-name skip disabled plain find, which is its own rule: %d %s", code, stderr)
-	}
-	if code, stderr := run("find", map[string]string{"ORCH_TOOL_GUARD_SKIP": "find-chains"}); code != 2 || !strings.Contains(stderr, "(deny-find)") {
-		t.Errorf("skipping find-chains also disabled plain find: %d %s", code, stderr)
-	}
-	if code, _ := run("find-chains", map[string]string{"ORCH_TOOL_GUARD_SKIP": "find-chains"}); code != 0 {
-		t.Error("skipping find-chains did not disable it")
-	}
-	if code, _ := run("find", map[string]string{"ORCH_TOOL_GUARD_SKIP": "find"}); code != 0 {
-		t.Error("skipping find did not disable plain find")
-	}
-	if code, _ := run("cat-head-tail", map[string]string{"ORCH_TOOL_GUARD_SKIP": "deny-cat-head-tail"}); code != 0 {
-		t.Error("skipping deny-cat-head-tail by full name did not work")
 	}
 }
 
@@ -197,32 +167,23 @@ func TestPreAllowsEventsItCannotRead(t *testing.T) {
 		t.Error("a Read event ran the Bash rules")
 	}
 	// No tool name at all is still checked as Bash, as the Bash hooks always did.
-	if code, _ := (inProc{}).pre(t, []byte(`{"tool_input":{"command":"grep -rn x src"}}`), paths["fd-rg"], nil); code != 2 {
+	if code, _ := (inProc{}).pre(t, []byte(`{"tool_input":{"command":"sed -i s/a/b/ x.go"}}`), paths["fd-rg"], nil); code != 2 {
 		t.Error("an event with no tool name was not checked as Bash")
 	}
 }
 
-// The search reasons, byte for byte, and no mention of orch ctx anywhere.
-func TestSearchReasonsAreFixedText(t *testing.T) {
+// The lookup blocks are gone: find, grep and cat of one file all pass, in every PATH situation.
+func TestRemovedLookupBlocksAllow(t *testing.T) {
 	paths := situationPaths(t, loadToolguard(t))
-	for command, want := range map[string]string{
-		"grep -rn Normalize src": "orch tool guard (deny-grep-rg): grep, egrep, fgrep, ag and git grep over files are blocked; " +
-			"use rg (rg -n PATTERN path, -g 'GLOB', -F literal, -w word, -i).\n" + testLadder,
-		"find . -name '*.ts'": "orch tool guard (deny-find): find over a tree is blocked; " +
-			"use fd (fd PATTERN dir, fd -e go, fd -g '*.ts').\n" + testLadder,
-		`find . -name x -exec ls {} \;`: "orch tool guard (deny-find-chains): find -exec, -delete and find | grep chains are blocked; " +
-			"use fd, or rg -g 'GLOB' PATTERN for content.\n" + testLadder,
+	for _, command := range []string{
+		"grep -rn Normalize src", "git grep -n Normalize", "egrep -n Gateway internal", "ag Gateway internal",
+		"find . -name '*.ts'", `find . -name x -exec ls {} \;`, "find . -type f | xargs grep -l TODO", "fd -e go | grep Gateway",
+		"cat notes.txt", "sed -n '10,20p' notes.txt",
 	} {
-		code, stderr := inProc{}.pre(t, jsonBytes(t, bashEvent(command)), paths["fd-rg"], nil)
-		if code != 2 || strings.TrimSpace(stderr) != want {
-			t.Errorf("%s: the reason is not the fixed text byte for byte: %q", command, stderr)
-		}
-	}
-	// With no rg a grep has no replacement and passes; with no fd a plain find
-	// passes the same way (Claude's Glob is not loaded by default on macOS).
-	for _, command := range []string{"grep -rn Normalize src", "find . -name '*.ts'"} {
-		if code, stderr := (inProc{}).pre(t, jsonBytes(t, bashEvent(command)), paths["none"], nil); code != 0 || stderr != "" {
-			t.Errorf("%s without its replacement was not allowed: %q", command, stderr)
+		for situation, dir := range paths {
+			if code, stderr := (inProc{}).pre(t, jsonBytes(t, bashEvent(command)), dir, nil); code != 0 || stderr != "" {
+				t.Errorf("%s (%s) was blocked: %q", command, situation, stderr)
+			}
 		}
 	}
 }

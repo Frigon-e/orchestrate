@@ -1,0 +1,6 @@
+{
+  "name": "lsp-enrich",
+  "version": "0.1.0",
+  "description": "After a code search for a symbol name, append the language-server facts the search output does not show",
+  "author": { "name": "Ethan Frigon" }
+}

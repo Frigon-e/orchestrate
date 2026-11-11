@@ -51,7 +51,7 @@ func piBash(t *testing.T, session, command string, extra map[string]any) PiRespo
 func TestPiGiveWayStartsAtTheThirdBlockInARowAndAnAllowedCallResetsIt(t *testing.T) {
 	piEnv(t)
 	for i := 1; i <= 4; i++ {
-		res := piBash(t, "giveway", "grep -rn Normalize src", nil)
+		res := piBash(t, "giveway", "sed -i s/a/b/ src/x.go", nil)
 		if !res.Block {
 			t.Fatalf("block %d: not blocked", i)
 		}
@@ -62,7 +62,7 @@ func TestPiGiveWayStartsAtTheThirdBlockInARowAndAnAllowedCallResetsIt(t *testing
 	if res := piBash(t, "giveway", "ls", nil); res.Block {
 		t.Fatalf("ls blocked: %q", res.Reason)
 	}
-	if res := piBash(t, "giveway", "grep -rn Normalize src", nil); !res.Block || strings.Contains(res.Reason, "Blocked 3 times") {
+	if res := piBash(t, "giveway", "sed -i s/a/b/ src/x.go", nil); !res.Block || strings.Contains(res.Reason, "Blocked 3 times") {
 		t.Fatalf("the counter survived an allowed call: %+v", res)
 	}
 }
@@ -82,7 +82,7 @@ func TestPiFallbackBlocksOnlyTheFirstSearchWithoutAResultHook(t *testing.T) {
 	}
 }
 
-func TestPiBuiltinSearchIsBlockedInsideTheRepoAndAllowedOutside(t *testing.T) {
+func TestPiBuiltinSearchIsNotBlocked(t *testing.T) {
 	piEnv(t)
 	repo := t.TempDir()
 	repo, _ = filepath.EvalSymlinks(repo)
@@ -94,11 +94,11 @@ func TestPiBuiltinSearchIsBlockedInsideTheRepoAndAllowedOutside(t *testing.T) {
 	call := func(tool, path string) PiResponse {
 		return PiPre(piEvent(t, map[string]any{"event": "tool_call", "session": "builtin", "cwd": repo, "tool": tool, "input": map[string]any{"pattern": "x", "path": path}, "resultHook": true}))
 	}
-	if res := call("grep", filepath.Join(repo, "src")); !res.Block || !strings.Contains(res.Reason, "deny-builtin-grep") {
-		t.Fatalf("grep inside the repo: %+v", res)
+	if res := call("grep", filepath.Join(repo, "src")); res.Block {
+		t.Fatalf("grep inside the repo was blocked: %+v", res)
 	}
-	if res := call("find", filepath.Join(repo, "src")); !res.Block || !strings.Contains(res.Reason, "deny-builtin-find") {
-		t.Fatalf("find inside the repo: %+v", res)
+	if res := call("find", filepath.Join(repo, "src")); res.Block {
+		t.Fatalf("find inside the repo was blocked: %+v", res)
 	}
 	if res := call("grep", "/etc"); res.Block {
 		t.Fatalf("grep outside the repo was blocked: %q", res.Reason)
