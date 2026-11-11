@@ -26,7 +26,7 @@ func benchRunFixture(t *testing.T, h *harness, claudeBody string) (target, secon
 	writeFiles(t, target, map[string]string{"a.txt": "a\n"})
 	git("add", "-A")
 	git("commit", "-q", "-m", "first")
-	writeFiles(t, target, map[string]string{"x.go": "package x\n", "x_test.go": "package x\n"})
+	writeFiles(t, target, map[string]string{"x.go": "package x\n", "x_test.go": "package x\n\nfunc TestFoo() {}\n"})
 	git("add", "-A")
 	git("commit", "-q", "-m", "second")
 	second = git("rev-parse", "HEAD")
@@ -155,5 +155,119 @@ func TestBenchRunSummaryMedians(t *testing.T) {
 	// TASK ARM N PASS COST TOKENS
 	if len(f) < 6 || f[2] != "2" || f[3] != "2/2" || f[4] != "2.0000" || f[5] != "380" {
 		t.Errorf("summary row %q in:\n%s", row, out)
+	}
+}
+
+func TestBenchRunRemovesAgentTestsCollidingWithHidden(t *testing.T) {
+	h := benchHarness(t)
+	benchRunFixture(t, h, "printf 'package x\\n\\nfunc TestFoo() {}\\n' > agent_test.go\nprintf 'package x\\n\\nfunc TestBar() {}\\n' > other_test.go\nprintf 'package x_test\\n\\nfunc TestFoo() {}\\n' > ext_test.go\n"+fakeReplayClaude)
+	b := string(mustRead(t, filepath.Join(benchDir(), "rp", "tasks.toml")))
+	i := strings.Index(b, "commit = \"") + len("commit = \"")
+	sha := b[i : i+40]
+	writeFiles(t, filepath.Join(benchDir(), "rp"), map[string]string{"tasks.toml": b + "[[task]]\nid = \"t3\"\ncommit = \"" + sha + "\"\nhidden = [\"x_test.go\"]\n" +
+		"check = \"test -f x_test.go && test ! -f agent_test.go && test -f other_test.go && test -f ext_test.go\"\nprompt = \"Add z.\"\n"})
+	h.must("bench", "run", "rp", "--tasks", "t3", "--arms", "base")
+	r := benchReplayByLabel(t, "t3-base-r1")
+	if r.Metrics["pass"].Value != 1 || r.Metrics["hidden_collisions"].Value != 1 {
+		t.Errorf("metrics: %+v warnings %v", r.Metrics, r.Warnings)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "agent_test.go (TestFoo)") {
+		t.Errorf("warnings: %v", r.Warnings)
+	}
+}
+
+func TestBenchClassifyCommand(t *testing.T) {
+	for _, c := range []struct {
+		cmd                          string
+		reads, searches, edits, orch int
+	}{
+		{"cd /x && sed -n 85,100p a.go; sed -n 1,5p b.go", 2, 0, 0, 0},
+		{`orch lsp refs Nullable Some; rg -n "Nullable" --glob '*.go' -l | head -30`, 0, 1, 0, 1},
+		{`sed -i '' '/^\t"crypto\/sha256"$/d' a.go`, 0, 0, 1, 0},
+		{`grep -n "Generation" x/*.go | grep -i tls`, 0, 1, 0, 0},
+		{`cat a.go | head -n 30`, 1, 0, 0, 0},
+		{`go test ./... 2>&1 | tail -20`, 0, 0, 0, 0},
+		{`rg -n "a|b" -g '*.go' | rg foo`, 0, 1, 0, 0},
+		{`git grep -n Foo -- '*.go'`, 0, 1, 0, 0},
+		{"cat > f.go <<'EOF'\npackage x\nrg inside body\nEOF\nls", 0, 0, 1, 0},
+		{`echo hi | tee out.go`, 0, 0, 1, 0},
+		{`perl -pi -e 's/a/b/' x.go`, 0, 0, 1, 0},
+		{`go test ./... > /dev/null 2>&1; go vet ./... > /tmp/v`, 0, 0, 0, 0},
+		{`head -5 README.md; tail -n 3 a.log`, 2, 0, 0, 0},
+		{`scripts/orch lsp def Foo`, 0, 0, 0, 1},
+	} {
+		got := benchClassifyCommand(c.cmd)
+		if got.Reads != c.reads || got.Searches != c.searches || got.Edits != c.edits || got.OrchLSP != c.orch {
+			t.Errorf("%q = %+v, want reads %d searches %d edits %d orch %d", c.cmd, got, c.reads, c.searches, c.edits, c.orch)
+		}
+	}
+}
+
+func TestBenchRunTranscriptAndStreamMetrics(t *testing.T) {
+	h := benchHarness(t)
+	stream := filepath.Join(h.tmp, "stream.fixture")
+	transcript := filepath.Join(h.tmp, "transcript.fixture")
+	projects := filepath.Join(h.tmp, "projects")
+	t.Setenv("ORCH_CLAUDE_PROJECTS", projects)
+	writeFiles(t, h.tmp, map[string]string{
+		"stream.fixture": `{"type":"system","subtype":"init","tools":["Bash","Read","LSP","ToolSearch"]}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","name":"ToolSearch","input":{"query":"select:LSP"}},{"type":"tool_use","name":"Grep","input":{}},{"type":"tool_use","name":"Bash","input":{"command":"sed -n 1,5p a.go; rg foo; orch lsp refs X; sed -i '' 's/a/b/' a.go"}}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":1,"total_cost_usd":0.1}
+`,
+		"transcript.fixture": `{"type":"attachment","attachment":{"type":"diagnostics","files":[{"uri":"a.go","diagnostics":[{"severity":"Error"},{"severity":"Warning"}]}]}}
+{"type":"attachment","attachment":{"type":"diagnostics","files":[{"uri":"b.go","diagnostics":[{"severity":"Error"}]}]}}
+{"type":"attachment","attachment":{"type":"hook_additional_context","content":["hint"]}}
+{"type":"attachment","attachment":{"type":"hook_additional_context","content":[]}}
+{"type":"attachment","attachment":{"type":"deferred_tools_delta","addedNames":["LSP","Monitor"]}}
+{"type":"user"}
+not json
+`,
+	})
+	benchRunFixture(t, h, "while [ $# -gt 0 ]; do [ \"$1\" = --session-id ] && sid=$2; shift; done\n"+
+		"d="+projects+"/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g'); mkdir -p $d; cp "+transcript+" $d/$sid.jsonl\ncat "+stream)
+	h.must("bench", "run", "rp", "--tasks", "t1", "--arms", "base")
+	r := benchReplayByLabel(t, "t1-base-r1")
+	want := map[string]float64{"diagnostics_pushed": 2, "diagnostics_errors": 2, "hook_context_events": 1, "lsp_visible": 0, "lsp_loaded_via_toolsearch": 1,
+		"read_calls": 1, "search_calls": 2, "orch_lsp_calls": 1, "shell_edits": 1, "toolsearch_calls": 1, "main_read_calls": 1}
+	for k, v := range want {
+		if m, ok := r.Metrics[k]; !ok || m.Value != v {
+			t.Errorf("%s = %+v, want %v", k, m, v)
+		}
+	}
+	// No transcript, no LSP in init: those metrics are absent, not zero.
+	t.Setenv("ORCH_CLAUDE_PROJECTS", filepath.Join(h.tmp, "none"))
+	t.Setenv("ORCH_CLAUDE", fakeRunner(t, "claude", fakeReplayClaude))
+	h.must("bench", "run", "rp", "--tasks", "t1", "--arms", "plug")
+	r = benchReplayByLabel(t, "t1-plug-r1")
+	for _, k := range []string{"diagnostics_pushed", "hook_context_events", "lsp_visible", "lsp_loaded_via_toolsearch"} {
+		if _, ok := r.Metrics[k]; ok {
+			t.Errorf("%s present without transcript or init", k)
+		}
+	}
+}
+
+func TestBenchReplayArmIsolationFlags(t *testing.T) {
+	c := func(def map[string]any) []string {
+		arm, e := benchReplayArmParse("a", def)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return benchReplayArgv(benchReplayCell{Arm: arm, Task: benchTask{Prompt: "p"}}, "s")
+	}
+	base := strings.Join(c(map[string]any{"kind": "replay"}), " ")
+	for _, f := range []string{"--strict-mcp-config", "--tools", "--disallowedTools", "--mcp-config"} {
+		if strings.Contains(base, f) {
+			t.Errorf("default argv has %s: %s", f, base)
+		}
+	}
+	got := c(map[string]any{"kind": "replay", "strict_mcp_config": true, "tools": []any{"Bash", "Read"}, "disallowed_tools": []any{"Agent", "Task"}})
+	line := strings.Join(got, " ")
+	for _, f := range []string{"--strict-mcp-config", "--tools Bash,Read", "--disallowedTools Agent,Task"} {
+		if !strings.Contains(line, f) {
+			t.Errorf("missing %q in %s", f, line)
+		}
+	}
+	if strings.Contains(line, "--mcp-config") {
+		t.Errorf("--mcp-config must not be passed: %s", line)
 	}
 }

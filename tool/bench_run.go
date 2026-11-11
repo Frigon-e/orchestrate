@@ -11,9 +11,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -31,6 +35,7 @@ const benchReplayFooter = "You are in a checkout of this repository at the commi
 var (
 	benchReplayStepTimeout = 20 * time.Minute
 	benchReplayDefaultTool = []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep", "LSP", "Agent", "Task", "TodoWrite"}
+	benchLSPWordRE         = regexp.MustCompile(`(?i)\blsp\b`)
 	benchReplayBuildRE     = regexp.MustCompile(`\b(go (build|test|vet)|scripts/agent/check|make (test|check|lint|build)|tsc|vitest|vp (test|check))\b`)
 )
 
@@ -55,6 +60,10 @@ type benchReplayArm struct {
 	AppendPrompt  string
 	AllowedTools  []string
 	Env           map[string]string
+	StrictMCP     bool
+	Tools         []string
+	ToolsSet      bool
+	Disallowed    []string
 	MaxBudgetUSD  float64
 	TimeoutMinute int
 	Def           map[string]any
@@ -123,6 +132,12 @@ func benchReplayArmParse(name string, def map[string]any) (benchReplayArm, error
 			}
 		}
 	}
+	arm.StrictMCP, _ = def["strict_mcp_config"].(bool)
+	if _, ok := def["tools"]; ok {
+		arm.ToolsSet = true
+		arm.Tools = benchStrings(def["tools"])
+	}
+	arm.Disallowed = benchStrings(def["disallowed_tools"])
 	arm.MaxBudgetUSD = benchNumber(def["max_budget_usd"], 10)
 	arm.TimeoutMinute = int(benchNumber(def["timeout_minutes"], 60))
 	if arm.MaxBudgetUSD <= 0 || arm.TimeoutMinute <= 0 {
@@ -140,6 +155,15 @@ func benchReplayArgv(c benchReplayCell, session string) []string {
 	}
 	if c.Arm.AppendPrompt != "" {
 		args = append(args, "--append-system-prompt", c.Arm.AppendPrompt)
+	}
+	if c.Arm.StrictMCP {
+		args = append(args, "--strict-mcp-config")
+	}
+	if c.Arm.ToolsSet {
+		args = append(args, "--tools", strings.Join(c.Arm.Tools, ","))
+	}
+	if len(c.Arm.Disallowed) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(c.Arm.Disallowed, ","))
 	}
 	return args
 }
@@ -279,6 +303,9 @@ type benchStreamStats struct {
 	In, Out, CacheRead, CacheWrite                  float64
 	Tools, Read, LSP, Bash, Build, Sub              float64
 	MainTools, MainRead, MainLSP, MainBash, MainSub float64
+	Search, ShellEdits, OrchLSP, ToolSearch         float64
+	LSPViaToolSearch                                bool
+	InitSeen, LSPListed                             bool
 }
 
 func benchParseStream(r io.Reader) benchStreamStats {
@@ -305,6 +332,8 @@ func (s *benchStreamStats) line(b []byte) {
 		Turns      float64                   `json:"num_turns"`
 		Usage      map[string]any            `json:"usage"`
 		ModelUsage map[string]map[string]any `json:"modelUsage"`
+		Subtype    string                    `json:"subtype"`
+		Tools      []string                  `json:"tools"`
 		Message    struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
@@ -313,12 +342,22 @@ func (s *benchStreamStats) line(b []byte) {
 		return
 	}
 	switch ev.Type {
+	case "system":
+		if ev.Subtype == "init" && ev.Tools != nil {
+			s.InitSeen = true
+			for _, t := range ev.Tools {
+				if t == "LSP" {
+					s.LSPListed = true
+				}
+			}
+		}
 	case "assistant":
 		var blocks []struct {
 			Type  string `json:"type"`
 			Name  string `json:"name"`
 			Input struct {
 				Command string `json:"command"`
+				Query   string `json:"query"`
 			} `json:"input"`
 		}
 		if json.Unmarshal(ev.Message.Content, &blocks) != nil {
@@ -339,6 +378,13 @@ func (s *benchStreamStats) line(b []byte) {
 				if main {
 					s.MainRead++
 				}
+			case "Grep", "Glob":
+				s.Search++
+			case "ToolSearch":
+				s.ToolSearch++
+				if benchLSPWordRE.MatchString(bl.Input.Query) {
+					s.LSPViaToolSearch = true
+				}
 			case "LSP":
 				s.LSP++
 				if main {
@@ -352,6 +398,14 @@ func (s *benchStreamStats) line(b []byte) {
 				if benchReplayBuildRE.MatchString(bl.Input.Command) {
 					s.Build++
 				}
+				cc := benchClassifyCommand(bl.Input.Command)
+				s.Read += float64(cc.Reads)
+				if main {
+					s.MainRead += float64(cc.Reads)
+				}
+				s.Search += float64(cc.Searches)
+				s.ShellEdits += float64(cc.Edits)
+				s.OrchLSP += float64(cc.OrchLSP)
 			case "Agent", "Task":
 				s.Sub++
 				if main {
@@ -437,6 +491,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 		m[name] = benchMetric{Value: v, Unit: unit, Better: better}
 	}
 	session := newClaudeSessionID()
+	transcript := claudeTranscript(evalOr(wt), session)
 	setupFailed, agentErr, timedOut := false, false, false
 	var wall time.Duration
 	if c.Task.Setup != "" {
@@ -521,10 +576,14 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 		}
 	}
 	// Hidden tests, then the check.
-	pass := false
+	pass, collisions := false, 0
 	if !setupFailed {
 		var chk bytes.Buffer
 		if len(c.Task.Hidden) > 0 {
+			for _, r := range benchRemoveCollidingTests(wt, c.Task.Commit, c.Task.Hidden) {
+				collisions++
+				warnings = append(warnings, "removed agent test colliding with hidden tests: "+r)
+			}
 			args := append([]string{"checkout", c.Task.Commit, "--"}, c.Task.Hidden...)
 			if _, e := benchGit(wt, args...); e != nil {
 				fmt.Fprintf(&chk, "restore hidden tests failed: %v\n", e)
@@ -549,6 +608,23 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 	put("wall_seconds", wall.Seconds(), "s", "lower")
 	put("tool_calls", st.Tools, "calls", "lower")
 	put("read_calls", st.Read, "calls", "lower")
+	put("search_calls", st.Search, "calls", "lower")
+	put("shell_edits", st.ShellEdits, "calls", "lower")
+	put("orch_lsp_calls", st.OrchLSP, "calls", "lower")
+	put("toolsearch_calls", st.ToolSearch, "calls", "lower")
+	put("hidden_collisions", float64(collisions), "files", "lower")
+	tr := benchParseTranscript(transcript)
+	if tr.Found {
+		put("diagnostics_pushed", tr.Diagnostics, "events", "none")
+		put("diagnostics_errors", tr.DiagErrors, "entries", "lower")
+		put("hook_context_events", tr.Hook, "events", "none")
+		if st.InitSeen && st.LSPListed {
+			put("lsp_visible", benchBool(!tr.LSPDeferred), "bool", "none")
+		}
+	}
+	if st.InitSeen && st.LSPListed {
+		put("lsp_loaded_via_toolsearch", benchBool(st.LSPViaToolSearch), "bool", "none")
+	}
 	put("lsp_calls", st.LSP, "calls", "lower")
 	put("bash_calls", st.Bash, "calls", "lower")
 	put("build_test_calls", st.Build, "calls", "lower")
@@ -563,7 +639,7 @@ func benchReplayCell1(a *app, suite, repo string, c benchReplayCell, keep bool, 
 	put("timed_out", benchBool(timedOut), "bool", "lower")
 	put("agent_error", benchBool(agentErr), "bool", "lower")
 	note := fmt.Sprintf("task %s commit %s repeat %d", c.Task.ID, c.Task.Commit, c.Repeat)
-	return benchRecordReplay(a, suite, repo, label, c.Arm.Name, c.Arm.Def, note, m, warnings, files, claudeTranscript(evalOr(wt), session))
+	return benchRecordReplay(a, suite, repo, label, c.Arm.Name, c.Arm.Def, note, m, warnings, files, transcript)
 }
 
 func benchReplayEnv(m map[string]string) []string {
@@ -664,6 +740,9 @@ type benchReplayRow struct {
 	Wall      float64 `json:"median_wall_seconds,omitempty"`
 	LSP       float64 `json:"median_lsp_calls,omitempty"`
 	BuildTest float64 `json:"median_build_test_calls,omitempty"`
+	Search    float64 `json:"median_search_calls,omitempty"`
+	Read      float64 `json:"median_read_calls,omitempty"`
+	Diag      float64 `json:"median_diagnostics_pushed,omitempty"`
 }
 
 func benchMedian(v []float64) float64 {
@@ -729,7 +808,8 @@ func benchReplaySummary(suite string) (tasks, arms []benchReplayRow, err error) 
 	for _, k := range keys {
 		rs := group[k]
 		tasks = append(tasks, benchReplayRow{Task: k.task, Arm: k.arm, N: len(rs), Pass: passes(rs), CostUSD: med(rs, "cost_usd"), Tokens: med(rs, "tokens_total"),
-			Turns: med(rs, "turns"), Wall: med(rs, "wall_seconds"), LSP: med(rs, "lsp_calls"), BuildTest: med(rs, "build_test_calls")})
+			Turns: med(rs, "turns"), Wall: med(rs, "wall_seconds"), LSP: med(rs, "lsp_calls"), BuildTest: med(rs, "build_test_calls"),
+			Search: med(rs, "search_calls"), Read: med(rs, "read_calls"), Diag: med(rs, "diagnostics_pushed")})
 	}
 	var names []string
 	for n := range byArm {
@@ -758,9 +838,9 @@ func benchReplayPrintSummary(a *app, suite string, asJSON bool) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TASK\tARM\tN\tPASS\tCOST_USD\tTOKENS\tTURNS\tWALL_S\tLSP\tBUILD_TEST")
+	fmt.Fprintln(tw, "TASK\tARM\tN\tPASS\tCOST_USD\tTOKENS\tTURNS\tWALL_S\tLSP\tBUILD_TEST\tSEARCH\tREAD\tDIAG")
 	for _, r := range tasks {
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%d/%d\t%.4f\t%.0f\t%.1f\t%.1f\t%.1f\t%.1f\n", r.Task, r.Arm, r.N, r.Pass, r.N, r.CostUSD, r.Tokens, r.Turns, r.Wall, r.LSP, r.BuildTest)
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%d/%d\t%.4f\t%.0f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\t%.1f\n", r.Task, r.Arm, r.N, r.Pass, r.N, r.CostUSD, r.Tokens, r.Turns, r.Wall, r.LSP, r.BuildTest, r.Search, r.Read, r.Diag)
 	}
 	tw.Flush()
 	fmt.Fprintln(a.out)
@@ -858,4 +938,488 @@ func cmdBenchRun(a *app, args []string) error {
 		return fail("%d of %d cells could not be recorded", failed, len(cells))
 	}
 	return nil
+}
+
+// benchCmdCounts is what one Bash command line does, by segment.
+type benchCmdCounts struct{ Reads, Searches, Edits, OrchLSP int }
+
+type benchSeg struct {
+	text      string
+	afterPipe bool
+}
+
+// benchSplitCommand splits a shell line on ; && || | & and newlines outside
+// quotes, dropping heredoc bodies.
+func benchSplitCommand(cmd string) []benchSeg {
+	var segs []benchSeg
+	var cur strings.Builder
+	pipe := false
+	flush := func() {
+		if strings.TrimSpace(cur.String()) != "" {
+			segs = append(segs, benchSeg{cur.String(), pipe})
+		}
+		cur.Reset()
+		pipe = false
+	}
+	r := []rune(cmd)
+	var quote rune
+	var heredocs []string
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		if quote != 0 {
+			cur.WriteRune(c)
+			if c == '\\' && quote == '"' && i+1 < len(r) {
+				i++
+				cur.WriteRune(r[i])
+			} else if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case c == '\\' && i+1 < len(r):
+			cur.WriteRune(c)
+			i++
+			cur.WriteRune(r[i])
+		case c == '\'' || c == '"':
+			quote = c
+			cur.WriteRune(c)
+		case c == '<' && i+1 < len(r) && r[i+1] == '<' && (i+2 >= len(r) || r[i+2] != '<'):
+			j := i + 2
+			if j < len(r) && r[j] == '-' {
+				j++
+			}
+			for j < len(r) && (r[j] == ' ' || r[j] == '\t') {
+				j++
+			}
+			k := j
+			for k < len(r) && !strings.ContainsRune(" \t\n;&|<>()", r[k]) {
+				k++
+			}
+			if k > j {
+				heredocs = append(heredocs, strings.Trim(string(r[j:k]), `'"\`))
+			}
+			cur.WriteString("<<")
+			i++
+		case c == '\n':
+			flush()
+			for len(heredocs) > 0 {
+				d := heredocs[0]
+				heredocs = heredocs[1:]
+				for i+1 < len(r) {
+					end := i + 1
+					for end < len(r) && r[end] != '\n' {
+						end++
+					}
+					line := strings.TrimSpace(string(r[i+1 : end]))
+					i = end
+					if line == d {
+						break
+					}
+				}
+			}
+		case c == ';':
+			flush()
+		case c == '&' && i+1 < len(r) && r[i+1] == '&':
+			i++
+			flush()
+		case c == '|' && i+1 < len(r) && r[i+1] == '|':
+			i++
+			flush()
+		case c == '|':
+			flush()
+			pipe = true
+		case c == '&' && (i+1 < len(r) && r[i+1] == '>' || i > 0 && r[i-1] == '>'):
+			cur.WriteRune(c)
+		case c == '&':
+			flush()
+		default:
+			cur.WriteRune(c)
+		}
+	}
+	flush()
+	return segs
+}
+
+type benchTok struct{ raw, s string }
+
+func benchTokenize(seg string) []benchTok {
+	var out []benchTok
+	var raw, val strings.Builder
+	var quote rune
+	have := false
+	end := func() {
+		if have {
+			out = append(out, benchTok{raw.String(), val.String()})
+		}
+		raw.Reset()
+		val.Reset()
+		have = false
+	}
+	r := []rune(seg)
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else if c == '\\' && quote == '"' && i+1 < len(r) {
+				i++
+				val.WriteRune(r[i])
+			} else {
+				val.WriteRune(c)
+			}
+			raw.WriteRune(c)
+		case c == '\'' || c == '"':
+			quote, have = c, true
+			raw.WriteRune(c)
+		case c == '\\' && i+1 < len(r):
+			i++
+			have = true
+			raw.WriteRune(c)
+			raw.WriteRune(r[i])
+			val.WriteRune(r[i])
+		case c == ' ' || c == '\t':
+			end()
+		default:
+			have = true
+			raw.WriteRune(c)
+			val.WriteRune(c)
+		}
+	}
+	end()
+	return out
+}
+
+// benchSegArgs separates a segment's words from its redirections.
+func benchSegArgs(toks []benchTok) (words []string, outTargets []string) {
+	for i := 0; i < len(toks); i++ {
+		raw, s := toks[i].raw, toks[i].s
+		p := 0
+		for p < len(raw) && raw[p] >= '0' && raw[p] <= '9' {
+			p++
+		}
+		if strings.HasPrefix(raw, "&>") {
+			p = 1
+		}
+		if p < len(raw) && (raw[p] == '>' || raw[p] == '<') {
+			dir := raw[p]
+			q := p
+			for q < len(raw) && (raw[q] == dir || raw[q] == '|' || raw[q] == '-' && dir == '<') {
+				q++
+			}
+			target := s[q:]
+			if target == "" && i+1 < len(toks) {
+				i++
+				target = toks[i].s
+			}
+			if dir == '>' && target != "" {
+				outTargets = append(outTargets, target)
+			}
+			continue
+		}
+		words = append(words, s)
+	}
+	return words, outTargets
+}
+
+var benchValueFlags = map[string]bool{"-g": true, "--glob": true, "-t": true, "--type": true, "-T": true, "--type-not": true, "-A": true, "-B": true,
+	"-C": true, "-m": true, "--max-count": true, "-d": true, "--max-depth": true, "-j": true, "--threads": true, "-r": true, "--replace": true,
+	"--include": true, "--exclude": true, "--exclude-dir": true, "--max-columns": true, "--iglob": true}
+
+// benchNonFlags returns the non-flag words and whether -e/-f/--regexp/--file supplied the pattern.
+func benchNonFlags(args []string, valueFlags map[string]bool) (rest []string, patternFlag bool) {
+	done := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case done:
+			rest = append(rest, a)
+		case a == "--":
+			done = true
+		case a == "-e" || a == "-f" || a == "--regexp" || a == "--file":
+			patternFlag = true
+			i++
+		case a == "-" || !strings.HasPrefix(a, "-"):
+			rest = append(rest, a)
+		case valueFlags[a]:
+			i++
+		}
+	}
+	return rest, patternFlag
+}
+
+func benchShortFlagHas(args []string, c rune) bool {
+	for _, a := range args {
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.ContainsRune(a[1:], c) {
+			return true
+		}
+	}
+	return false
+}
+
+// benchClassifyCommand counts file reads, searches, file writes and `orch lsp`
+// calls in a Bash command line. A pipeline stage that only filters stdin does
+// not count as a read or search.
+func benchClassifyCommand(cmd string) benchCmdCounts {
+	var cc benchCmdCounts
+	for _, sg := range benchSplitCommand(cmd) {
+		words, outs := benchSegArgs(benchTokenize(sg.text))
+		for len(words) > 0 {
+			w := words[0]
+			if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") && !strings.Contains(strings.SplitN(w, "=", 2)[0], "/") ||
+				w == "time" || w == "then" || w == "do" || w == "else" || w == "if" || w == "while" || w == "!" || w == "command" {
+				words = words[1:]
+				continue
+			}
+			break
+		}
+		if len(words) > 0 {
+			words[0] = strings.TrimLeft(words[0], "({")
+		}
+		for _, o := range outs {
+			if !strings.HasPrefix(o, "&") && !strings.HasPrefix(o, "/dev/") && !strings.HasPrefix(o, "/tmp/") && !strings.HasPrefix(o, "/var/") && !benchNonSourceRE.MatchString(o) {
+				cc.Edits++
+				break
+			}
+		}
+		if len(words) == 0 {
+			continue
+		}
+		name, args := filepath.Base(words[0]), words[1:]
+		switch name {
+		case "cat", "less", "nl":
+			if f, _ := benchNonFlags(args, nil); len(f) > 0 {
+				cc.Reads++
+			}
+		case "head", "tail":
+			if f, _ := benchNonFlags(args, map[string]bool{"-n": true, "-c": true}); len(f) > 0 {
+				cc.Reads++
+			}
+		case "sed":
+			f, pat := benchNonFlags(args, map[string]bool{"-e": true})
+			switch {
+			case benchShortFlagHas(args, 'i') || slicesContains(args, "--in-place"):
+				cc.Edits++
+			case benchShortFlagHas(args, 'n'):
+				need := 2
+				if pat || slicesContains(args, "-e") {
+					need = 1
+				}
+				if len(f) >= need {
+					cc.Reads++
+				}
+			}
+		case "perl":
+			if benchShortFlagHas(args, 'i') {
+				cc.Edits++
+			}
+		case "tee":
+			if f, _ := benchNonFlags(args, nil); len(f) > 0 {
+				cc.Edits++
+			}
+		case "rg", "grep", "egrep", "fgrep", "ag":
+			benchCountSearch(&cc, args, sg.afterPipe)
+		case "git":
+			if f, _ := benchNonFlags(args, map[string]bool{"-C": true, "-c": true}); len(f) > 0 && f[0] == "grep" {
+				var rest []string
+				for i, a := range args {
+					if a == "grep" {
+						rest = args[i+1:]
+						break
+					}
+				}
+				benchCountSearch(&cc, rest, sg.afterPipe)
+			}
+		case "orch":
+			if len(args) > 0 && args[0] == "lsp" {
+				cc.OrchLSP++
+			}
+		}
+	}
+	return cc
+}
+
+var benchNonSourceRE = regexp.MustCompile(`\.(log|out|txt|diff|patch)$`)
+
+func slicesContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func benchCountSearch(cc *benchCmdCounts, args []string, afterPipe bool) {
+	f, pat := benchNonFlags(args, benchValueFlags)
+	paths := len(f)
+	if !pat && paths > 0 {
+		paths--
+	}
+	if !afterPipe || paths > 0 {
+		cc.Searches++
+	}
+}
+
+// benchTranscriptStats are the counts taken from a Claude Code session transcript.
+type benchTranscriptStats struct {
+	Found                         bool
+	Diagnostics, DiagErrors, Hook float64
+	LSPDeferred                   bool
+}
+
+func benchParseTranscript(path string) benchTranscriptStats {
+	var t benchTranscriptStats
+	f, e := os.Open(path)
+	if e != nil {
+		return t
+	}
+	defer f.Close()
+	t.Found = true
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, e := br.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 && bytes.Contains(line, []byte(`"attachment"`)) {
+			var ev struct {
+				Attachment struct {
+					Type  string `json:"type"`
+					Files []struct {
+						Diagnostics []struct {
+							Severity string `json:"severity"`
+						} `json:"diagnostics"`
+					} `json:"files"`
+					AddedNames []string        `json:"addedNames"`
+					Content    json.RawMessage `json:"content"`
+				} `json:"attachment"`
+			}
+			if json.Unmarshal(line, &ev) == nil {
+				a := ev.Attachment
+				switch a.Type {
+				case "diagnostics":
+					t.Diagnostics++
+					for _, fl := range a.Files {
+						for _, d := range fl.Diagnostics {
+							if d.Severity == "Error" {
+								t.DiagErrors++
+							}
+						}
+					}
+				case "hook_additional_context":
+					if c := strings.TrimSpace(string(a.Content)); c != "" && c != "null" && c != "[]" && c != `""` {
+						t.Hook++
+					}
+				case "deferred_tools_delta", "deferred_tools_record":
+					if slicesContains(a.AddedNames, "LSP") {
+						t.LSPDeferred = true
+					}
+				}
+			}
+		}
+		if e != nil {
+			break
+		}
+	}
+	return t
+}
+
+// benchGoDecls returns the package name and top-level names a Go file declares.
+func benchGoDecls(name string, src []byte) (string, map[string]bool) {
+	f, e := parser.ParseFile(token.NewFileSet(), name, src, parser.SkipObjectResolution)
+	if e != nil || f == nil {
+		return "", nil
+	}
+	names := map[string]bool{}
+	add := func(n string) {
+		if n != "_" && n != "init" {
+			names[n] = true
+		}
+	}
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				add(d.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, sp := range d.Specs {
+				switch sp := sp.(type) {
+				case *ast.TypeSpec:
+					add(sp.Name.Name)
+				case *ast.ValueSpec:
+					for _, n := range sp.Names {
+						add(n.Name)
+					}
+				}
+			}
+		}
+	}
+	return f.Name.Name, names
+}
+
+// benchRemoveCollidingTests deletes agent-added _test.go files that declare a
+// top-level name also declared (in the same package and directory) by a hidden
+// Go file, which would stop the package from building once hidden tests return.
+func benchRemoveCollidingTests(wt, commit string, hidden []string) (removed []string) {
+	type decl struct {
+		pkg   string
+		names map[string]bool
+	}
+	byDir := map[string][]decl{}
+	hiddenSet := map[string]bool{}
+	for _, h := range hidden {
+		hiddenSet[filepath.ToSlash(h)] = true
+		if !strings.HasSuffix(h, ".go") {
+			continue
+		}
+		src, e := benchGit(wt, "show", commit+":"+h)
+		if e != nil {
+			continue
+		}
+		if pkg, names := benchGoDecls(h, []byte(src)); names != nil {
+			d := filepath.ToSlash(filepath.Dir(h))
+			byDir[d] = append(byDir[d], decl{pkg, names})
+		}
+	}
+	var dirs []string
+	for d := range byDir {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	for _, d := range dirs {
+		entries, e := os.ReadDir(filepath.Join(wt, filepath.FromSlash(d)))
+		if e != nil {
+			continue
+		}
+		for _, en := range entries {
+			rel := path.Join(d, en.Name())
+			if en.IsDir() || !strings.HasSuffix(en.Name(), "_test.go") || hiddenSet[rel] {
+				continue
+			}
+			if _, e := benchGit(wt, "cat-file", "-e", commit+"^:"+rel); e == nil {
+				continue // existed before the change
+			}
+			src, e := os.ReadFile(filepath.Join(wt, filepath.FromSlash(rel)))
+			if e != nil {
+				continue
+			}
+			pkg, names := benchGoDecls(rel, src)
+			var clash []string
+			for _, h := range byDir[d] {
+				if h.pkg != pkg {
+					continue
+				}
+				for n := range names {
+					if h.names[n] {
+						clash = append(clash, n)
+					}
+				}
+			}
+			if len(clash) > 0 && os.Remove(filepath.Join(wt, filepath.FromSlash(rel))) == nil {
+				sort.Strings(clash)
+				removed = append(removed, rel+" ("+strings.Join(clash, ", ")+")")
+			}
+		}
+	}
+	return removed
 }
