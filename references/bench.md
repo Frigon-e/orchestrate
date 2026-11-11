@@ -304,6 +304,82 @@ Multiple recorded changes are confounded. Unknown commits are not reproducible;
 asserted commits are not presented as git-verified checkout commands. Stored
 comparisons work without the original checkout or raw gate directory.
 
+## Replay runs
+
+`orch bench run` replays past commits of a target repo as agent tasks and stores
+each cell as a run of kind `replay` with free metrics only (no gate snapshot, no
+subject).
+
+Inputs live in the suite directory. `suite.toml` sets `repo` and one
+`[arms.<name>]` per replay arm with `kind = "replay"`; arms without it are
+ignored. Optional arm keys: `model` (sonnet), `setting_sources` (`project,local`),
+`plugin_dirs` (`~` expanded), `append_system_prompt`, `allowed_tools`, `env`
+(use `ENABLE_TOOL_SEARCH = "false"` to load every tool schema up front),
+`strict_mcp_config` (false; adds `--strict-mcp-config` with no `--mcp-config`, so
+no MCP server loads), `tools` (list; adds `--tools`, restricting the built-in
+tool set), `disallowed_tools` (list; adds `--disallowedTools`),
+`max_budget_usd` (10), `timeout_minutes` (60). `tasks.toml` holds `[[task]]`
+entries with `id`, `commit` (the agent starts at `commit^`), `hidden` (paths
+restored from `commit` after the agent), `check` (run with `sh -c`), optional
+`setup` and `prompt`. A `repo` in `tasks.toml` must equal the suite repo.
+
+```
+orch bench run reuse --tasks a,b --arms x,y --repeats 2 --parallel 2
+orch bench run reuse --dry-run
+orch bench run reuse --summary [--json]
+```
+
+Cells run in the order repeat, task, arm, so arms interleave in time. Each cell:
+
+1. Adds a detached worktree at `commit^` under `$ORCH_CACHE_DIR/bench-wt/<suite>`
+   (the user cache directory when unset). Only this throwaway checkout is removed
+   afterwards, unless `--keep-worktrees`.
+2. Runs `setup` if set. A setup failure records the cell with an error and skips the agent.
+3. Runs headless `claude -p` with the arm's model, `--setting-sources`, plugin
+   dirs and budget, plus `ORCH_TOOL_GUARD=off ORCH_LOOKUP_COACH=off
+   ORCH_LOOKUP_LOG=off` and the arm `env`. Output goes to `snapshot/stream.jsonl`
+   and `stderr.txt`. A timeout kills the process group and sets `timed_out`.
+4. Stores the diff as `agent.patch`, restores the hidden tests from `commit`, runs
+   `check` and stores `check.log`. Exit 0 is `pass=1`. Before restoring, an
+   agent-added `_test.go` file (absent at `commit^`) is removed when it declares a
+   top-level func, type, var or const that a hidden Go file in the same directory
+   and package also declares, because the package would not build. Removed paths
+   go in the run's warnings and `hidden_collisions`.
+
+`setting_sources = "project,local"` keeps the user's own settings and plugins out
+of the run, so an arm sees only what its plugin dirs and the repo provide. The env
+switches keep this tool's guard and lookup hooks from changing agent behavior.
+
+Metrics: `pass`, `cost_usd`, token totals (summed over all models, subagents
+included), `turns`, `wall_seconds`, tool counts (`tool_calls`, `read_calls`,
+`lsp_calls`, `bash_calls`, `build_test_calls`, `subagent_calls` over all threads,
+and `main_*` counts for the main thread only), `files_touched`,
+`files_outside_solution`, `timed_out` and `agent_error`.
+
+Lookup counts come from the stream's tool_use events. `read_calls` counts the Read
+tool plus Bash segments that read a file (`cat`, `sed -n`, `head`, `tail`, `less`,
+`nl` with a file argument); `lsp_calls` is only the native LSP tool.
+`search_calls` counts Grep and Glob plus Bash segments running `rg`, `grep`,
+`git grep` or `ag`; `orch_lsp_calls` counts `orch lsp <verb>` segments;
+`shell_edits` counts Bash segments that write files (`sed -i`, `perl -pi`, `tee
+file`, or a `>`/`>>` redirect to a file other than `/dev`, `/tmp`, `/var` or a
+`.log/.out/.txt/.diff/.patch` file; scripts that open files themselves are not
+seen); `toolsearch_calls` counts ToolSearch uses. Commands are split on `; && ||
+| &` and newlines outside quotes, heredoc bodies are skipped, and a pipeline stage
+that only filters stdin (no path argument) is not a read or search.
+
+Transcript metrics come from the Claude Code session transcript (`raw.transcript`)
+and are absent when it is missing: `diagnostics_pushed` (pushed LSP diagnostics
+attachments), `diagnostics_errors` (Error-severity entries in them),
+`hook_context_events` (`hook_additional_context` attachments with non-empty
+content), and `lsp_visible` (1 when the LSP tool was loaded with its schema at
+session start, 0 when it was only listed as deferred; absent when the stream's
+init does not list LSP). `lsp_loaded_via_toolsearch` is 1 when a ToolSearch query
+named LSP. `hidden_collisions` is the number of agent tests removed as above.
+
+`--summary` prints per task and arm medians (including search, read and
+diagnostics columns), then a per arm pass rate with median cost and tokens.
+
 ## Verify, migrate and transfer
 
 ```

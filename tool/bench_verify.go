@@ -67,7 +67,7 @@ func benchVerifyRun(r *benchRun, snap string) error {
 			}
 		}
 	}
-	if r.Kind != "report-only" {
+	if r.Kind != "report-only" && r.Kind != "replay" {
 		path := filepath.Join(snap, "gate.json")
 		if e := benchSafe(path); e != nil {
 			return e
@@ -207,7 +207,7 @@ func benchVerify(suite string) ([]benchFinding, error) {
 		}
 		for _, r := range runs {
 			path := filepath.Join(r.dir, "run.json")
-			if r.Subject == "" {
+			if r.Subject == "" && r.Kind != "replay" {
 				add("info", path, fail("legacy unbound subject: unknown; migration proposals do not bind original evidence"))
 			}
 			add("error", path, benchVerifyRun(r, filepath.Join(r.dir, "snapshot")))
@@ -218,6 +218,9 @@ func benchVerify(suite string) ([]benchFinding, error) {
 			}
 			if r.Kind == "report-only" {
 				add("info", path, fail("report-only: findings and execution time unknown"))
+			}
+			if r.Kind == "replay" {
+				add("info", path, fail("replay: agent run with free metrics only; no gate snapshot or subject"))
 			}
 		}
 		keys, e := benchKeys(name)
