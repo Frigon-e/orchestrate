@@ -171,7 +171,7 @@ func insideRepository(cwd, path string) bool {
 }
 
 // piBigReadReason is the deny-big-read text for pi's read call, or "" when it passes.
-func piBigReadReason(cwd string, input map[string]any, state *State) string {
+func piBigReadReason(cwd string, input map[string]any, state lockedState) string {
 	path, ok := input["path"].(string)
 	if !ok || strings.TrimSpace(path) == "" {
 		return ""
@@ -192,7 +192,7 @@ func piBigReadReason(cwd string, input map[string]any, state *State) string {
 	if !over || state.bigReadWarned(filepath.Clean(target)) {
 		return ""
 	}
-	return bigReadReason(path, f, true, forPi)
+	return bigReadReason(path, f, state.file != nil, forPi)
 }
 
 // lockedState is a session's state held under its flock; a state that cannot be
@@ -238,7 +238,7 @@ func PiPre(ev *Event) PiResponse {
 	}
 	if guardOn {
 		if tool == "read" && !bigReadSkipped() {
-			if reason := piBigReadReason(cwd, input, state.State); reason != "" {
+			if reason := piBigReadReason(cwd, input, state); reason != "" {
 				return block(reason)
 			}
 		}

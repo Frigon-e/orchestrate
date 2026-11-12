@@ -26,6 +26,7 @@ const (
 	codeReadLines = 2000
 	codeReadBytes = 102400
 	outlineMax    = 50
+	inspectMax    = 4 << 20
 )
 
 var codeExts = set(".go", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".java", ".kt", ".kts",
@@ -66,7 +67,13 @@ func inspectBigRead(target string) (bigFile, bool) {
 	if !code && !doc {
 		return f, true
 	}
-	data, err := os.ReadFile(target)
+	file, err := os.Open(target)
+	if err != nil {
+		return bigFile{}, false
+	}
+	// Only the head of a huge file is counted and outlined; it blocks either way.
+	data, err := io.ReadAll(io.LimitReader(file, inspectMax))
+	file.Close()
 	if err != nil {
 		return bigFile{}, false
 	}
@@ -115,7 +122,11 @@ func bigReadReason(path string, f bigFile, repeat bool, h harness) string {
 	kilobytes := int(math.Max(1, math.RoundToEven(float64(f.size)/1024)))
 	head := fmt.Sprintf("%s (deny-big-read): %s is ", Marker, path)
 	if f.lines > 0 {
-		head += fmt.Sprintf("%d lines (%d KB)", f.lines, kilobytes)
+		unit := "lines"
+		if f.lines == 1 {
+			unit = "line"
+		}
+		head += fmt.Sprintf("%d %s (%d KB)", f.lines, unit, kilobytes)
 	} else {
 		head += fmt.Sprintf("%d KB", kilobytes)
 	}
@@ -227,6 +238,9 @@ func bigRead(ev *Event, stderr io.Writer) int {
 			defer state.close()
 			if state.bigReadWarned(abs) {
 				return 0
+			}
+			if state.file == nil {
+				session = "" // a throwaway state cannot let a repeat through
 			}
 		} else {
 			session = ""
