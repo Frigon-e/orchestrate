@@ -49,6 +49,31 @@ func leadWorktree(dir, id string) string {
 	return worktreePath(dir, id)
 }
 
+// scoutStart is the directory a scout starts in: the worktree of the lead whose
+// branch the scout's base names, so it reads the code it reviews. A base that
+// is no live lead's branch (main, a removed worktree) gives the repo root. A
+// scout never gets a worktree of its own.
+func scoutStart(s site, base string) string {
+	branch, _, _ := strings.Cut(base, "@")
+	if branch == "" {
+		return s.repo
+	}
+	for _, dir := range allTasks(s.root) {
+		l, err := loadLead(dir)
+		if err != nil || l == nil {
+			continue
+		}
+		wt := leadWorktree(dir, filepath.Base(dir))
+		if fi, err := os.Stat(wt); err != nil || !fi.IsDir() {
+			continue
+		}
+		if worktreeBranch(s.repo, wt) == branch {
+			return wt
+		}
+	}
+	return s.repo
+}
+
 // placeShip puts a ship lead on a worktree: made fresh, or for a respawn
 // reopened as it was left. With a layout the agent's pane is split off the
 // workspace's root pane so it gets the lead env, and the root pane is closed once

@@ -400,7 +400,11 @@ func (a *app) spawn(id, brief string) error {
 		return err
 	}
 	ctx := context.Background()
-	spec := Spec{Name: name, Harness: fm["harness"], Cwd: s.repo, Env: env}
+	start := s.repo
+	if fm["kind"] == "scout" {
+		start = scoutStart(s, fm["base"])
+	}
+	spec := Spec{Name: name, Harness: fm["harness"], Cwd: start, Env: env}
 	started := false
 	// The slot check, the pane and the lead record go under one guard, so two
 	// spawns cannot both see a free slot or both take the same task. The slow
@@ -433,7 +437,7 @@ func (a *app) spawn(id, brief string) error {
 			prev, _ := loadLead(dir)
 			pane, tabID, workspaceID, wt, err = a.placeShip(s, dir, id, base, prev, env)
 		} else {
-			pane, tabID, err = placePane(myLeads(leads, me), s.repo, env)
+			pane, tabID, err = placePane(myLeads(leads, me), start, env)
 		}
 		if err != nil {
 			return err

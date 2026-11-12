@@ -928,7 +928,8 @@ func (r orcaWorktreeReply) worktree(branch string) Worktree {
 	return Worktree{Path: r.Worktree.Path, Branch: cmp3(r.Worktree.Branch, branch), Workspace: Handle(r.Worktree.handle())}
 }
 
-// CreateWorktree makes a parentless worktree. Orca picks the location; the path
+// CreateWorktree makes a child of the repo's own checkout (parentless when no
+// repo is known), so Orca shows it under the orchestrator. Orca picks the location; the path
 // comes from its reply. Setup runs natively only when asked (NativeSetup), and
 // then Orca only starts it: the result is Started, never Succeeded.
 func (b *orcaBackend) CreateWorktree(ctx context.Context, w WorktreeSpec) (Worktree, error) {
@@ -936,9 +937,11 @@ func (b *orcaBackend) CreateWorktree(ctx context.Context, w WorktreeSpec) (Workt
 	if w.NativeSetup {
 		setup = "run"
 	}
-	args := []string{"worktree", "create", "--name", w.Name, "--branch", w.Branch, "--base-branch", w.Base, "--no-parent", "--setup", setup}
+	args := []string{"worktree", "create", "--name", w.Name, "--branch", w.Branch, "--base-branch", w.Base, "--setup", setup}
 	if w.Repo != "" {
-		args = append(args, "--repo", "path:"+w.Repo)
+		args = append(args, "--repo", "path:"+w.Repo, "--parent-worktree", "path:"+w.Repo)
+	} else {
+		args = append(args, "--no-parent")
 	}
 	res, err := orcaRun(ctx, 120*time.Second, args...)
 	if err != nil {

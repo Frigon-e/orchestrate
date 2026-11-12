@@ -304,9 +304,10 @@ and an `ORCH_ORCA` binary override (default `orca`, as `ORCH_HERDR`). It wraps
   `status.blocked-reason`, and `worktree.manage`, on by default (listing a
   capability out of `backend.orca.native` turns it off). Does not declare
   `layout`. `worktree.manage` creates with `worktree create --name <id> --branch
-  orch/<id> --base-branch <base> --no-parent` (Orca infers a parent from the
-  caller's directory otherwise; a scratch create from the orchestrate repo got
-  that repo's main worktree as parent), reads the worktree path from the result
+  orch/<id> --base-branch <base> --parent-worktree path:<repo>` (the orchestrator's
+  checkout, so Orca shows the lead as its child; without it Orca infers a parent
+  from the caller's directory, and a scratch create from the orchestrate repo got
+  that repo's main worktree as parent; `--no-parent` only when no repo is known), reads the worktree path from the result
   (Orca puts it under `~/orca/workspaces/<repo>/<name>`, never computed by
   orch), and removes with `worktree rm` after orch's own merged and clean checks,
   without `--delete-branch` (orch deletes with `git branch -d`).

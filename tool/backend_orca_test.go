@@ -578,7 +578,7 @@ func hookRepo(t *testing.T, tmp, setup, archive string) string {
 	return repo
 }
 
-func TestOrcaCreateWorktreeIsParentlessAndReadsPathFromReply(t *testing.T) {
+func TestOrcaCreateWorktreeIsChildOfRepoAndReadsPathFromReply(t *testing.T) {
 	h := newOrcaHarness(t)
 	a := orcaActive()
 	repo := hookRepo(t, h.tmp, "", "")
@@ -592,10 +592,13 @@ func TestOrcaCreateWorktreeIsParentlessAndReadsPathFromReply(t *testing.T) {
 		t.Errorf("worktree = %+v, want path %s", w, want)
 	}
 	args := strings.Join(h.calls("worktree create")[0], " ")
-	for _, wantArg := range []string{"--name t1", "--branch orch/t1", "--base-branch main", "--no-parent", "--setup skip", "--repo path:" + repo} {
+	for _, wantArg := range []string{"--name t1", "--branch orch/t1", "--base-branch main", "--parent-worktree path:" + repo, "--setup skip", "--repo path:" + repo} {
 		if !strings.Contains(args, wantArg) {
 			t.Errorf("create args %q lack %q", args, wantArg)
 		}
+	}
+	if strings.Contains(args, "--no-parent") {
+		t.Errorf("create args %q carry --no-parent next to a parent", args)
 	}
 	got, err := mgr.OpenWorktrees(context.Background())
 	if err != nil || got[want] == "" {
