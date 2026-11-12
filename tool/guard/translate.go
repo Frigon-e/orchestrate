@@ -171,17 +171,20 @@ func sedSelection(a sedArgs) (offset, limit int, ok bool) {
 
 // ---- head and tail ----
 
-// countOption reads the line count of head or tail: -n N, -nN, -N, --lines=N
-// or --lines N. The value keeps its sign so tail's +N shows.
-func countOption(args []string) (value string, files []string, ok bool) {
+// countArg reads the line count of head or tail: -n N, -nN, -N, --lines=N or
+// --lines N, default 10. Only tail takes +N (from line N): plus reports it.
+func countArg(args []string, allowPlus bool) (n int, plus bool, files []string, ok bool) {
+	value := ""
+parse:
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			return value, append(files, args[i+1:]...), true
+			files = append(files, args[i+1:]...)
+			break parse
 		case arg == "-n" || arg == "--lines":
 			if i+1 >= len(args) {
-				return "", nil, false
+				return 0, false, nil, false
 			}
 			i++
 			value = args[i]
@@ -192,43 +195,22 @@ func countOption(args []string) (value string, files []string, ok bool) {
 		case len(arg) > 1 && arg[0] == '-' && digits.MatchString(arg[1:]):
 			value = arg[1:]
 		case arg != "-" && strings.HasPrefix(arg, "-"):
-			return "", nil, false
+			return 0, false, nil, false
 		default:
 			files = append(files, arg)
 		}
 	}
-	return value, files, true
-}
-
-// headLines is the first N lines head prints.
-func headLines(args []string) (n int, files []string, ok bool) {
-	value, files, ok := countOption(args)
-	if !ok {
-		return 0, nil, false
-	}
 	if value == "" {
-		return 10, files, true
+		return 10, false, files, true
 	}
-	if !digits.MatchString(value) || atoi(value) < 1 {
-		return 0, nil, false
+	number := value
+	if allowPlus {
+		number = strings.TrimPrefix(value, "+")
 	}
-	return atoi(value), files, true
-}
-
-// tailLines is tail's count: plus for -n +N (from line N), else the last N lines.
-func tailLines(args []string) (plus bool, n int, files []string, ok bool) {
-	value, files, ok := countOption(args)
-	if !ok {
-		return false, 0, nil, false
-	}
-	if value == "" {
-		return false, 10, files, true
-	}
-	number := strings.TrimPrefix(value, "+")
 	if !digits.MatchString(number) || atoi(number) < 1 {
-		return false, 0, nil, false
+		return 0, false, nil, false
 	}
-	return number != value, atoi(number), files, true
+	return atoi(number), number != value, files, true
 }
 
 // ---- awk ----
@@ -358,20 +340,20 @@ type readRange struct {
 
 // selection is the line range one print-only call shows, and the files it reads.
 func selection(name string, args []string) (offset, limit int, files []string, ok bool) {
-	switch name {
-	case "sed", "gsed":
+	switch {
+	case sedFamily(name):
 		a := parseSed(args)
 		offset, limit, ok = sedSelection(a)
 		return offset, limit, a.files, ok
-	case "awk", "gawk", "mawk":
+	case awkFamily(name):
 		a := parseAwk(args)
 		offset, limit, ok = awkSelection(a)
 		return offset, limit, a.files, ok
-	case "head":
-		n, files, ok := headLines(args)
+	case name == "head":
+		n, _, files, ok := countArg(args, false)
 		return 1, n, files, ok
-	case "tail":
-		plus, n, files, ok := tailLines(args)
+	case name == "tail":
+		n, plus, files, ok := countArg(args, true)
 		if !ok || !plus {
 			return 0, 0, nil, false
 		}
@@ -415,14 +397,14 @@ func pipelineRange(a, b segment) (readRange, bool) {
 			return readRange{file, offset, limit}, true
 		}
 	case an == "head" && bn == "tail":
-		n, files, ok := headLines(aa)
-		plus, k, more, okTail := tailLines(ba)
+		n, _, files, ok := countArg(aa, false)
+		k, plus, more, okTail := countArg(ba, true)
 		if ok && okTail && !plus && len(files) == 1 && plainFile(files[0]) && len(more) == 0 && k <= n {
 			return readRange{files[0], n - k + 1, k}, true
 		}
 	case an == "tail" && bn == "head":
-		plus, from, files, ok := tailLines(aa)
-		n, more, okHead := headLines(ba)
+		from, plus, files, ok := countArg(aa, true)
+		n, _, more, okHead := countArg(ba, false)
 		if ok && okHead && plus && len(files) == 1 && plainFile(files[0]) && len(more) == 0 {
 			return readRange{files[0], from, n}, true
 		}
@@ -438,7 +420,7 @@ func readRangeHit(line string) (readRange, bool) {
 		return pipelineRange(segs[0], segs[1])
 	}
 	for _, s := range segs {
-		if !clean(s) || s.sub {
+		if !clean(s) {
 			continue
 		}
 		name, args := command(s)
@@ -476,8 +458,18 @@ func readRangeReason(line string, h harness) string {
 // ---- rewrites ----
 
 // An edit is what a rewriting command does, in the terms of the Edit tool.
+type editKind int
+
+const (
+	kindNone editKind = iota // no clear translation
+	kindSubst
+	kindDelete
+	kindInsert
+	kindGrepDel
+)
+
 type edit struct {
-	kind     string // subst, delete, insert, grepdel
+	kind     editKind
 	old, new string
 	all      bool
 	lo, hi   int // the lines it touches, 0 for the whole file
@@ -575,7 +567,7 @@ func substEdit(delim byte, body string, ere, perl bool) (edit, bool) {
 	if !okPat || !okRep {
 		return edit{}, false
 	}
-	return edit{kind: "subst", old: old, new: repl, all: flags == "g"}, true
+	return edit{kind: kindSubst, old: old, new: repl, all: flags == "g"}, true
 }
 
 var (
@@ -599,7 +591,7 @@ func sedEdit(script string, ere bool) (edit, bool) {
 	script = strings.TrimSpace(script)
 	if m := sedDelete.FindStringSubmatch(script); m != nil {
 		if lo, hi, ok := lineSpan(m[1], m[2]); ok {
-			return edit{kind: "delete", lo: lo, hi: hi}, true
+			return edit{kind: kindDelete, lo: lo, hi: hi}, true
 		}
 		return edit{}, false
 	}
@@ -618,14 +610,14 @@ func sedEdit(script string, ere bool) (edit, bool) {
 		if lo < 1 || text == "" || strings.ContainsAny(text, "\\\n") {
 			return edit{}, false
 		}
-		return edit{kind: "insert", lo: lo, hi: lo, text: text, after: m[2] == "a"}, true
+		return edit{kind: kindInsert, lo: lo, hi: lo, text: text, after: m[2] == "a"}, true
 	}
 	if m := sedGrepDel.FindStringSubmatch(script); m != nil {
 		old, ok := literalPattern(m[1], '/', ere, false)
 		if !ok || strings.Contains(old, "'") {
 			return edit{}, false
 		}
-		return edit{kind: "grepdel", old: old}, true
+		return edit{kind: kindGrepDel, old: old}, true
 	}
 	return edit{}, false
 }
@@ -652,21 +644,31 @@ func awkEdit(program string) (edit, bool) {
 		if !ok {
 			return edit{}, false
 		}
-		return edit{kind: "subst", old: old, new: m[3], all: m[1] == "gsub"}, true
+		return edit{kind: kindSubst, old: old, new: m[3], all: m[1] == "gsub"}, true
 	}
 	if m := awkSkipLine.FindStringSubmatch(program); m != nil && atoi(m[1]) >= 1 {
-		return edit{kind: "delete", lo: atoi(m[1]), hi: atoi(m[1])}, true
+		return edit{kind: kindDelete, lo: atoi(m[1]), hi: atoi(m[1])}, true
 	}
 	if m := awkSkipSpan.FindStringSubmatch(program); m != nil {
 		if lo, hi, ok := awkLines(m[1]); ok && hi != 0 {
-			return edit{kind: "delete", lo: lo, hi: hi}, true
+			return edit{kind: kindDelete, lo: lo, hi: hi}, true
 		}
 	}
 	return edit{}, false
 }
 
-// perlParts is the -e script, the files, and whether -p prints the lines, of a perl one-liner.
-func perlParts(args []string) (script string, files []string, printing, ok bool) {
+// perlOpts is a perl one-liner's switches. A switch cluster is read letter by
+// letter: a letter that takes a value (-M, -I, -e ...) ends it, so -MTime::HiRes
+// or -Ilib/util is not -i. Switches end at -- or the script name.
+type perlOpts struct {
+	script   string   // the -e code, "" when there is none
+	files    []string // the arguments after the switches, only when there is a script
+	printing bool     // -p
+	inplace  bool     // -i
+}
+
+func perlParts(args []string) perlOpts {
+	var o perlOpts
 	k := 0
 	for ; k < len(args); k++ {
 		a := args[k]
@@ -679,32 +681,49 @@ func perlParts(args []string) (script string, files []string, printing, ok bool)
 		}
 	cluster:
 		for j := 1; j < len(a); j++ {
-			switch a[j] {
-			case 'p':
-				printing = true
-			case 'e', 'E':
+			c := a[j]
+			switch {
+			case c == 'p':
+				o.printing = true
+			case c == 'i':
+				o.inplace = true
+				break cluster
+			case c == 'e' || c == 'E':
 				if j == len(a)-1 && k+1 < len(args) {
 					k++
-					script = args[k]
+					o.script = args[k]
 				}
 				break cluster
-			case 'i', 'M', 'm', 'I', 'x', 'C', 'd', 'D', 'V':
+			case c == 'l' || c == '0': // an optional number follows, then more switches
+				octal := "01234567"
+				if c == '0' && j+1 < len(a) && a[j+1] == 'x' {
+					octal = "0123456789abcdefABCDEF"
+					j++
+				}
+				for j+1 < len(a) && strings.IndexByte(octal, a[j+1]) >= 0 {
+					j++
+				}
+			case strings.IndexByte("MmIxCdDV", c) >= 0:
 				break cluster
 			}
 		}
 	}
-	if script == "" || k > len(args) {
-		return "", nil, false, false
+	if o.script == "" || k > len(args) {
+		o.script, o.printing = "", false
+		return o
 	}
-	return script, args[k:], printing, true
+	o.files = args[k:]
+	return o
 }
 
 // A rewrite is a command that rewrites a file: in place, or into a temp file
 // that is moved back.
 type rewrite struct {
 	files []string
-	edit  *edit
+	edit  edit
 }
+
+func sedFamily(name string) bool { return name == "sed" || name == "gsed" }
 
 func awkFamily(name string) bool { return name == "awk" || name == "gawk" || name == "mawk" }
 
@@ -734,66 +753,50 @@ func rewriteHit(line string) (rewrite, bool) {
 	segs := segments(line, false)
 	for i, s := range segs {
 		name, args := command(s)
-		var rw rewrite
-		hit := false
+		var files []string
+		var e edit
+		inplace := false
 		switch {
-		case name == "sed" || name == "gsed":
+		case sedFamily(name):
 			a := parseSed(args)
-			files := a.files
-			hit = inPlaceEdit(args)
-			if !hit && s.target != "" && !s.stdout {
-				var f string
-				if f, hit = movedBack(segs[i+1:], s.target, a.files); hit {
-					files = []string{f}
-				}
-			}
-			if hit {
-				rw.files = files
-				if a.ok && len(a.scripts) == 1 && len(files) > 0 {
-					if e, ok := sedEdit(a.scripts[0], a.ere); ok {
-						rw.edit = &e
-					}
+			files, inplace = a.files, inPlaceEdit(args)
+			if a.ok && len(a.scripts) == 1 {
+				if ed, ok := sedEdit(a.scripts[0], a.ere); ok {
+					e = ed
 				}
 			}
 		case name == "perl":
-			script, files, printing, ok := perlParts(args)
-			hit = perlInPlace(args)
-			if !hit && ok && s.target != "" && !s.stdout {
-				var f string
-				if f, hit = movedBack(segs[i+1:], s.target, files); hit {
-					files = []string{f}
-				}
-			}
-			if hit {
-				rw.files = files
-				if ok && printing && len(files) > 0 {
-					if e, okEdit := perlEdit(script); okEdit {
-						rw.edit = &e
-					}
+			p := perlParts(args)
+			files, inplace = p.files, p.inplace
+			if p.printing {
+				if ed, ok := perlEdit(p.script); ok {
+					e = ed
 				}
 			}
 		case awkFamily(name):
 			a := parseAwk(args)
-			files := a.files
-			hit = a.inplace && len(files) > 0
-			if !hit && s.target != "" && !s.stdout {
-				var f string
-				if f, hit = movedBack(segs[i+1:], s.target, a.files); hit {
-					files = []string{f}
+			files, inplace = a.files, a.inplace && len(a.files) > 0
+			if a.hasProg && a.simple {
+				if ed, ok := awkEdit(a.program); ok {
+					e = ed
 				}
 			}
-			if hit {
-				rw.files = files
-				if a.hasProg && len(files) > 0 && a.simple {
-					if e, ok := awkEdit(a.program); ok {
-						rw.edit = &e
-					}
-				}
+		default:
+			continue
+		}
+		// A command whose only output is a > redirect, moved back over its source later.
+		if !inplace && s.target != "" && !s.stdout {
+			if f, ok := movedBack(segs[i+1:], s.target, files); ok {
+				files, inplace = []string{f}, true
 			}
 		}
-		if hit {
-			return rw, true
+		if !inplace {
+			continue
 		}
+		if len(files) == 0 {
+			e = edit{}
+		}
+		return rewrite{files, e}, true
 	}
 	return rewrite{}, false
 }
@@ -825,7 +828,7 @@ func hereLine(rw rewrite, h harness) string {
 
 func hereBody(rw rewrite, h harness) string {
 	e := rw.edit
-	if e == nil {
+	if e.kind == kindNone {
 		return ""
 	}
 	plain := plainFiles(rw.files)
@@ -837,7 +840,7 @@ func hereBody(rw rewrite, h harness) string {
 	}
 	editWord := piOr(h, "edit", "Edit")
 	switch e.kind {
-	case "subst":
+	case kindSubst:
 		all := ""
 		if e.all {
 			all = piOr(h, " (every occurrence)", " replace_all=true")
@@ -864,11 +867,11 @@ func hereBody(rw rewrite, h harness) string {
 			list := strings.Join(files, ", ")
 			return piOr(h, "edit each of "+list+": "+swap+all, "Edit each of "+list+" with "+pair+all)
 		}
-	case "delete":
+	case kindDelete:
 		if len(files) == 1 && plain {
 			return piOr(h, read()+", then edit "+lines+" out", read()+", then Edit "+lines+` out (new_string "")`)
 		}
-	case "insert":
+	case kindInsert:
 		where := "before"
 		if e.after {
 			where = "after"
@@ -876,7 +879,7 @@ func hereBody(rw rewrite, h harness) string {
 		if len(files) == 1 && plain {
 			return read() + ", then " + editWord + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it"
 		}
-	case "grepdel":
+	case kindGrepDel:
 		if len(files) >= 1 && len(files) <= 3 && plain {
 			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + editWord + " them out"
 		}
