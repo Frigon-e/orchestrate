@@ -57,7 +57,8 @@ subagents, so your context stays small and pieces can run in parallel.
 | Where something is, which files change, how big it is | `Explore` with `model: "haiku"`: change sites as `path:line` and a size guess |
 | A settled change that a test or check can decide | `implementer` with `model: "haiku"` |
 | A settled change that needs judgment across files, or that no check can decide (UI, prose) | `implementer` with `model: "sonnet"` |
-| Open-ended or large design, or a cause you cannot find after one investigation | an advisor: `fable-planner` with the problem, what you tried and the files; it returns a plan, which you route with the rows above |
+| A design question you want a second, stronger opinion on, or a cause you cannot find after one investigation | a planner: `Plan` with `model: "opus"`, given the problem, what you tried and the files; it returns a plan, which you route with the rows above |
+| A long-lived or hard-to-reverse design (data model, public API, architecture), or a problem the Opus planner could not settle | an advisor: `fable-planner`, briefed the same way |
 | A risky diff (concurrency, persistence, auth, money, shared signatures) | 2 or 3 `lens-reviewer` agents in parallel, one lens each |
 | New or changed tests | `test-reviewer` |
 | Any browser or visual check | `ui-verifier` |
@@ -70,8 +71,9 @@ subagents, so your context stays small and pieces can run in parallel.
   replaces the do-it-yourself row of `route-work`.
 - Independent pieces that touch different files go to parallel implementers
   in one message; coupled work goes to one implementer.
-- Never pass `opus` down by default, even on an Opus lead (`route-work`,
-  "Model rule"); a subagent started without `model` inherits yours.
+- Never give an implementer or reviewer `opus` by default, even on an Opus
+  lead (`route-work`, "Model rule"); a subagent started without `model`
+  inherits yours. Opus is for the planner row only.
 - Check every result yourself: read the diff and rerun `orch test-changed`.
   An implementer's "done" is a claim, not evidence.
 - A pi lead has no subagent types: start the same roles as helpers with
