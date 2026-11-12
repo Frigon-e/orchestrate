@@ -69,6 +69,53 @@ func TestScoutSpawnKeepsTheGridAndMakesNoWorktree(t *testing.T) {
 	if l.WorkspaceID != "" || l.PaneID != "w1:p1" || len(h.herdrCalls("tab", "create")) != 1 {
 		t.Fatalf("scout lead = %+v", l)
 	}
+	if got := flagValue(h.herdrCalls("tab", "create")[0], "--cwd"); got != h.repo {
+		t.Fatalf("scout with base main started in %q, want the repo root %q", got, h.repo)
+	}
+}
+
+func TestScoutStartsInTheWorktreeOfTheBranchItReviews(t *testing.T) {
+	cases := []struct {
+		name   string
+		base   string // the branch part of the scout's base
+		remove bool   // delete the ship lead's worktree dir first
+		want   func(h *harness) string
+	}{
+		{"live lead branch", "orch/t1", false, func(h *harness) string { return h.wt("t1") }},
+		{"branch of no lead", "main", false, func(h *harness) string { return h.repo }},
+		{"lead worktree removed", "orch/t1", true, func(h *harness) string { return h.repo }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := setup(t)
+			h.task("t1")
+			h.must("spawn", "t1")
+			if c.remove {
+				if err := os.RemoveAll(h.wt("t1")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.task("s1", "--kind", "scout")
+			path := filepath.Join(h.dir("s1"), "task.md")
+			b, _ := os.ReadFile(path)
+			sha, _ := git(h.repo, "rev-parse", "--short=12", "main")
+			text := strings.Replace(string(b), "base: main@"+sha, "base: "+c.base+"@"+sha, 1)
+			if text == string(b) && c.base != "main" {
+				t.Fatal("base line not rewritten")
+			}
+			if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			h.must("spawn", "s1")
+			if c := h.herdrCalls("worktree", "create"); len(c) != 1 {
+				t.Fatalf("scout made a worktree: %v", c)
+			}
+			tabs := h.herdrCalls("tab", "create")
+			if got, want := flagValue(tabs[len(tabs)-1], "--cwd"), c.want(h); got != want {
+				t.Fatalf("scout started in %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestShipSpawnRefusesCollisionsAndFailedCreate(t *testing.T) {
