@@ -11,12 +11,12 @@ import (
 // The decision tables are hooks/claude/toolguard_cases.json, shared with the pi
 // guard; these tests assert the Claude side of them, as toolguard_test.py did.
 
-// replacement is what a block must name, by rule: only sed-inplace is left.
+// replacement is what a block must name, by rule: sed-inplace and read-range are left.
 var replacement = map[string]map[string]string{
-	"fd-rg": {"sed-inplace": "built-in Edit"},
-	"rg":    {"sed-inplace": "built-in Edit"},
-	"fd":    {"sed-inplace": "built-in Edit"},
-	"none":  {"sed-inplace": "built-in Edit"},
+	"fd-rg": {"sed-inplace": "built-in Edit", "read-range": "Read"},
+	"rg":    {"sed-inplace": "built-in Edit", "read-range": "Read"},
+	"fd":    {"sed-inplace": "built-in Edit", "read-range": "Read"},
+	"none":  {"sed-inplace": "built-in Edit", "read-range": "Read"},
 }
 
 func nonBlank(s string) int {
@@ -92,7 +92,7 @@ func TestRequiredCasesArePresent(t *testing.T) {
 		{"gsed -i 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"sed --in-place 's/foo/bar/' file.txt", "fd-rg", "sed-inplace"},
 		{"cat notes.txt", "fd-rg", ""},
-		{"head -n 20 notes.txt", "fd-rg", ""},
+		{"head -n 20 notes.txt", "fd-rg", "read-range"},
 		{"tail -c 100 notes.txt", "fd-rg", ""},
 		{"sudo cat /etc/hosts", "fd-rg", ""},
 		{"sed 's/foo/bar/' file.txt", "fd-rg", ""},
@@ -172,13 +172,13 @@ func TestPreAllowsEventsItCannotRead(t *testing.T) {
 	}
 }
 
-// The lookup blocks are gone: find, grep and cat of one file all pass, in every PATH situation.
+// The lookup blocks are gone: find, grep and a whole-file cat all pass, in every PATH situation.
 func TestRemovedLookupBlocksAllow(t *testing.T) {
 	paths := situationPaths(t, loadToolguard(t))
 	for _, command := range []string{
 		"grep -rn Normalize src", "git grep -n Normalize", "egrep -n Gateway internal", "ag Gateway internal",
 		"find . -name '*.ts'", `find . -name x -exec ls {} \;`, "find . -type f | xargs grep -l TODO", "fd -e go | grep Gateway",
-		"cat notes.txt", "sed -n '10,20p' notes.txt",
+		"cat notes.txt",
 	} {
 		for situation, dir := range paths {
 			if code, stderr := (inProc{}).pre(t, jsonBytes(t, bashEvent(command)), dir, nil); code != 0 || stderr != "" {

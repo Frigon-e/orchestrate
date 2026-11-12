@@ -127,6 +127,9 @@ func rules(h harness) []rule {
 					"before the " + edit + " and touch -r REF FILE after. " +
 					"Do not rewrite files with python, awk or tee."
 			}},
+		{"read-range", "deny-read-range",
+			func(line string, t tools) bool { _, hit := readRangeHit(line); return hit },
+			func(t tools, line string) string { return readRangeReason(line, h) }},
 	}
 }
 

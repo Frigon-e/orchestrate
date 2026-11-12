@@ -236,7 +236,7 @@ func TestCtxReminderDecisionTable(t *testing.T) {
 		{Name: "go test", Tool: "bash", Input: bash(`go test ./...`)},
 		{Name: "plain ls", Tool: "bash", Input: bash(`ls`)},
 		{Name: "echo quoted rg", Tool: "bash", Input: bash(`echo "rg"`)},
-		{Name: "cat pipe head", Tool: "bash", Input: bash(`cat file | head -5`)},
+		{Name: "cat pipe head", Tool: "bash", Input: bash(`cat file | wc -l`)},
 		{Name: "read tool", Tool: "read", Input: map[string]any{"path": "a.go"}},
 	}
 	got := runCtxReminder(t, nil, cases)
