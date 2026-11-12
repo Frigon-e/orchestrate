@@ -2,6 +2,7 @@ package guard
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -720,25 +721,40 @@ func sedFamily(name string) bool { return name == "sed" || name == "gsed" }
 func awkFamily(name string) bool { return name == "awk" || name == "gawk" || name == "mawk" }
 
 // movedBack is true when a later mv puts target over one of the files.
+// movedBack finds a later command that puts the temp file target back over
+// one of the source files: mv or cp onto it, or cat redirected onto it.
 func movedBack(later []segment, target string, files []string) (string, bool) {
 	for _, s := range later {
-		if name, args := command(s); name == "mv" {
-			var ops []string
-			for _, a := range args {
-				if a != "-f" {
-					ops = append(ops, a)
-				}
+		name, args := command(s)
+		var ops []string
+		for _, a := range args {
+			if a != "-f" && a != "--" {
+				ops = append(ops, a)
 			}
-			if len(ops) == 2 && ops[0] == target {
-				for _, f := range files {
-					if f == ops[1] {
-						return f, true
-					}
-				}
-			}
+		}
+		dest := ""
+		switch {
+		case (name == "mv" || name == "cp") && len(ops) == 2 && ops[0] == target:
+			dest = ops[1]
+		case name == "cat" && len(ops) == 1 && ops[0] == target && !s.stdout:
+			dest = s.target
+		}
+		if dest != "" && slices.Contains(files, dest) {
+			return dest, true
 		}
 	}
 	return "", false
+}
+
+// spongedBack finds sponge writing the piped output back over one of the
+// source files; direct says it reads this command's output with nothing between.
+func spongedBack(later []segment, files []string) (file string, direct, ok bool) {
+	for i, s := range later {
+		if name, args := command(s); name == "sponge" && len(args) == 1 && slices.Contains(files, args[0]) {
+			return args[0], i == 0 && s.stdin, true
+		}
+	}
+	return "", false, false
 }
 
 func rewriteHit(line string) (rewrite, bool) {
@@ -782,6 +798,16 @@ func rewriteHit(line string) (rewrite, bool) {
 		if !inplace && s.target != "" && !s.stdout {
 			if f, ok := movedBack(segs[i+1:], s.target, files); ok {
 				files, inplace = []string{f}, true
+			}
+		}
+		// A command piped into sponge over its source; another stage between
+		// changes the output, so then there is no single translation.
+		if !inplace && s.stdout {
+			if f, direct, ok := spongedBack(segs[i+1:], files); ok {
+				files, inplace = []string{f}, true
+				if !direct {
+					e = edit{}
+				}
 			}
 		}
 		if !inplace {

@@ -271,7 +271,7 @@
     { "name": "ed allow gawk -i inplace 'NR!=5'", "situation": "fd-rg", "rule": "", "command": "gawk -i inplace 'NR!=5'" },
     { "name": "ed allow cp a.go a.bak", "situation": "fd-rg", "rule": "", "command": "cp a.go a.bak" },
     { "name": "ed allow awk 'NR!=5' a.go > a.tmp && mv a.tmp other.go", "situation": "fd-rg", "rule": "", "command": "awk 'NR!=5' a.go > a.tmp && mv a.tmp other.go" },
-    { "name": "ed allow awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go", "situation": "fd-rg", "rule": "", "command": "awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go" },
+    { "name": "ed awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go", "situation": "fd-rg", "rule": "sed-inplace", "command": "awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go", "reasonHas": {"claude": ["Here: Read file_path=a.go offset=5 limit=1, then Edit that line out"], "pi": ["Here: read path=a.go offset=5 limit=1, then edit that line out"]} },
     { "name": "rr allow command substitution assignment", "situation": "fd-rg", "rule": "", "command": "VERSION=$(sed -n 1p VERSION) && echo $VERSION" },
     { "name": "rr allow command substitution in quotes", "situation": "fd-rg", "rule": "", "command": "echo \"$(head -n 3 a.go)\"" },
     { "name": "rr allow process substitution", "situation": "fd-rg", "rule": "", "command": "diff <(sed -n 1,5p a.go) <(sed -n 1,5p b.go)" },
@@ -297,6 +297,16 @@
     {"name": "rr head --lines 20 with a separate value", "situation": "fd-rg", "rule": "read-range", "command": "head --lines 20 notes.txt", "reasonHas": {"claude": ["Read file_path=notes.txt offset=1 limit=20 instead"], "pi": ["read path=notes.txt offset=1 limit=20 instead"]}},
     {"name": "ed sed -i on four files has no Here line", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed -i 's/a/b/g' a.go b.go c.go d.go", "reasonLacks": {"claude": ["Here:"], "pi": ["Here:"]}},
     {"name": "ed perl -0777 -pi slurps and replaces all", "situation": "fd-rg", "rule": "sed-inplace", "command": "perl -0777 -pi -e 's/a/b/g' a.go", "reasonHas": {"claude": ["Here: Edit file_path=a.go old_string=\"a\" new_string=\"b\" replace_all=true"], "pi": ["Here: edit path=a.go edits=[{\"oldText\":\"a\",\"newText\":\"b\"}], one edits entry per occurrence"]}},
-    {"name": "ed perl -pie takes e as the -i suffix", "situation": "fd-rg", "rule": "sed-inplace", "command": "perl -pie 's/a/b/' a.go", "reasonLacks": {"claude": ["Here:"], "pi": ["Here:"]}}
+    {"name": "ed perl -pie takes e as the -i suffix", "situation": "fd-rg", "rule": "sed-inplace", "command": "perl -pie 's/a/b/' a.go", "reasonLacks": {"claude": ["Here:"], "pi": ["Here:"]}},
+    {"name": "ed copied back over the source with mv --", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed 's/oldName/newName/g' a.go > t && mv -- t a.go", "reasonHas": {"claude": ["Here: Edit file_path=a.go old_string=\"oldName\" new_string=\"newName\" replace_all=true"], "pi": ["Here: edit path=a.go edits=[{\"oldText\":\"oldName\",\"newText\":\"newName\"}]"]}},
+    {"name": "ed copied back over the source with cat >", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed 's/oldName/newName/g' a.go > t && cat t > a.go", "reasonHas": {"claude": ["Here: Edit file_path=a.go old_string=\"oldName\" new_string=\"newName\" replace_all=true"], "pi": ["Here: edit path=a.go edits=[{\"oldText\":\"oldName\",\"newText\":\"newName\"}]"]}},
+    {"name": "ed piped straight into sponge over the source", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed 's/oldName/newName/g' a.go | sponge a.go", "reasonHas": {"claude": ["Here: Edit file_path=a.go old_string=\"oldName\" new_string=\"newName\" replace_all=true"], "pi": ["Here: edit path=a.go edits=[{\"oldText\":\"oldName\",\"newText\":\"newName\"}]"]}},
+    {"name": "ed sponge after another pipe stage has no Here line", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed 's/a/b/' a.go | sort | sponge a.go", "reasonLacks": {"claude": ["Here:"], "pi": ["Here:"]}},
+    {"name": "ed allow sponge onto another file", "situation": "fd-rg", "rule": "", "command": "sed 's/a/b/' a.go | sponge other.go"},
+    {"name": "ed allow sponge -a appends", "situation": "fd-rg", "rule": "", "command": "sed 's/a/b/' a.go | sponge -a a.go"},
+    {"name": "ed allow the temp file copied to a backup", "situation": "fd-rg", "rule": "", "command": "sed 's/a/b/' a.go > t && cp t a.bak"},
+    {"name": "ed allow cat of a file into the source with no rewrite before it", "situation": "fd-rg", "rule": "", "command": "cat t > a.go"},
+    {"name": "ed allow bulk find -exec sed -i, deliberate until an LSP rename exists", "situation": "fd-rg", "rule": "", "command": "find . -name '*.go' -exec sed -i 's/a/b/g' {} +"},
+    {"name": "ed allow bulk xargs sed -i, deliberate until an LSP rename exists", "situation": "fd-rg", "rule": "", "command": "rg -l foo | xargs sed -i 's/foo/bar/g'"}
   ]
 }
