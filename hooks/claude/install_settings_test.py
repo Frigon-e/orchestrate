@@ -33,6 +33,12 @@ def deep(value):
 
 GUARD_PRE = '"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard" pre'
 GUARD_COACH = '"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard" coach'
+ORCH_HOOK = '"$HOME/.agents/skills/orchestrate/hooks/claude/orch-hook.sh" '
+# The `orch hook` entries a hand install left in settings.json, before this script owned them.
+LEGACY_ORCH_PRETOOL = ('[ "$ORCH_ROLE" = orchestrator ] || [ -e "$HOME/.local/state/orchestrate/roles/${HERDR_PANE_ID:-none}" ] '
+                       '|| exit 0; exec "$HOME/.agents/skills/orchestrate/scripts/orch" hook pretool')
+LEGACY_ORCH_HOOK = ('[ -n "$ORCH_ROLE" ] || [ -e "$HOME/.local/state/orchestrate/roles/${HERDR_PANE_ID:-none}" ] '
+                    '|| exit 0; exec "$HOME/.agents/skills/orchestrate/scripts/orch" hook ')
 # What an install of the shell-script era left in settings.json: all of it retired.
 OLD_SCRIPTS = ["deny-find-chains", "deny-sed-inplace", "deny-cat-head-tail", "deny-grep-rg", "deny-big-read", "lookup-coach"]
 
@@ -57,7 +63,7 @@ class MergeTests(unittest.TestCase):
         inst.merge(settings, FRAGMENT)
         self.assertEqual(settings["model"], "opus")
         self.assertEqual(settings["permissions"], FOREIGN["permissions"])
-        self.assertEqual(settings["hooks"]["SessionStart"], FOREIGN["hooks"]["SessionStart"])
+        self.assertEqual(settings["hooks"]["SessionStart"], FOREIGN["hooks"]["SessionStart"] + FRAGMENT["hooks"]["SessionStart"])
         self.assertEqual(settings["hooks"]["PreToolUse"][0], FOREIGN["hooks"]["PreToolUse"][0])
 
     def test_owned_hooks_get_their_own_group_even_when_matcher_matches_a_foreign_group(self):
@@ -257,22 +263,39 @@ class CliTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
 
-    def test_every_fragment_command_runs_the_guard_binary_the_build_script_makes(self):
+    def test_every_fragment_command_runs_the_guard_binary_or_orch_hook_with_its_event(self):
         """The binary is built, not checked in: the script that builds it must exist, and each
-        event must pass the mode (pre or coach) the binary's command line knows."""
+        event must pass the mode (pre or coach) the binary's command line knows. The orch hook
+        entries run the checked-in gate script with the event `orch hook` knows."""
         build = HERE.parent.parent / "scripts" / "build-guard"
         self.assertTrue(os.access(build, os.X_OK), "scripts/build-guard is missing or not executable")
+        self.assertTrue(os.access(HERE / "orch-hook.sh", os.X_OK), "orch-hook.sh is missing or not executable")
+        orch_events = {"SessionStart": "session-start", "Stop": "stop", "PreToolUse": "pretool"}
+        seen = set()
         for event, groups in FRAGMENT["hooks"].items():
             for group in groups:
                 for hook in group["hooks"]:
+                    if hook["command"].startswith(ORCH_HOOK):
+                        self.assertEqual(hook["command"], ORCH_HOOK + orch_events[event], event)
+                        self.assertEqual(hook["timeout"], 10, event)
+                        seen.add(event)
+                        continue
                     want = GUARD_PRE if event == "PreToolUse" else GUARD_COACH
                     self.assertEqual(hook["command"], want, event)
                     self.assertEqual(hook["timeout"], 5, event)
+        self.assertEqual(seen, set(orch_events))
 
-    def test_pre_tool_use_registers_one_command_for_bash_and_one_for_read(self):
+    def test_orch_session_hooks_fire_on_every_session_start_source_and_every_stop(self):
+        # SessionStart sources per the Claude Code hooks docs: the orchestrator needs its
+        # board back after /clear and compaction too, not only at startup.
+        self.assertEqual([g.get("matcher") for g in FRAGMENT["hooks"]["SessionStart"]], ["^(startup|resume|clear|compact)$"])
+        self.assertEqual([g.get("matcher") for g in FRAGMENT["hooks"]["Stop"]], [None])
+
+    def test_pre_tool_use_registers_the_guard_for_bash_and_read_and_orch_for_the_orchestrator_tools(self):
         groups = FRAGMENT["hooks"]["PreToolUse"]
         self.assertEqual([(g["matcher"], [h["command"] for h in g["hooks"]]) for g in groups],
-                         [("Bash", [GUARD_PRE]), ("Read", [GUARD_PRE])])
+                         [("Bash", [GUARD_PRE]), ("Read", [GUARD_PRE]),
+                          ("Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Workflow|Bash", [ORCH_HOOK + "pretool"])])
 
     def test_apply_builds_the_guard_first_and_the_binary_runs(self):
         self.write(FOREIGN)
@@ -328,14 +351,97 @@ class MigrationTests(unittest.TestCase):
         owned = [h["command"] for gs in settings["hooks"].values() for g in gs for h in g["hooks"] if inst.is_owned(h)]
         self.assertEqual(sorted(owned), sorted(FRAGMENT_COMMANDS))
         self.assertEqual(inst.missing(settings, FRAGMENT), [])
-        self.assertEqual(settings["hooks"]["SessionStart"], FOREIGN["hooks"]["SessionStart"])
+        self.assertEqual(settings["hooks"]["SessionStart"], FOREIGN["hooks"]["SessionStart"] + FRAGMENT["hooks"]["SessionStart"])
         self.assertEqual(settings["hooks"]["PreToolUse"][0], FOREIGN["hooks"]["PreToolUse"][0])
 
     def test_one_command_for_two_matchers_is_registered_for_each(self):
         settings = {"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": GUARD_PRE, "timeout": 5}]}]}}
         added = inst.merge(settings, FRAGMENT)
         self.assertEqual(added.count(GUARD_PRE), 1)
-        self.assertEqual(sorted(g["matcher"] for g in settings["hooks"]["PreToolUse"]), ["Bash", "Read"])
+        guard_matchers = [g["matcher"] for g in settings["hooks"]["PreToolUse"]
+                          if GUARD_PRE in [h["command"] for h in g["hooks"]]]
+        self.assertEqual(sorted(guard_matchers), ["Bash", "Read"])
+
+    def test_hand_installed_orch_hooks_are_replaced_by_the_gate_script(self):
+        settings = deep(FOREIGN)
+        settings["hooks"]["SessionStart"].append({"matcher": "^(startup|resume|clear|compact)$", "hooks": [
+            {"type": "command", "command": LEGACY_ORCH_HOOK + "session-start", "timeout": 10}]})
+        settings["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": LEGACY_ORCH_HOOK + "stop", "timeout": 10}]}]
+        settings["hooks"]["PreToolUse"].append({"matcher": "Edit|Write|Agent|Task|Bash", "hooks": [
+            {"type": "command", "command": LEGACY_ORCH_PRETOOL, "timeout": 10}]})
+        removed = inst.prune(settings, FRAGMENT)
+        self.assertEqual(sorted(removed), sorted([LEGACY_ORCH_HOOK + "session-start", LEGACY_ORCH_HOOK + "stop", LEGACY_ORCH_PRETOOL]))
+        inst.merge(settings, FRAGMENT)
+        everything = [h["command"] for gs in settings["hooks"].values() for g in gs for h in g["hooks"]]
+        self.assertEqual([c for c in everything if "scripts/orch" in c], [])
+        self.assertEqual(everything.count(ORCH_HOOK + "stop"), 1)
+        self.assertEqual(everything.count(ORCH_HOOK + "session-start"), 1)
+        self.assertEqual(settings["hooks"]["SessionStart"][0], FOREIGN["hooks"]["SessionStart"][0])
+
+
+class OrchHookGateTests(unittest.TestCase):
+    """orch-hook.sh starts `orch hook <event>` only in a session orch could act on."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "hooks" / "claude").mkdir(parents=True)
+        (self.tmp / "scripts").mkdir()
+        self.gate = self.tmp / "hooks" / "claude" / "orch-hook.sh"
+        self.gate.write_text((HERE / "orch-hook.sh").read_text())
+        self.gate.chmod(0o755)
+        self.log = self.tmp / "orch.log"
+        orch = self.tmp / "scripts" / "orch"
+        # Like orch hook blocking: logs its args and the payload it read, says why on stderr, exits 2.
+        orch.write_text(f'#!/bin/sh\necho "$* $(cat)" >> "{self.log}"\necho blocked >&2\nexit 2\n')
+        orch.chmod(0o755)
+        self.roles = self.tmp / "roles"
+        self.roles.mkdir()
+
+    def ran(self, event, roles_dir=True, **env):
+        """The `orch hook` calls the gate made, each as "<args> <payload>"; checks that a
+        started orch's exit code and stderr come back unchanged and a skipped one exits 0."""
+        base = {"PATH": "/usr/bin:/bin", "HOME": str(self.tmp)}
+        if roles_dir:
+            base["ORCH_ROLES_DIR"] = str(self.roles)
+        result = subprocess.run([str(self.gate), event], env={**base, **env}, input='{"p":1}', capture_output=True, text=True)
+        calls = self.log.read_text().splitlines() if self.log.exists() else []
+        self.log.unlink(missing_ok=True)
+        if calls:
+            self.assertEqual((result.returncode, result.stderr), (2, "blocked\n"))
+        else:
+            self.assertEqual((result.returncode, result.stderr), (0, ""))
+        for c in calls:
+            self.assertTrue(c.endswith(' {"p":1}'), f"orch did not get the hook payload on stdin: {c!r}")
+        return [c.removesuffix(' {"p":1}') for c in calls]
+
+    def test_a_plain_session_never_starts_orch(self):
+        for event in ("pretool", "stop", "session-start"):
+            self.assertEqual(self.ran(event, HERDR_PANE_ID="w1:p1", ORCA_AGENT_SESSION_ID="claude_x"), [])
+
+    def test_a_lead_starts_orch_for_stop_and_session_start_but_not_pretool(self):
+        self.assertEqual(self.ran("pretool", ORCH_ROLE="lead"), [])
+        self.assertEqual(self.ran("stop", ORCH_ROLE="lead"), ["hook stop"])
+        self.assertEqual(self.ran("session-start", ORCH_ROLE="lead"), ["hook session-start"])
+
+    def test_an_orchestrator_role_starts_orch_for_pretool(self):
+        self.assertEqual(self.ran("pretool", ORCH_ROLE="orchestrator"), ["hook pretool"])
+
+    def test_a_role_marker_from_any_backend_starts_orch(self):
+        for var, ident in (("HERDR_PANE_ID", "w1:p1"), ("ORCA_PANE_KEY", "pk1"),
+                           ("ORCA_TERMINAL_HANDLE", "th1"), ("ORCA_AGENT_SESSION_ID", "claude_s1")):
+            (self.roles / ident).write_text("{}")
+            self.assertEqual(self.ran("pretool", **{var: ident}), ["hook pretool"], var)
+            (self.roles / ident).unlink()
+            self.assertEqual(self.ran("pretool", **{var: ident}), [], var)
+
+    def test_the_marker_is_found_where_orch_writes_it_when_roles_dir_is_unset_or_uses_a_tilde(self):
+        default = self.tmp / ".local" / "state" / "orchestrate" / "roles"
+        default.mkdir(parents=True)
+        (default / "w1:p1").write_text("{}")
+        self.assertEqual(self.ran("pretool", roles_dir=False, HERDR_PANE_ID="w1:p1"), ["hook pretool"])
+        (self.tmp / "r").mkdir()
+        (self.tmp / "r" / "w2:p1").write_text("{}")
+        self.assertEqual(self.ran("pretool", roles_dir=False, ORCH_ROLES_DIR="~/r", HERDR_PANE_ID="w2:p1"), ["hook pretool"])
 
 
 if __name__ == "__main__":

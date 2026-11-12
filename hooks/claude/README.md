@@ -1,6 +1,6 @@
 # Tool guards (Claude Code and pi)
 
-One Go binary, `hooks/bin/orch-guard` (source: `tool/guard` and `tool/cmd/orch-guard`), makes every guard and lookup-coach decision for both harnesses. Claude Code runs it as registered hooks in `~/.claude/settings.json`; pi runs it through the thin extension `tool/pi_ctx_reminder.ts`. This folder holds the Claude registration (`settings-fragment.json`, `install_settings.py`), the shared case tables (`toolguard_cases.json`, `coach_cases.json`) and `prefer-read-tool.sh`.
+One Go binary, `hooks/bin/orch-guard` (source: `tool/guard` and `tool/cmd/orch-guard`), makes every guard and lookup-coach decision for both harnesses. Claude Code runs it as registered hooks in `~/.claude/settings.json`; pi runs it through the thin extension `tool/pi_ctx_reminder.ts`. This folder holds the Claude registration (`settings-fragment.json`, `install_settings.py`), the shared case tables (`toolguard_cases.json`, `coach_cases.json`), `prefer-read-tool.sh`, and `orch-hook.sh`, the entry for the `orch hook pretool|stop|session-start` hooks. `orch-hook.sh` starts orch only in a pane orch launched (`ORCH_ROLE`) or one with a role marker from `orch become` (Herdr pane or Orca pane, terminal or session id), so other sessions do not pay orch's start-up on every tool call.
 
 ## Install
 
@@ -11,8 +11,8 @@ scripts/install-guards --remove   # unregister the Claude hooks, unlink the pi e
 ```
 
 - It builds `hooks/bin/orch-guard` with `scripts/build-guard` (needs Go), runs `install_settings.py --apply`, and links `~/.pi/agent/extensions/ctx-reminder.ts` to `tool/pi_ctx_reminder.ts` (pi follows symlinks when it discovers extensions, so a `git pull` is an update). A regular file already at that path is moved to `ctx-reminder.ts.bak-<YYYYMMDD>`, never deleted. Running it twice changes nothing. Everything lands under `$HOME`, so a temporary `HOME` gives a throwaway install.
-- `orch doctor` reports a missing or stale binary, missing Claude hooks and a missing or misdirected pi extension, each with the fix `scripts/install-guards`.
-- `install_settings.py` (also usable alone: no flag shows what would change, `--apply`, `--check`, `--apply --remove`, `--stdin` for a dotfiles manager) owns only hooks whose command points into `skills/orchestrate/hooks/`. Every other key and hook is left as found, an existing hook is never duplicated, `--apply` keeps a timestamped `settings.json.bak-*`, and a file that is not valid JSON is never touched. It also prunes the retired shell-script hooks (`deny-*.sh`, `lookup-coach.sh`) an older install registered; those scripts are gone, so run `scripts/install-guards` once after pulling.
+- `orch doctor` reports a missing or stale binary, each fragment hook settings.json lacks and a missing or misdirected pi extension, each with the fix `scripts/install-guards`.
+- `install_settings.py` (also usable alone: no flag shows what would change, `--apply`, `--check`, `--apply --remove`, `--stdin` for a dotfiles manager) owns only hooks whose command points into `skills/orchestrate/hooks/` (and replaces `scripts/orch hook` entries a hand install left). Every other key and hook is left as found, an existing hook is never duplicated, `--apply` keeps a timestamped `settings.json.bak-*`, and a file that is not valid JSON is never touched. It also prunes the retired shell-script hooks (`deny-*.sh`, `lookup-coach.sh`) an older install registered; those scripts are gone, so run `scripts/install-guards` once after pulling.
 - Tests: `python3 hooks/claude/install_settings_test.py`, `cd tool && go test -run TestInstallGuards .`.
 - Event names, matchers and the JSON shape of Claude hooks: https://docs.claude.com/en/docs/claude-code/hooks
 

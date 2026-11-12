@@ -36,7 +36,6 @@ func TestSetupFindingsOrca(t *testing.T) {
 	root := filepath.Join(home, "state", "myrepo")
 	good := fakeRunner(t, "orca", `echo '{"ok":true}'`)
 	bad := fakeRunner(t, "orca", `exit 1`)
-	trustDir := filepath.Join(home, "orca", "workspaces", "myrepo")
 
 	t.Setenv("ORCH_ORCA", good)
 	fs := setupFindings(home, repo, root, okLook)
@@ -58,13 +57,11 @@ func TestSetupFindingsOrca(t *testing.T) {
 		t.Fatal("no herdr check under orca")
 	}
 
+	// Orca launches Claude leads past the trust prompt, so an untrusted
+	// workspaces dir is not a problem there.
 	mustWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{}}`, 0o644)
-	if !hasMsg(setupFindings(home, repo, root, okLook), "warn", "trust prompt") || !hasMsg(setupFindings(home, repo, root, okLook), "warn", trustDir) {
-		t.Fatal("want untrusted orca workspaces warn naming " + trustDir)
-	}
-	mustWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+trustDir+`":{"hasTrustDialogAccepted":true}}}`, 0o644)
 	if hasMsg(setupFindings(home, repo, root, okLook), "warn", "trust prompt") {
-		t.Fatal("trusted dir must not warn")
+		t.Fatal("no trust warning under orca")
 	}
 }
 
@@ -162,6 +159,41 @@ func TestSetupFindingsHooks(t *testing.T) {
 		t.Fatalf("unexpected: %v", fs)
 	}
 }
+
+func TestSetupFindingsNamesEachFragmentHookSettingsLack(t *testing.T) {
+	noBackendEnv(t)
+	home := t.TempDir()
+	root := filepath.Join(home, "r")
+	gate := `"$HOME/.agents/skills/orchestrate/hooks/claude/gate.sh"`
+	mustWrite(t, filepath.Join(home, ".agents", "skills", "orchestrate", "hooks", "claude", "gate.sh"), "#!/bin/sh\n", 0o755)
+	mustWrite(t, filepath.Join(home, ".agents", "skills", "orchestrate", "hooks", "claude", "settings-fragment.json"),
+		`{"hooks":{"Stop":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
+			`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
+	set := filepath.Join(home, ".claude", "settings.json")
+
+	// Stop is there; pretool is registered under another matcher only, which does not count.
+	mustWrite(t, set, `{"hooks":{"Stop":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
+		`"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
+	fs := setupFindings(home, home, root, okLook)
+	if !hasMsg(fs, "warn", "not registered in settings.json: PreToolUse "+gate+" pretool") || hasMsg(fs, "warn", "Stop "+gate) {
+		t.Fatalf("want only the pretool hook named, got %v", fs)
+	}
+
+	// The stop command under another event does not count either.
+	mustWrite(t, set, `{"hooks":{"SessionStart":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
+		`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
+	if fs := setupFindings(home, home, root, okLook); !hasMsg(fs, "warn", "not registered in settings.json: Stop "+gate+" stop") {
+		t.Fatalf("want the Stop hook named, got %v", fs)
+	}
+
+	mustWrite(t, set, `{"hooks":{"Stop":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
+		`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
+	if fs := setupFindings(home, home, root, okLook); hasMsg(fs, "warn", "not registered") {
+		t.Fatalf("complete install must not warn: %v", fs)
+	}
+}
+
+func jsonEsc(s string) string { return strings.ReplaceAll(s, `"`, `\"`) }
 
 func TestSetupFindingsTools(t *testing.T) {
 	home := t.TempDir()

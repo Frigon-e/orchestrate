@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -46,13 +48,7 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 			add("warn", "setup", "settings.json not readable", "check ~/.claude/settings.json")
 		}
 	} else {
-		var settings struct {
-			Hooks map[string][]struct {
-				Hooks []struct {
-					Command string `json:"command"`
-				} `json:"hooks"`
-			} `json:"hooks"`
-		}
+		var settings claudeHooks
 		if err := json.Unmarshal(b, &settings); err != nil {
 			add("warn", "setup", "settings.json not readable", "check ~/.claude/settings.json")
 		} else {
@@ -77,6 +73,10 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 			}
 			if !found {
 				add("warn", "setup", "no orchestrate hook is registered in settings.json", hookFix)
+			} else {
+				for _, h := range unregisteredHooks(settings, filepath.Join(home, ".agents", "skills", "orchestrate", "hooks", "claude", "settings-fragment.json")) {
+					add("warn", "setup", "Claude hook not registered in settings.json: "+h, hookFix)
+				}
 			}
 		}
 	}
@@ -117,7 +117,7 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 	}
 
 	// 5. Claude trust for the worktrees dir.
-	if trustDir := backendTrustDir(backend, home, repo, root); trustDir != "" {
+	if trustDir := backendTrustDir(backend, root); trustDir != "" {
 		if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
 			var cj struct {
 				Projects map[string]struct {
@@ -168,6 +168,51 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 	return fs
 }
 
+// claudeHooks is the hooks key of a Claude Code settings.json.
+type claudeHooks struct {
+	Hooks map[string][]struct {
+		Matcher string `json:"matcher"`
+		Hooks   []struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
+	} `json:"hooks"`
+}
+
+// unregisteredHooks lists each hook of the fragment at path (what
+// install-guards registers) that settings lack, as "<event> <command>", the
+// way install_settings.py --check matches them: by event, matcher and command.
+// A missing or unreadable fragment lists nothing.
+func unregisteredHooks(settings claudeHooks, path string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var fragment claudeHooks
+	if json.Unmarshal(b, &fragment) != nil {
+		return nil
+	}
+	type key struct{ event, matcher, command string }
+	have := map[key]bool{}
+	for event, groups := range settings.Hooks {
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				have[key{event, g.Matcher, h.Command}] = true
+			}
+		}
+	}
+	var out []string
+	for _, event := range slices.Sorted(maps.Keys(fragment.Hooks)) {
+		for _, g := range fragment.Hooks[event] {
+			for _, h := range g.Hooks {
+				if !have[key{event, g.Matcher, h.Command}] {
+					out = append(out, event+" "+h.Command)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // detectBackendName is the backend selectBackend would pick for env, by name,
 // without building it: ORCH_BACKEND, else the first registered backend whose
 // detect matches, else "".
@@ -192,13 +237,12 @@ func detectBackendName(env []string) string {
 
 // backendTrustDir is the directory whose Claude trust entry lead worktrees
 // need under backend, or "" when there is nothing to check. Herdr keeps
-// worktrees next to the run root; Orca keeps them in ~/orca/workspaces/<repo>.
-func backendTrustDir(backend, home, repo, root string) string {
-	switch backend {
-	case "herdr":
+// worktrees next to the run root. Orca needs none: it launches Claude leads
+// with --dangerously-skip-permissions (orcaLaunchArgv), which skips the prompt,
+// unless claude_args set their own permission mode.
+func backendTrustDir(backend, root string) string {
+	if backend == "herdr" {
 		return filepath.Dir(root)
-	case "orca":
-		return filepath.Join(home, "orca", "workspaces", filepath.Base(repo))
 	}
 	return ""
 }

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Register the tool-guard hooks in a Claude Code settings.json.
+"""Register the orchestrate hooks in a Claude Code settings.json.
 
-The hooks to register are listed in settings-fragment.json next to this file.
-Every hook whose command points into hooks/claude or hooks/bin of this skill is
-owned by this script; every other key and hook in the settings file is left
-exactly as found. The hooks run hooks/bin/orch-guard, which --apply builds first
-with scripts/build-guard (needs Go).
+The hooks to register are listed in settings-fragment.json next to this file:
+the tool guards (hooks/bin/orch-guard, which --apply builds first with
+scripts/build-guard; needs Go) and `orch hook` for orchestrator and lead
+sessions (hooks/claude/orch-hook.sh). Every hook whose command points into
+hooks/claude or hooks/bin of this skill, or runs `scripts/orch hook` directly,
+is owned by this script; every other key and hook in the settings file is left
+exactly as found.
 
     install_settings.py                  show what would change (default, writes nothing)
     install_settings.py --apply          merge the fragment into the settings file and
@@ -29,8 +31,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FRAGMENT = HERE / "settings-fragment.json"
-# Hooks that point into the old script folder (retired, pruned on --apply) or at the guard binary.
-OWNED_MARKS = ("/skills/orchestrate/hooks/claude/", "/skills/orchestrate/hooks/bin/")
+# Hooks that point into hooks/claude (orch-hook.sh, and the retired guard scripts pruned on
+# --apply), at the guard binary, or at `orch hook` directly, as a hand install once registered it.
+OWNED_MARKS = ("/skills/orchestrate/hooks/claude/", "/skills/orchestrate/hooks/bin/",
+               '/skills/orchestrate/scripts/orch" hook ')
 BUILD_GUARD = HERE.parent.parent / "scripts" / "build-guard"
 DEFAULT_SETTINGS = "~/.claude/settings.json"
 
