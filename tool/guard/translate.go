@@ -1,7 +1,6 @@
 package guard
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -431,26 +430,15 @@ func readRangeHit(line string) (readRange, bool) {
 	return readRange{}, false
 }
 
-func readCall(h harness, file string, offset, limit int) string {
-	call := fmt.Sprintf("Read file_path=%s offset=%d", file, offset)
-	if h == forPi {
-		call = fmt.Sprintf("read path=%s offset=%d", file, offset)
-	}
-	if limit > 0 {
-		call += fmt.Sprintf(" limit=%d", limit)
-	}
-	return call
-}
-
 func readRangeReason(line string, h harness) string {
 	head := Marker + " (deny-read-range): sed, awk, head and tail output is not a Read, so a later Edit of the file fails.\n"
 	r, ok := readRangeHit(line)
 	if !ok {
-		return head + "Send " + piOr(h, "read", "Read") + " with offset and limit instead, as a parallel call in the same message as your other commands."
+		return head + "Send " + h.read + " with offset and limit instead, as a parallel call in the same message as your other commands."
 	}
-	text := "Send " + readCall(h, r.file, r.offset, r.limit) + " instead, as a parallel call in the same message as your other commands."
-	if h == forClaude && !strings.HasPrefix(r.file, "/") {
-		text += " Read needs an absolute path."
+	text := "Send " + h.readCall(r.file, r.offset, r.limit) + " instead, as a parallel call in the same message as your other commands."
+	if h.absPath && !strings.HasPrefix(r.file, "/") {
+		text += " " + h.read + " needs an absolute path."
 	}
 	return head + text
 }
@@ -816,12 +804,8 @@ func hereLine(rw rewrite, h harness) string {
 		return ""
 	}
 	here += "."
-	if h == forClaude && plainFiles(rw.files) {
-		for _, f := range rw.files {
-			if !strings.HasPrefix(f, "/") {
-				return here + " Read and Edit need an absolute path."
-			}
-		}
+	if plainFiles(rw.files) {
+		here += h.absNote(rw.files...)
 	}
 	return here
 }
@@ -833,43 +817,35 @@ func hereBody(rw rewrite, h harness) string {
 	}
 	plain := plainFiles(rw.files)
 	files := rw.files
-	read := func() string { return readCall(h, files[0], e.lo, e.hi-e.lo+1) }
+	read := func() string { return h.readCall(files[0], e.lo, e.hi-e.lo+1) }
 	lines := "that line"
 	if e.hi > e.lo {
 		lines = "those lines"
 	}
-	editWord := piOr(h, "edit", "Edit")
 	switch e.kind {
 	case kindSubst:
-		all := ""
-		if e.all {
-			all = piOr(h, " (every occurrence)", " replace_all=true")
-		}
-		pair := fmt.Sprintf("old_string=%s new_string=%s", strconv.Quote(e.old), strconv.Quote(e.new))
-		swap := fmt.Sprintf("replace %s with %s", strconv.Quote(e.old), strconv.Quote(e.new))
 		if e.lo > 0 {
 			if len(files) != 1 || !plain {
 				return ""
 			}
-			return piOr(h, read()+", then edit: "+swap+" in "+lines, read()+", then Edit "+pair+" in "+lines)
+			return read() + ", then " + h.edit + " " + h.replacement(e.old, e.new, false) + " in " + lines
 		}
+		args := h.replacement(e.old, e.new, e.all)
 		if !plain {
 			if len(files) == 0 || strings.Contains(e.old, "'") {
 				return ""
 			}
-			find := "find the files with rg " + rgFlag("-l", e.old) + " '" + e.old + "', then "
-			return find + piOr(h, "edit each: "+swap+all, "Edit each with "+pair+all)
+			return "find the files with rg " + rgFlag("-l", e.old) + " '" + e.old + "', then " + h.edit + " each with " + args
 		}
 		switch {
 		case len(files) == 1:
-			return piOr(h, "edit path="+files[0]+": "+swap+all, "Edit file_path="+files[0]+" "+pair+all)
+			return h.edit + " " + h.path + "=" + files[0] + " " + args
 		case len(files) <= 3:
-			list := strings.Join(files, ", ")
-			return piOr(h, "edit each of "+list+": "+swap+all, "Edit each of "+list+" with "+pair+all)
+			return h.edit + " each of " + strings.Join(files, ", ") + " with " + args
 		}
 	case kindDelete:
 		if len(files) == 1 && plain {
-			return piOr(h, read()+", then edit "+lines+" out", read()+", then Edit "+lines+` out (new_string "")`)
+			return read() + ", then " + h.edit + " " + lines + " out (" + h.newText + ` "")`
 		}
 	case kindInsert:
 		where := "before"
@@ -877,11 +853,11 @@ func hereBody(rw rewrite, h harness) string {
 			where = "after"
 		}
 		if len(files) == 1 && plain {
-			return read() + ", then " + editWord + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it"
+			return read() + ", then " + h.edit + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it"
 		}
 	case kindGrepDel:
 		if len(files) >= 1 && len(files) <= 3 && plain {
-			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + editWord + " them out"
+			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + h.edit + " them out"
 		}
 	}
 	return ""
