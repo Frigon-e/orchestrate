@@ -5,7 +5,8 @@
 //
 // What the guard does: it blocks raw shell work (find chains, find over a tree,
 // sed -i, a bare cat or sed -n of one file, grep over files), pi's own grep and
-// find tool while rg or fd answers, and a whole-file read of a file over 30 KB,
+// find tool while rg or fd answers, and a whole-file read of a file over 30 KB (code: 2000 lines,
+// 100 KB; a repeat read passes),
 // each with a reason that names the replacement; it appends the lookup ladder to
 // search results and logs every lookup (jbcontext, orch lsp, rg, fd, read) with
 // the lookup coach's reminders. ORCH_TOOL_GUARD=off, ORCH_TOOL_GUARD_SKIP,

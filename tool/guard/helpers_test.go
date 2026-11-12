@@ -46,6 +46,7 @@ type readCase struct {
 	Situation string
 	File      string
 	Bytes     int
+	Lines     int
 	Kind      string
 	Input     map[string]any
 	Block     bool
@@ -333,4 +334,14 @@ func (b *sandbox) log() []map[string]any {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// fileContent is bytes long and split into lines lines (one line when lines is 0).
+func fileContent(bytes, lines int) []byte {
+	if lines <= 1 {
+		return []byte(strings.Repeat("x", bytes))
+	}
+	per := bytes / lines
+	body := strings.Repeat(strings.Repeat("x", per-1)+"\n", lines-1)
+	return []byte(body + strings.Repeat("x", bytes-len(body)))
 }

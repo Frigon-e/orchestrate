@@ -181,6 +181,10 @@ func checkReminder(t *testing.T, got reminderRun, cases []reminderCase) (reminde
 			if strings.Contains(res.Block, repeatedBlock) {
 				limit = 4
 			}
+			// A big-read block also says a repeat passes, one line more.
+			if c.Blocks == "big-read" {
+				limit++
+			}
 			if lines := strings.Count(res.Block, "\n") + 1; lines > limit {
 				t.Errorf("%q block reason is longer than %d lines: %q", c.Name, limit, res.Block)
 			}
@@ -406,6 +410,7 @@ type sharedToolguardFile struct {
 		File      string         `json:"file"`
 		Kind      string         `json:"kind"`
 		Bytes     int            `json:"bytes"`
+		Lines     int            `json:"lines"`
 		Input     map[string]any `json:"input"`
 		Block     bool           `json:"block"`
 	} `json:"readCases"`
@@ -537,7 +542,7 @@ func TestCtxReminderSharedReadCases(t *testing.T) {
 					}
 				case "missing":
 				default:
-					if err := os.WriteFile(path, []byte(strings.Repeat("x", c.Bytes)), 0o644); err != nil {
+					if err := os.WriteFile(path, fileContent(c.Bytes, c.Lines), 0o644); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -576,4 +581,33 @@ func TestCtxReminderBigReadSwitches(t *testing.T) {
 	for _, env := range []string{"ORCH_TOOL_GUARD=off", "ORCH_TOOL_GUARD_SKIP=big-read", "ORCH_TOOL_GUARD_SKIP=deny-big-read"} {
 		checkReminder(t, runCtxReminder(t, []string{env}, []reminderCase{bare}), []reminderCase{bare})
 	}
+}
+
+// fileContent is bytes long and split into lines lines (one line when lines is 0).
+func fileContent(bytes, lines int) []byte {
+	if lines <= 1 {
+		return []byte(strings.Repeat("x", bytes))
+	}
+	per := bytes / lines
+	body := strings.Repeat(strings.Repeat("x", per-1)+"\n", lines-1)
+	return []byte(body + strings.Repeat("x", bytes-len(body)))
+}
+
+// A repeat read of the same path passes in pi, a different path still blocks.
+func TestCtxReminderBigReadRepeatPasses(t *testing.T) {
+	dir := t.TempDir()
+	var paths [2]string
+	for i := range paths {
+		paths[i] = filepath.Join(dir, fmt.Sprintf("big%d.txt", i))
+		if err := os.WriteFile(paths[i], []byte(strings.Repeat("x", 31744)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []reminderCase{
+		{Name: "first", Tool: "read", Input: map[string]any{"path": paths[0]}, Blocks: "big-read", Needs: []string{"send this same read again and it passes"}},
+		{Name: "second", Tool: "read", Input: map[string]any{"path": paths[0]}},
+		{Name: "third", Tool: "read", Input: map[string]any{"path": paths[0]}},
+		{Name: "other path", Tool: "read", Input: map[string]any{"path": paths[1]}, Blocks: "big-read"},
+	}
+	checkReminder(t, runCtxReminder(t, nil, cases), cases)
 }

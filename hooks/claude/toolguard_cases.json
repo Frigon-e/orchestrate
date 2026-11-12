@@ -20,7 +20,7 @@
     { "name": "none grep inside the repo", "situation": "none", "tool": "content-search", "pattern": "Gateway", "path": "internal", "rule": {"pi": ""} },
     { "name": "none find inside the repo", "situation": "none", "tool": "file-search", "pattern": "*.go", "path": "internal", "rule": {"pi": ""} }
   ],
-  "readNote": "readCases is the third table: a whole-file read of a big file. file is a name made in a temp directory; kind is file (default, bytes long), dir or missing; input carries the extra Read arguments (offset, limit, pages); block says whether deny-big-read must block. The limit is 30720 bytes, exclusive.",
+  "readNote": "readCases is the third table: a whole-file read of a big file. file is a name made in a temp directory; kind is file (default, bytes long), dir or missing; input carries the extra Read arguments (offset, limit, pages); lines (optional) splits the file into that many lines; block says whether deny-big-read must block. The limit is 30720 bytes, exclusive; a code file (.go, .ts, .py ...) passes up to 2000 lines and 102400 bytes, both inclusive. A repeat Read in one session passes; that is tested apart from this table.",
   "readCases": [
     { "name": "31 KB no range", "situation": "fd-rg", "file": "big.txt", "bytes": 31744, "input": {}, "block": true },
     { "name": "31 KB no orch", "situation": "none", "file": "big.txt", "bytes": 31744, "input": {}, "block": true },
@@ -41,6 +41,14 @@
     { "name": "jpeg", "situation": "fd-rg", "file": "photo.jpeg", "bytes": 61440, "input": {}, "block": false },
     { "name": "gif", "situation": "fd-rg", "file": "anim.gif", "bytes": 61440, "input": {}, "block": false },
     { "name": "webp", "situation": "fd-rg", "file": "pic.webp", "bytes": 61440, "input": {}, "block": false },
+    { "name": "code 1000 lines over 30720 bytes", "situation": "fd-rg", "file": "mid.go", "bytes": 40000, "lines": 1000, "input": {}, "block": false },
+    { "name": "code exactly 2000 lines", "situation": "fd-rg", "file": "lines2000.ts", "bytes": 40000, "lines": 2000, "input": {}, "block": false },
+    { "name": "code 2001 lines", "situation": "fd-rg", "file": "lines2001.py", "bytes": 40000, "lines": 2001, "input": {}, "block": true },
+    { "name": "code exactly 102400 bytes", "situation": "fd-rg", "file": "bytes102400.rs", "bytes": 102400, "lines": 1500, "input": {}, "block": false },
+    { "name": "code 102401 bytes", "situation": "fd-rg", "file": "bytes102401.rs", "bytes": 102401, "lines": 1500, "input": {}, "block": true },
+    { "name": "code 30720 bytes", "situation": "fd-rg", "file": "edge.go", "bytes": 30720, "lines": 500, "input": {}, "block": false },
+    { "name": "txt 1000 lines over 30720 bytes", "situation": "fd-rg", "file": "mid.txt", "bytes": 40000, "lines": 1000, "input": {}, "block": true },
+    { "name": "log 100 lines over 30720 bytes", "situation": "fd-rg", "file": "app.log", "bytes": 40000, "lines": 100, "input": {}, "block": true },
     { "name": "notebook", "situation": "fd-rg", "file": "lab.ipynb", "bytes": 61440, "input": {}, "block": false }
   ],
   "cases": [

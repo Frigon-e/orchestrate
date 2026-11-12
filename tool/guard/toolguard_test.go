@@ -218,7 +218,7 @@ func TestBigReadCases(t *testing.T) {
 				os.MkdirAll(path, 0o755)
 			case kind == "" || kind == "file":
 				if _, err := os.Stat(path); err != nil {
-					if err := os.WriteFile(path, []byte(strings.Repeat("x", c.Bytes)), 0o644); err != nil {
+					if err := os.WriteFile(path, fileContent(c.Bytes, c.Lines), 0o644); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -273,6 +273,10 @@ func TestBigReadSwitchesAndRetry(t *testing.T) {
 	if code, _ := run(nil, nil); code != 2 {
 		t.Error("the bare read was not blocked")
 	}
+	// With no session id there is nowhere to remember the warning: every bare read blocks, with no "send again" line.
+	if code, stderr := run(nil, nil); code != 2 || strings.Contains(stderr, "again") {
+		t.Errorf("a repeat with no session id: exit %d, %s", code, stderr)
+	}
 	if code, _ := run(map[string]any{"limit": 100}, nil); code != 0 {
 		t.Error("the retry with limit was not allowed")
 	}
@@ -288,6 +292,97 @@ func TestBigReadSwitchesAndRetry(t *testing.T) {
 	}
 	if code, _ := run(nil, map[string]string{"ORCH_TOOL_GUARD_SKIP": "grep-rg,find"}); code != 2 {
 		t.Error("another rule's skip also disabled big-read")
+	}
+}
+
+// The second whole Read of a big file in a session passes and keeps passing; another
+// session or another path still blocks.
+func TestBigReadRepeatPasses(t *testing.T) {
+	paths := situationPaths(t, loadToolguard(t))
+	dir := t.TempDir()
+	env := map[string]string{"ORCH_TOOL_GUARD_STATE_DIR": filepath.Join(dir, "state")}
+	var files [2]string
+	for i := range files {
+		files[i] = filepath.Join(dir, fmt.Sprintf("big%d.txt", i))
+		if err := os.WriteFile(files[i], []byte(strings.Repeat("x", 31744)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(path, session string) (int, string) {
+		ev := readEvent(path, nil)
+		ev["session_id"] = session
+		return inProc{}.pre(t, jsonBytes(t, ev), paths["fd-rg"], env)
+	}
+	code, stderr := read(files[0], "s1")
+	if code != 2 || !strings.Contains(stderr, "send this same Read again and it passes") {
+		t.Fatalf("first read: exit %d, %s", code, stderr)
+	}
+	for _, attempt := range []string{"second", "third"} {
+		if code, stderr := read(files[0], "s1"); code != 0 || stderr != "" {
+			t.Errorf("%s read of the same path and session: exit %d, %s", attempt, code, stderr)
+		}
+	}
+	if code, _ := read(files[0], "s2"); code != 2 {
+		t.Error("another session was let through")
+	}
+	if code, _ := read(files[1], "s1"); code != 2 {
+		t.Error("another path was let through")
+	}
+	if code, _ := read(files[1], "s1"); code != 0 {
+		t.Error("the other path did not pass on its own repeat")
+	}
+}
+
+// The block lists top-level declarations of code and headings of docs, with their line numbers.
+func TestBigReadOutline(t *testing.T) {
+	paths := situationPaths(t, loadToolguard(t))
+	dir := t.TempDir()
+	block := func(name string, lines []string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, stderr := inProc{}.pre(t, jsonBytes(t, readEvent(path, nil)), paths["fd-rg"], nil)
+		if code != 2 {
+			t.Fatalf("%s: exit %d, want 2", name, code)
+		}
+		return stderr
+	}
+	filler := func(n int, first ...string) []string {
+		lines := append([]string{}, first...)
+		for len(lines) < n {
+			lines = append(lines, "// filler line to make the file long enough")
+		}
+		return lines
+	}
+	goLines := filler(2100, "package x", "", "import \"os\"", "", "type Cell struct {", "\tfunc inner() {}", "}", "func (c Cell) Run() {}   ", "var long = \""+strings.Repeat("y", 150)+"\"")
+	got := block("a.go", goLines)
+	for _, want := range []string{"is 2100 lines (", "(line: text):", "\n  5: type Cell struct {\n", "\n  8: func (c Cell) Run() {}\n", "  9: var long = \"" + strings.Repeat("y", 100-len("var long = \"")) + "\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("go outline lacks %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"package", "import", "inner", "more;"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("go outline has %q: %s", bad, got)
+		}
+	}
+	many := []string{}
+	for i := 0; i < 60; i++ {
+		many = append(many, fmt.Sprintf("func f%d() {}", i))
+	}
+	got = block("many.go", filler(2100, many...))
+	if !strings.Contains(got, "  50: func f49() {}\n") || strings.Contains(got, "f50()") || !strings.Contains(got, "  ... 10 more; rg -n ") {
+		t.Errorf("a 60-declaration outline is not cut at 50 with a rest line: %s", got)
+	}
+	md := filler(1100, "# Title", "text", "```sh", "# not a heading", "```", "## Part", "#### too deep")
+	got = block("a.md", md)
+	if !strings.Contains(got, "headings (line: text):\n  1: # Title\n  6: ## Part\n") || strings.Contains(got, "not a heading") || strings.Contains(got, "too deep") {
+		t.Errorf("markdown outline: %s", got)
+	}
+	got = block("app.log", filler(1100))
+	if strings.Contains(got, "(line: text)") || !strings.Contains(got, bigReadLookup) {
+		t.Errorf("a log must carry the rg hint and no outline: %s", got)
 	}
 }
 

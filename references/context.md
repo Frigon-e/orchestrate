@@ -117,7 +117,8 @@ The guard carries three small deny rules: `deny-sed-inplace` (`sed -i`, `perl -p
 `Edit` or `Read` then `Edit` call when the command has a clear translation),
 `deny-read-range` (a `sed`, `awk`, `head` or `tail` line range of one file; the
 block names the exact `Read file_path=F offset=A limit=N`) and `deny-big-read`
-(a whole-file read of a file over 30 KB). A whole-file `cat` is allowed. The lookup blocks
+(a whole-file read of a file over 30 KB, or of a code file over 2000 lines or 100 KB; the block lists an outline
+with line numbers, and the same read sent a second time in a session passes). A whole-file `cat` is allowed. The lookup blocks
 (grep, find, cat, search-first and pi's built-in grep and find) are gone: a
 search runs, and `orch-guard enrich` appends the `orch lsp` facts the search
 did not show (see `hooks/claude/README.md`, "LSP enrichment"). A blocked command

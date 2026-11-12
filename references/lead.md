@@ -98,8 +98,8 @@ crowds out what matters. Route by context as well as by model (`route-work`,
   a line), `orch lsp def|refs|callers|impls <Name>` for a known symbol (`orch lsp
   symbols <file>`, `orch lsp hover <path:line:col>`), `rg` for exact text, `fd`
   for file names. Send independent lookups as parallel calls in one message.
-  Inspect source with native Read/read after locating it; read files over about 30 KB by
-  offset/limit, only the part needed. Give subagents the excerpt or the
+  Inspect source with native Read/read after locating it; read big files (over about 30 KB, code over
+  2000 lines) by offset/limit, only the part needed. Give subagents the excerpt or the
   exact `path:line-range`, not "read task.md". Semantic candidates never
   establish absence, and a missing language server (`orch lsp` exit 2) is not
   zero callers. Repo-local servers require user-config
