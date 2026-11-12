@@ -179,6 +179,13 @@ func TestSetupFindingsNamesEachFragmentHookSettingsLack(t *testing.T) {
 		t.Fatalf("want only the pretool hook named, got %v", fs)
 	}
 
+	// The stop command under another event does not count either.
+	mustWrite(t, set, `{"hooks":{"SessionStart":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
+		`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
+	if fs := setupFindings(home, home, root, okLook); !hasMsg(fs, "warn", "not registered in settings.json: Stop "+gate+" stop") {
+		t.Fatalf("want the Stop hook named, got %v", fs)
+	}
+
 	mustWrite(t, set, `{"hooks":{"Stop":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
 		`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
 	if fs := setupFindings(home, home, root, okLook); hasMsg(fs, "warn", "not registered") {
