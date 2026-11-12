@@ -79,8 +79,12 @@ func TestWiringSpawnPlacesLeadOnBackendWithoutLayout(t *testing.T) {
 	out := w.must("spawn", "t1")
 	wantContains(t, out, "spawned lead-t1")
 
-	if n := len(w.orca.calls("worktree create")); n != 1 {
-		t.Fatalf("worktree create calls = %d, want 1", n)
+	create := w.orca.calls("worktree create")
+	if len(create) != 1 {
+		t.Fatalf("worktree create calls = %d, want 1", len(create))
+	}
+	if got := flagValue(create[0], "--parent-worktree"); got != "path:"+w.repo || slices.Contains(create[0], "--no-parent") {
+		t.Fatalf("worktree create = %v, want --parent-worktree path:%s and no --no-parent", create[0], w.repo)
 	}
 	launch := w.orca.calls("terminal create")
 	if len(launch) != 1 || flagValue(launch[0], "--worktree") != "path:"+w.orcaPath() {
