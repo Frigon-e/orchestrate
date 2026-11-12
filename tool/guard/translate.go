@@ -472,3 +472,405 @@ func readRangeReason(line string, h harness) string {
 	}
 	return head + text
 }
+
+// ---- rewrites ----
+
+// An edit is what a rewriting command does, in the terms of the Edit tool.
+type edit struct {
+	kind     string // subst, delete, insert, grepdel
+	old, new string
+	all      bool
+	lo, hi   int // the lines it touches, 0 for the whole file
+	text     string
+	after    bool
+}
+
+// literalPattern resolves a sed, awk or perl pattern to the plain text it
+// matches, or reports that it is a real regular expression.
+func literalPattern(p string, delim byte, ere, perl bool) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		switch {
+		case c == '\\':
+			if i+1 >= len(p) {
+				return "", false
+			}
+			i++
+			if n := p[i]; n == delim || strings.IndexByte(".*[]^$\\/", n) >= 0 {
+				b.WriteByte(n)
+				continue
+			}
+			return "", false
+		case strings.IndexByte(".*[]^$", c) >= 0:
+			return "", false
+		case (ere || perl) && strings.IndexByte("+?(){}|", c) >= 0:
+			return "", false
+		case perl && c == '@':
+			return "", false
+		}
+		b.WriteByte(c)
+	}
+	return b.String(), b.Len() > 0
+}
+
+// literalReplacement resolves a replacement to plain text, or reports that it
+// uses a group, & or an escape.
+func literalReplacement(r string, delim byte, perl bool) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		switch {
+		case c == '\\':
+			if i+1 >= len(r) {
+				return "", false
+			}
+			i++
+			if n := r[i]; n == delim || n == '&' || n == '\\' || n == '/' {
+				b.WriteByte(n)
+				continue
+			}
+			return "", false
+		case c == '&', perl && (c == '$' || c == '@'):
+			return "", false
+		}
+		b.WriteByte(c)
+	}
+	return b.String(), true
+}
+
+// splitSubst splits the text after s<delim> into pattern, replacement and flags.
+func splitSubst(body string, delim byte) (pat, rep, flags string, ok bool) {
+	var cur strings.Builder
+	parts := 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case c == '\\' && i+1 < len(body):
+			cur.WriteByte(c)
+			cur.WriteByte(body[i+1])
+			i++
+		case c == delim:
+			if parts == 0 {
+				pat = cur.String()
+				cur.Reset()
+				parts = 1
+				continue
+			}
+			return pat, cur.String(), body[i+1:], true
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	return "", "", "", false
+}
+
+func substEdit(delim byte, body string, ere, perl bool) (edit, bool) {
+	pat, rep, flags, ok := splitSubst(body, delim)
+	if !ok || (flags != "" && flags != "g") {
+		return edit{}, false
+	}
+	old, okPat := literalPattern(pat, delim, ere, perl)
+	repl, okRep := literalReplacement(rep, delim, perl)
+	if !okPat || !okRep {
+		return edit{}, false
+	}
+	return edit{kind: "subst", old: old, new: repl, all: flags == "g"}, true
+}
+
+var (
+	sedDelete  = regexp.MustCompile(`^([0-9]+)(?:,([0-9]+))?d$`)
+	sedSubst   = regexp.MustCompile(`(?s)^(?:([0-9]+)(?:,([0-9]+))?)?s([^\w\s\\])(.*)$`)
+	sedInsert  = regexp.MustCompile(`(?s)^([0-9]+)([ia])(.*)$`)
+	sedGrepDel = regexp.MustCompile(`^/([^/\\]+)/d$`)
+)
+
+// lineSpan reads an optional address pair; hi defaults to lo.
+func lineSpan(first, last string) (lo, hi int, ok bool) {
+	lo = atoi(first)
+	hi = lo
+	if last != "" {
+		hi = atoi(last)
+	}
+	return lo, hi, lo >= 1 && hi >= lo
+}
+
+func sedEdit(script string, ere bool) (edit, bool) {
+	script = strings.TrimSpace(script)
+	if m := sedDelete.FindStringSubmatch(script); m != nil {
+		if lo, hi, ok := lineSpan(m[1], m[2]); ok {
+			return edit{kind: "delete", lo: lo, hi: hi}, true
+		}
+		return edit{}, false
+	}
+	if m := sedSubst.FindStringSubmatch(script); m != nil {
+		e, ok := substEdit(m[3][0], m[4], ere, false)
+		if m[1] != "" {
+			lo, hi, okSpan := lineSpan(m[1], m[2])
+			e.lo, e.hi = lo, hi
+			ok = ok && okSpan
+		}
+		return e, ok
+	}
+	if m := sedInsert.FindStringSubmatch(script); m != nil {
+		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(m[3], " \t"), "\\"))
+		lo := atoi(m[1])
+		if lo < 1 || text == "" || strings.ContainsAny(text, "\\\n") {
+			return edit{}, false
+		}
+		return edit{kind: "insert", lo: lo, hi: lo, text: text, after: m[2] == "a"}, true
+	}
+	if m := sedGrepDel.FindStringSubmatch(script); m != nil {
+		old, ok := literalPattern(m[1], '/', ere, false)
+		if !ok || strings.Contains(old, "'") {
+			return edit{}, false
+		}
+		return edit{kind: "grepdel", old: old}, true
+	}
+	return edit{}, false
+}
+
+var (
+	perlSubst   = regexp.MustCompile(`(?s)^s([^\w\s\\{(\[<])(.*)$`)
+	awkSubstPat = regexp.MustCompile(`^\{\s*(g?sub)\(/(.*?)/\s*,\s*"([^"\\&]*)"\s*\)\s*;?\s*\}\s*1$`)
+	awkSkipLine = regexp.MustCompile(`^NR\s*!=\s*([0-9]+)$`)
+	awkSkipSpan = regexp.MustCompile(`^!\s*\((.*)\)$`)
+)
+
+func perlEdit(script string) (edit, bool) {
+	m := perlSubst.FindStringSubmatch(strings.TrimSpace(script))
+	if m == nil {
+		return edit{}, false
+	}
+	return substEdit(m[1][0], m[2], true, true)
+}
+
+func awkEdit(program string) (edit, bool) {
+	program = strings.TrimSpace(program)
+	if m := awkSubstPat.FindStringSubmatch(program); m != nil {
+		old, ok := literalPattern(m[2], '/', true, false)
+		if !ok {
+			return edit{}, false
+		}
+		return edit{kind: "subst", old: old, new: m[3], all: m[1] == "gsub"}, true
+	}
+	if m := awkSkipLine.FindStringSubmatch(program); m != nil && atoi(m[1]) >= 1 {
+		return edit{kind: "delete", lo: atoi(m[1]), hi: atoi(m[1])}, true
+	}
+	if m := awkSkipSpan.FindStringSubmatch(program); m != nil {
+		if lo, hi, ok := awkLines(m[1]); ok && hi != 0 {
+			return edit{kind: "delete", lo: lo, hi: hi}, true
+		}
+	}
+	return edit{}, false
+}
+
+// perlParts is the -e script, the files, and whether -p prints the lines, of a perl one-liner.
+func perlParts(args []string) (script string, files []string, printing, ok bool) {
+	k := 0
+	for ; k < len(args); k++ {
+		a := args[k]
+		if a == "--" {
+			k++
+			break
+		}
+		if len(a) < 2 || a[0] != '-' {
+			break
+		}
+	cluster:
+		for j := 1; j < len(a); j++ {
+			switch a[j] {
+			case 'p':
+				printing = true
+			case 'e', 'E':
+				if j == len(a)-1 && k+1 < len(args) {
+					k++
+					script = args[k]
+				}
+				break cluster
+			case 'i', 'M', 'm', 'I', 'x', 'C', 'd', 'D', 'V':
+				break cluster
+			}
+		}
+	}
+	if script == "" || k > len(args) {
+		return "", nil, false, false
+	}
+	return script, args[k:], printing, true
+}
+
+// A rewrite is a command that rewrites a file: in place, or into a temp file
+// that is moved back.
+type rewrite struct {
+	files []string
+	edit  *edit
+}
+
+func awkFamily(name string) bool { return name == "awk" || name == "gawk" || name == "mawk" }
+
+// movedBack is true when a later mv puts target over one of the files.
+func movedBack(later []segment, target string, files []string) (string, bool) {
+	for _, s := range later {
+		if name, args := command(s); name == "mv" {
+			var ops []string
+			for _, a := range args {
+				if a != "-f" {
+					ops = append(ops, a)
+				}
+			}
+			if len(ops) == 2 && ops[0] == target {
+				for _, f := range files {
+					if f == ops[1] {
+						return f, true
+					}
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func rewriteHit(line string) (rewrite, bool) {
+	segs := segments(line, false)
+	for i, s := range segs {
+		name, args := command(s)
+		var rw rewrite
+		hit := false
+		switch {
+		case name == "sed" || name == "gsed":
+			a := parseSed(args)
+			files := a.files
+			hit = inPlaceEdit(args)
+			if !hit && s.target != "" && !s.stdout {
+				var f string
+				if f, hit = movedBack(segs[i+1:], s.target, a.files); hit {
+					files = []string{f}
+				}
+			}
+			if hit {
+				rw.files = files
+				if a.ok && len(a.scripts) == 1 && len(files) > 0 {
+					if e, ok := sedEdit(a.scripts[0], a.ere); ok {
+						rw.edit = &e
+					}
+				}
+			}
+		case name == "perl":
+			script, files, printing, ok := perlParts(args)
+			hit = perlInPlace(args)
+			if !hit && ok && s.target != "" && !s.stdout {
+				var f string
+				if f, hit = movedBack(segs[i+1:], s.target, files); hit {
+					files = []string{f}
+				}
+			}
+			if hit {
+				rw.files = files
+				if ok && printing && len(files) > 0 {
+					if e, okEdit := perlEdit(script); okEdit {
+						rw.edit = &e
+					}
+				}
+			}
+		case awkFamily(name):
+			a := parseAwk(args)
+			files := a.files
+			hit = a.inplace && len(files) > 0
+			if !hit && s.target != "" && !s.stdout {
+				var f string
+				if f, hit = movedBack(segs[i+1:], s.target, a.files); hit {
+					files = []string{f}
+				}
+			}
+			if hit {
+				rw.files = files
+				if a.hasProg && len(files) > 0 && a.simple {
+					if e, ok := awkEdit(a.program); ok {
+						rw.edit = &e
+					}
+				}
+			}
+		}
+		if hit {
+			return rw, true
+		}
+	}
+	return rewrite{}, false
+}
+
+func rgFlag(base, text string) string {
+	if regexp.QuoteMeta(text) != text {
+		return base + "F"
+	}
+	return base
+}
+
+// hereLine is the exact call that does what the rewrite does, "" when there is
+// no clear one.
+func hereLine(rw rewrite, h harness) string {
+	e := rw.edit
+	if e == nil {
+		return ""
+	}
+	pi := h == forPi
+	plain := plainFiles(rw.files)
+	files := rw.files
+	absNote := ""
+	for _, f := range files {
+		if !pi && plain && !strings.HasPrefix(f, "/") {
+			absNote = " Read and Edit need an absolute path."
+		}
+	}
+	read := func() string { return readCall(h, files[0], e.lo, e.hi-e.lo+1) }
+	lines := "that line"
+	if e.hi > e.lo {
+		lines = "those lines"
+	}
+	editWord := piOr(h, "edit", "Edit")
+	switch e.kind {
+	case "subst":
+		all := ""
+		if e.all {
+			all = piOr(h, " (every occurrence)", " replace_all=true")
+		}
+		pair := fmt.Sprintf("old_string=%s new_string=%s", strconv.Quote(e.old), strconv.Quote(e.new))
+		swap := fmt.Sprintf("replace %s with %s", strconv.Quote(e.old), strconv.Quote(e.new))
+		if e.lo > 0 {
+			if len(files) != 1 || !plain {
+				return ""
+			}
+			return piOr(h, read()+", then edit: "+swap+" in "+lines, read()+", then Edit "+pair+" in "+lines) + absNote
+		}
+		if !plain {
+			if len(files) == 0 || strings.Contains(e.old, "'") {
+				return ""
+			}
+			find := "find the files with rg " + rgFlag("-l", e.old) + " '" + e.old + "', then "
+			return find + piOr(h, "edit each: "+swap+all, "Edit each with "+pair+all)
+		}
+		switch {
+		case len(files) == 1:
+			return piOr(h, "edit path="+files[0]+": "+swap+all, "Edit file_path="+files[0]+" "+pair+all) + absNote
+		case len(files) <= 3:
+			list := strings.Join(files, ", ")
+			return piOr(h, "edit each of "+list+": "+swap+all, "Edit each of "+list+" with "+pair+all) + absNote
+		}
+	case "delete":
+		if len(files) == 1 && plain {
+			return piOr(h, read()+", then edit "+lines+" out", read()+", then Edit "+lines+` out (new_string "")`) + absNote
+		}
+	case "insert":
+		where := "before"
+		if e.after {
+			where = "after"
+		}
+		if len(files) == 1 && plain {
+			return read() + ", then " + editWord + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it" + absNote
+		}
+	case "grepdel":
+		if len(files) >= 1 && len(files) <= 3 && plain {
+			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + editWord + " them out" + absNote
+		}
+	}
+	return ""
+}

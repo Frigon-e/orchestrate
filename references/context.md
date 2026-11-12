@@ -112,15 +112,19 @@ the Claude hooks run, `hooks/bin/orch-guard`) and applies the replies; the
 protocol is in `hooks/claude/README.md`. `scripts/orch` sets `ORCH_GUARD_BIN` for
 the pi leads it launches, and a missing or slow binary fails open.
 
-The guard carries two small deny rules: `deny-sed-inplace` (`sed -i`, `perl -pi`)
-and `deny-big-read` (a whole-file read of a file over 30 KB). The lookup blocks
+The guard carries three small deny rules: `deny-sed-inplace` (`sed -i`, `perl -pi`,
+`awk -i inplace`, a temp file moved back over its source; the block adds the exact
+`Edit` or `Read` then `Edit` call when the command has a clear translation),
+`deny-read-range` (a `sed`, `awk`, `head` or `tail` line range of one file; the
+block names the exact `Read file_path=F offset=A limit=N`) and `deny-big-read`
+(a whole-file read of a file over 30 KB). A whole-file `cat` is allowed. The lookup blocks
 (grep, find, cat, search-first and pi's built-in grep and find) are gone: a
 search runs, and `orch-guard enrich` appends the `orch lsp` facts the search
 did not show (see `hooks/claude/README.md`, "LSP enrichment"). A blocked command
 line is blocked every time; from the third block in a row the reason adds
 `Blocked 3 times: use the replacement above; this guard does not give way.`
 `ORCH_TOOL_GUARD=off` turns the guard off and
-`ORCH_TOOL_GUARD_SKIP=sed-inplace,big-read` disables rules by name. The decision
+`ORCH_TOOL_GUARD_SKIP=sed-inplace,read-range,big-read` disables rules by name. The decision
 tables run the extension in node against the real binary:
 `go test -run 'CtxReminder' .` in `tool`.
 

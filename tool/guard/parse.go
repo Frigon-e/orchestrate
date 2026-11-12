@@ -23,6 +23,8 @@ type segment struct {
 	stdin    bool
 	stdout   bool
 	redirect bool
+	// target is the file of a single literal > redirect, else "".
+	target string
 }
 
 var (
@@ -51,7 +53,10 @@ func segments(command string, dqRaw bool) []segment {
 	return parseSegments(command, dqRaw, 0)
 }
 
-type pipeFlags struct{ stdin, stdout, redirect bool }
+type pipeFlags struct {
+	stdin, stdout, redirect bool
+	target                  string
+}
 
 func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 	defer func() {
@@ -68,10 +73,18 @@ func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 		switch n := n.(type) {
 		case *syntax.Stmt:
 			f := flags[n]
+			outs := 0
 			for _, r := range n.Redirs {
 				if r.Op != syntax.DplOut && r.Op != syntax.DplIn {
 					f.redirect = true
+					outs++
+					if r.Op == syntax.RdrOut && r.N == nil {
+						f.target = r.Word.Lit()
+					}
 				}
+			}
+			if outs != 1 {
+				f.target = ""
 			}
 			if b, ok := n.Cmd.(*syntax.BinaryCmd); ok {
 				if b.Op == syntax.Pipe || b.Op == syntax.PipeAll {
@@ -96,7 +109,7 @@ func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 				return true
 			}
 			f := flags[n]
-			seg := segment{words, f.stdin, f.stdout, f.redirect}
+			seg := segment{words, f.stdin, f.stdout, f.redirect, f.target}
 			out = append(out, seg)
 			if depth < shellDepth {
 				if script, ok := shellScript(seg); ok {
@@ -198,7 +211,7 @@ func tokenSegments(command string, dqRaw bool) []segment {
 	endSegment := func(pipeOut bool) {
 		endWord()
 		if len(words) > 0 {
-			out = append(out, segment{words, stdinPipe, pipeOut, redirect})
+			out = append(out, segment{words, stdinPipe, pipeOut, redirect, ""})
 		}
 		words = nil
 		stdinPipe = pipeOut

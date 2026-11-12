@@ -42,18 +42,19 @@ reply    { block?, reason?, appendText?, message? }
 
 ## Tool guard
 
-The rules live in `tool/guard/rules.go`; each row names a rule the binary enforces. Only two block: `deny-sed-inplace` and `deny-big-read`. The lookup blocks (`deny-search-first`, `deny-grep-rg`, `deny-find`, `deny-find-chains`, `deny-cat-head-tail`, and pi's `deny-builtin-grep` and `deny-builtin-find`) are removed: a search just runs, and `orch-guard enrich` (below) adds language-server facts after it.
+The rules live in `tool/guard/rules.go`; each row names a rule the binary enforces. Three block: `deny-sed-inplace`, `deny-read-range` and `deny-big-read`. The lookup blocks (`deny-search-first`, `deny-grep-rg`, `deny-find`, `deny-find-chains`, `deny-cat-head-tail`, and pi's `deny-builtin-grep` and `deny-builtin-find`) are removed: a search just runs, and `orch-guard enrich` (below) adds language-server facts after it.
 
 | Rule group | Rule | Blocks | Does not touch |
 |---|---|---|---|
-| `sed-inplace` | `deny-sed-inplace` | `sed`/`gsed` with `-i`, `-i.bak`, `-i ''` or `--in-place`; `perl` with `-i` or `-pi` | `sed` that prints to stdout, a piped transform (`git diff \| sed 's/^/  /'`), `grep -i` |
+| `sed-inplace` | `deny-sed-inplace` | `sed`/`gsed` with `-i`, `-i.bak`, `-i ''` or `--in-place`; `perl` with `-i` or `-pi`; `gawk`/`awk -i inplace` with a file; a `sed`, `awk` or `perl` whose only output is a `>` redirect to a temp file that a later `mv` puts back over one of its files | `sed` that prints to stdout, a piped transform (`git diff \| sed 's/^/  /'`), `grep -i` |
+| `read-range` | `deny-read-range` | a line-range read of one plain file whose output goes nowhere else: `sed -n '10,20p' F` (also `7p`, `10,+5p`, `10,20!d`, `20q`), `head [-n N] F`, `tail -n +N F`, `awk 'NR>=10 && NR<=20' F` (also `NR==5`, `NR<=20`, `NR==10,NR==20`, with `{print}`), and the two-segment lines `head -n B F \| tail -n K`, `tail -n +A F \| head -n N`, `cat [-n] F \| sed\|awk\|head ...` | a whole-file `cat`, `tail -n N` (last N lines), `head -c`, `tail -f`, any other pipe or redirect, two files, a regex address (`/x/p`), `$p`, an end before the start, zero counts |
 | `big-read` | `deny-big-read` | Claude's `Read` of a regular file over 30720 bytes (`bigReadBytes` in `tool/guard/bigread.go`) with neither `offset` nor `limit` | a read with `offset` or `limit` (either one), `pages`, images (png, jpg, jpeg, gif, webp), PDFs, notebooks (`.ipynb`), a file at or under the limit, a missing path, a directory, and any other tool |
 
 Claude's own `Grep` and `Glob` tools are not guarded, and neither are pi's `grep` and `find`.
 
 ### What a block says
 
-A block names its replacement: `deny-sed-inplace` always names `Edit`. pi (`--harness pi`) names its own tool.
+A block names its replacement: `deny-sed-inplace` always names `Edit`, and when the command has a clear translation it adds a third line `Here: ...` with the exact call (`Edit file_path=a.go old_string="x" new_string="y" replace_all=true` for a literal `s/x/y/g`, or `Read file_path=a.go offset=10 limit=11, then Edit those lines out` for `10,20d`); a regex, several commands or an `s` flag other than `g` get no third line. `deny-read-range` names the exact `Read file_path=F offset=A limit=N` (`limit` is left out for an open range) to send as a parallel call. pi (`--harness pi`) names its own tool: `read path=F offset=A limit=N` and `edit path=F: replace "x" with "y"`.
 
 ### Big whole-file reads
 

@@ -50,19 +50,6 @@ func inPlaceEdit(args []string) bool {
 	return anyOf(args, func(a string) bool { return strings.HasPrefix(a, "--in-place") || inPlace.MatchString(a) })
 }
 
-func denySedInplace(line string) bool {
-	for _, s := range segments(line, false) {
-		name, args := command(s)
-		if (name == "sed" || name == "gsed") && inPlaceEdit(args) {
-			return true
-		}
-		if name == "perl" && perlInPlace(args) {
-			return true
-		}
-	}
-	return false
-}
-
 // perlInPlace reports a -i among perl's own switches. A switch cluster is read
 // letter by letter: a letter that takes a value (-M, -I, -e ...) ends it, so
 // -MTime::HiRes or -Ilib/util is not -i. Switches end at -- or the script name.
@@ -119,13 +106,19 @@ func piOr(h harness, pi, claude string) string {
 func rules(h harness) []rule {
 	return []rule{
 		{"sed-inplace", "deny-sed-inplace",
-			func(line string, t tools) bool { return denySedInplace(line) },
+			func(line string, t tools) bool { _, hit := rewriteHit(line); return hit },
 			func(t tools, line string) string {
 				edit := piOr(h, "edit", "Edit")
-				return Marker + " (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n" +
+				reason := Marker + " (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n" +
 					"Use the built-in " + edit + " tool. If the mtime must stay the same, run touch -r FILE REF " +
 					"before the " + edit + " and touch -r REF FILE after. " +
 					"Do not rewrite files with python, awk or tee."
+				if rw, hit := rewriteHit(line); hit {
+					if here := hereLine(rw, h); here != "" {
+						reason += "\nHere: " + here
+					}
+				}
+				return reason
 			}},
 		{"read-range", "deny-read-range",
 			func(line string, t tools) bool { _, hit := readRangeHit(line); return hit },
