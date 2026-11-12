@@ -939,12 +939,9 @@ func (b *orcaBackend) CreateWorktree(ctx context.Context, w WorktreeSpec) (Workt
 	}
 	args := []string{"worktree", "create", "--name", w.Name, "--branch", w.Branch, "--base-branch", w.Base, "--setup", setup}
 	if w.Repo != "" {
-		args = append(args, "--parent-worktree", "path:"+w.Repo)
+		args = append(args, "--repo", "path:"+w.Repo, "--parent-worktree", "path:"+w.Repo)
 	} else {
 		args = append(args, "--no-parent")
-	}
-	if w.Repo != "" {
-		args = append(args, "--repo", "path:"+w.Repo)
 	}
 	res, err := orcaRun(ctx, 120*time.Second, args...)
 	if err != nil {
