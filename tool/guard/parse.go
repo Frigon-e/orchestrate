@@ -25,6 +25,8 @@ type segment struct {
 	redirect bool
 	// target is the file of a single literal > redirect, else "".
 	target string
+	// sub marks a call inside $(...), backticks or <(...): its output feeds a command.
+	sub bool
 }
 
 var (
@@ -69,8 +71,19 @@ func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 		return tokenSegments(command, dqRaw)
 	}
 	flags := map[syntax.Node]pipeFlags{}
+	inSub := map[*syntax.CallExpr]bool{}
+	markSub := func(n syntax.Node) {
+		syntax.Walk(n, func(m syntax.Node) bool {
+			if c, ok := m.(*syntax.CallExpr); ok {
+				inSub[c] = true
+			}
+			return true
+		})
+	}
 	syntax.Walk(file, func(n syntax.Node) bool {
 		switch n := n.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			markSub(n)
 		case *syntax.Stmt:
 			f := flags[n]
 			outs := 0
@@ -109,11 +122,14 @@ func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 				return true
 			}
 			f := flags[n]
-			seg := segment{words, f.stdin, f.stdout, f.redirect, f.target}
+			seg := segment{words, f.stdin, f.stdout, f.redirect, f.target, inSub[n]}
 			out = append(out, seg)
 			if depth < shellDepth {
 				if script, ok := shellScript(seg); ok {
-					out = append(out, parseSegments(script, dqRaw, depth+1)...)
+					for _, in := range parseSegments(script, dqRaw, depth+1) {
+						in.sub = in.sub || seg.sub
+						out = append(out, in)
+					}
 				}
 			}
 		}
@@ -211,7 +227,7 @@ func tokenSegments(command string, dqRaw bool) []segment {
 	endSegment := func(pipeOut bool) {
 		endWord()
 		if len(words) > 0 {
-			out = append(out, segment{words, stdinPipe, pipeOut, redirect, ""})
+			out = append(out, segment{words, stdinPipe, pipeOut, redirect, "", false})
 		}
 		words = nil
 		stdinPipe = pipeOut

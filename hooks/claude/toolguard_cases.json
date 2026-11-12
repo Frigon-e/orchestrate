@@ -279,6 +279,13 @@
     { "name": "ed allow gawk -i inplace 'NR!=5'", "situation": "fd-rg", "rule": "", "command": "gawk -i inplace 'NR!=5'" },
     { "name": "ed allow cp a.go a.bak", "situation": "fd-rg", "rule": "", "command": "cp a.go a.bak" },
     { "name": "ed allow awk 'NR!=5' a.go > a.tmp && mv a.tmp other.go", "situation": "fd-rg", "rule": "", "command": "awk 'NR!=5' a.go > a.tmp && mv a.tmp other.go" },
-    { "name": "ed allow awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go", "situation": "fd-rg", "rule": "", "command": "awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go" }
+    { "name": "ed allow awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go", "situation": "fd-rg", "rule": "", "command": "awk 'NR!=5' a.go > a.tmp && cp a.tmp a.go" },
+    { "name": "rr allow command substitution assignment", "situation": "fd-rg", "rule": "", "command": "VERSION=$(sed -n 1p VERSION) && echo $VERSION" },
+    { "name": "rr allow command substitution in quotes", "situation": "fd-rg", "rule": "", "command": "echo \"$(head -n 3 a.go)\"" },
+    { "name": "rr allow process substitution", "situation": "fd-rg", "rule": "", "command": "diff <(sed -n 1,5p a.go) <(sed -n 1,5p b.go)" },
+    { "name": "rr allow backticks", "situation": "fd-rg", "rule": "", "command": "x=`sed -n 1p VERSION`" },
+    { "name": "ed sed -i inside command substitution", "situation": "fd-rg", "rule": "sed-inplace", "command": "x=$(sed -i 's/a/b/g' a.go)" },
+    { "name": "ed relative path Here ends with a period", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed -i '5d' b.go", "reasonHas": {"claude": ["(new_string \"\"). Read and Edit need an absolute path."]} },
+    { "name": "ed Here ends with a period", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed -i '5d' /abs/b.go", "reasonHas": {"claude": ["(new_string \"\")."], "pi": ["then edit that line out."]}, "reasonLacks": {"claude": ["absolute path"]} }
   ]
 }

@@ -438,7 +438,7 @@ func readRangeHit(line string) (readRange, bool) {
 		return pipelineRange(segs[0], segs[1])
 	}
 	for _, s := range segs {
-		if !clean(s) {
+		if !clean(s) || s.sub {
 			continue
 		}
 		name, args := command(s)
@@ -808,19 +808,28 @@ func rgFlag(base, text string) string {
 // hereLine is the exact call that does what the rewrite does, "" when there is
 // no clear one.
 func hereLine(rw rewrite, h harness) string {
+	here := hereBody(rw, h)
+	if here == "" {
+		return ""
+	}
+	here += "."
+	if h == forClaude && plainFiles(rw.files) {
+		for _, f := range rw.files {
+			if !strings.HasPrefix(f, "/") {
+				return here + " Read and Edit need an absolute path."
+			}
+		}
+	}
+	return here
+}
+
+func hereBody(rw rewrite, h harness) string {
 	e := rw.edit
 	if e == nil {
 		return ""
 	}
-	pi := h == forPi
 	plain := plainFiles(rw.files)
 	files := rw.files
-	absNote := ""
-	for _, f := range files {
-		if !pi && plain && !strings.HasPrefix(f, "/") {
-			absNote = " Read and Edit need an absolute path."
-		}
-	}
 	read := func() string { return readCall(h, files[0], e.lo, e.hi-e.lo+1) }
 	lines := "that line"
 	if e.hi > e.lo {
@@ -839,7 +848,7 @@ func hereLine(rw rewrite, h harness) string {
 			if len(files) != 1 || !plain {
 				return ""
 			}
-			return piOr(h, read()+", then edit: "+swap+" in "+lines, read()+", then Edit "+pair+" in "+lines) + absNote
+			return piOr(h, read()+", then edit: "+swap+" in "+lines, read()+", then Edit "+pair+" in "+lines)
 		}
 		if !plain {
 			if len(files) == 0 || strings.Contains(e.old, "'") {
@@ -850,14 +859,14 @@ func hereLine(rw rewrite, h harness) string {
 		}
 		switch {
 		case len(files) == 1:
-			return piOr(h, "edit path="+files[0]+": "+swap+all, "Edit file_path="+files[0]+" "+pair+all) + absNote
+			return piOr(h, "edit path="+files[0]+": "+swap+all, "Edit file_path="+files[0]+" "+pair+all)
 		case len(files) <= 3:
 			list := strings.Join(files, ", ")
-			return piOr(h, "edit each of "+list+": "+swap+all, "Edit each of "+list+" with "+pair+all) + absNote
+			return piOr(h, "edit each of "+list+": "+swap+all, "Edit each of "+list+" with "+pair+all)
 		}
 	case "delete":
 		if len(files) == 1 && plain {
-			return piOr(h, read()+", then edit "+lines+" out", read()+", then Edit "+lines+` out (new_string "")`) + absNote
+			return piOr(h, read()+", then edit "+lines+" out", read()+", then Edit "+lines+` out (new_string "")`)
 		}
 	case "insert":
 		where := "before"
@@ -865,11 +874,11 @@ func hereLine(rw rewrite, h harness) string {
 			where = "after"
 		}
 		if len(files) == 1 && plain {
-			return read() + ", then " + editWord + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it" + absNote
+			return read() + ", then " + editWord + " " + lines + " to add " + strconv.Quote(e.text) + " " + where + " it"
 		}
 	case "grepdel":
 		if len(files) >= 1 && len(files) <= 3 && plain {
-			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + editWord + " them out" + absNote
+			return "find the lines with rg " + rgFlag("-n", e.old) + " '" + e.old + "' " + strings.Join(files, " ") + ", then " + editWord + " them out"
 		}
 	}
 	return ""
