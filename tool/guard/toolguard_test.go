@@ -13,10 +13,10 @@ import (
 
 // replacement is what a block must name, by rule: sed-inplace and read-range are left.
 var replacement = map[string]map[string]string{
-	"fd-rg": {"sed-inplace": "built-in Edit", "read-range": "Read"},
-	"rg":    {"sed-inplace": "built-in Edit", "read-range": "Read"},
-	"fd":    {"sed-inplace": "built-in Edit", "read-range": "Read"},
-	"none":  {"sed-inplace": "built-in Edit", "read-range": "Read"},
+	"fd-rg": {"sed-inplace": "built-in Edit", "read-range": "Read file_path="},
+	"rg":    {"sed-inplace": "built-in Edit", "read-range": "Read file_path="},
+	"fd":    {"sed-inplace": "built-in Edit", "read-range": "Read file_path="},
+	"none":  {"sed-inplace": "built-in Edit", "read-range": "Read file_path="},
 }
 
 func nonBlank(s string) int {
@@ -140,6 +140,19 @@ func TestSwitchesDisableRules(t *testing.T) {
 		if code, stderr := (inProc{}).pre(t, payload, paths["fd-rg"], env); code != 0 {
 			t.Errorf("%s did not disable deny-sed-inplace: %s", name, stderr)
 		}
+	}
+	// Each rule has its own switch: skipping one leaves the other blocking.
+	rangeRead := jsonBytes(t, bashEvent("sed -n '10,20p' notes.txt"))
+	if code, _ := (inProc{}).pre(t, rangeRead, paths["fd-rg"], nil); code != 2 {
+		t.Fatal("sed -n '10,20p' is not blocked without a switch")
+	}
+	for _, skip := range []string{"read-range", "deny-read-range"} {
+		if code, stderr := (inProc{}).pre(t, rangeRead, paths["fd-rg"], map[string]string{"ORCH_TOOL_GUARD_SKIP": skip}); code != 0 {
+			t.Errorf("skip %s did not disable deny-read-range: %s", skip, stderr)
+		}
+	}
+	if code, _ := (inProc{}).pre(t, rangeRead, paths["fd-rg"], map[string]string{"ORCH_TOOL_GUARD_SKIP": "sed-inplace"}); code != 2 {
+		t.Error("skipping sed-inplace let a read-range through")
 	}
 }
 

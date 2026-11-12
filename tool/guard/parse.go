@@ -87,7 +87,9 @@ func parseSegments(command string, dqRaw bool, depth int) (out []segment) {
 			f := flags[n]
 			outs := 0
 			for _, r := range n.Redirs {
-				if r.Op != syntax.DplOut && r.Op != syntax.DplIn {
+				// A redirect of stderr alone does not change where stdout goes.
+				stderrOnly := r.N != nil && r.N.Value == "2"
+				if r.Op != syntax.DplOut && r.Op != syntax.DplIn && !stderrOnly {
 					f.redirect = true
 					outs++
 					if r.Op == syntax.RdrOut && r.N == nil {

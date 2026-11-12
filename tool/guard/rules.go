@@ -117,7 +117,7 @@ func rules(h harness) []rule {
 			}},
 		{"read-range", "deny-read-range",
 			func(line string) bool { _, hit := readRangeHit(line); return hit },
-			func(line string) string { return readRangeReason(line, h) }},
+			func(line string) string { r, _ := readRangeHit(line); return readRangeReason(r, h) }},
 	}
 }
 

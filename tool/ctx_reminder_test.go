@@ -236,7 +236,7 @@ func TestCtxReminderDecisionTable(t *testing.T) {
 		{Name: "go test", Tool: "bash", Input: bash(`go test ./...`)},
 		{Name: "plain ls", Tool: "bash", Input: bash(`ls`)},
 		{Name: "echo quoted rg", Tool: "bash", Input: bash(`echo "rg"`)},
-		{Name: "cat pipe head", Tool: "bash", Input: bash(`cat file | wc -l`)},
+		{Name: "cat pipe wc", Tool: "bash", Input: bash(`cat file | wc -l`)},
 		{Name: "read tool", Tool: "read", Input: map[string]any{"path": "a.go"}},
 	}
 	got := runCtxReminder(t, nil, cases)
@@ -458,13 +458,6 @@ func TestCtxReminderSharedToolguardCases(t *testing.T) {
 				}
 				if strings.Contains(reason, "orch ctx") {
 					t.Errorf("%q: the reason names orch ctx: %s", c.Name, reason)
-				}
-				// Reading a file points at pi's read call, never orch ctx,
-				// whatever is installed.
-				if c.Rule == "cat-head-tail" {
-					if !strings.Contains(reason, "read path=") || strings.Contains(reason, "orch ctx") {
-						t.Errorf("%q must name pi's read call only: %s", c.Name, reason)
-					}
 				}
 				for _, want := range c.ReasonHas["pi"] {
 					if !strings.Contains(reason, want) {

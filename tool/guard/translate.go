@@ -126,7 +126,7 @@ func parseSed(args []string) sedArgs {
 }
 
 var (
-	sedPrintRange = regexp.MustCompile(`^([0-9]+)(?:,(\+?[0-9]+))?p(?:;([0-9]+)q)?$`)
+	sedPrintRange = regexp.MustCompile(`^([0-9]+)(?:,(\+?[0-9]+|\$))?p(?:;([0-9]+)q)?$`)
 	sedKeepRange  = regexp.MustCompile(`^([0-9]+),([0-9]+)!d$`)
 	sedQuitAt     = regexp.MustCompile(`^([0-9]+)q$`)
 )
@@ -144,6 +144,12 @@ func sedSelection(a sedArgs) (offset, limit int, ok bool) {
 		}
 		start := atoi(m[1])
 		end := start
+		if m[2] == "$" { // a,$ runs to the end of the file: no limit
+			if start < 1 || m[3] != "" {
+				return
+			}
+			return start, 0, true
+		}
 		switch {
 		case strings.HasPrefix(m[2], "+"):
 			end = start + atoi(m[2][1:])
@@ -430,12 +436,8 @@ func readRangeHit(line string) (readRange, bool) {
 	return readRange{}, false
 }
 
-func readRangeReason(line string, h harness) string {
+func readRangeReason(r readRange, h harness) string {
 	head := Marker + " (deny-read-range): sed, awk, head and tail output is not a Read, so a later Edit of the file fails.\n"
-	r, ok := readRangeHit(line)
-	if !ok {
-		return head + "Send " + h.read + " with offset and limit instead, as a parallel call in the same message as your other commands."
-	}
 	text := "Send " + h.readCall(r.file, r.offset, r.limit) + " instead, as a parallel call in the same message as your other commands."
 	if h.absPath && !strings.HasPrefix(r.file, "/") {
 		text += " " + h.read + " needs an absolute path."
@@ -653,6 +655,7 @@ type perlOpts struct {
 	files    []string // the arguments after the switches, only when there is a script
 	printing bool     // -p
 	inplace  bool     // -i
+	multi    bool     // more than one -e: no single edit
 }
 
 func perlParts(args []string) perlOpts {
@@ -679,6 +682,7 @@ func perlParts(args []string) perlOpts {
 			case c == 'e' || c == 'E':
 				if j == len(a)-1 && k+1 < len(args) {
 					k++
+					o.multi = o.multi || o.script != ""
 					o.script = args[k]
 				}
 				break cluster
@@ -691,7 +695,7 @@ func perlParts(args []string) perlOpts {
 				for j+1 < len(a) && strings.IndexByte(octal, a[j+1]) >= 0 {
 					j++
 				}
-			case strings.IndexByte("MmIxCdDV", c) >= 0:
+			case strings.IndexByte("MmIxCdDVF", c) >= 0:
 				break cluster
 			}
 		}
@@ -739,6 +743,8 @@ func movedBack(later []segment, target string, files []string) (string, bool) {
 
 func rewriteHit(line string) (rewrite, bool) {
 	segs := segments(line, false)
+	var first rewrite
+	found := false
 	for i, s := range segs {
 		name, args := command(s)
 		var files []string
@@ -756,7 +762,7 @@ func rewriteHit(line string) (rewrite, bool) {
 		case name == "perl":
 			p := perlParts(args)
 			files, inplace = p.files, p.inplace
-			if p.printing {
+			if p.printing && !p.multi {
 				if ed, ok := perlEdit(p.script); ok {
 					e = ed
 				}
@@ -784,9 +790,13 @@ func rewriteHit(line string) (rewrite, bool) {
 		if len(files) == 0 {
 			e = edit{}
 		}
-		return rewrite{files, e}, true
+		if found { // several rewrites: no single translation
+			first.edit = edit{}
+			continue
+		}
+		first, found = rewrite{files: files, edit: e}, true
 	}
-	return rewrite{}, false
+	return first, found
 }
 
 func rgFlag(base, text string) string {
