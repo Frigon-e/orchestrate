@@ -86,9 +86,79 @@ func restrictedExecFlag(cmd string) string {
 	return ""
 }
 
-// restrictedRefusal says why a command line is not one plain lookup call, or "" when it is.
-func restrictedRefusal(command string) string {
-	cmd := strings.TrimSpace(command)
+// restrictedCharWhy says what a character that is refused outside quotes does.
+func restrictedCharWhy(ch rune) string {
+	switch ch {
+	case '|':
+		return "a pipe sends output to another command"
+	case '<', '>':
+		return "a redirect reads or writes a file"
+	case '*', '?', '[', ']':
+		return "an unquoted glob expands to file names; quote the pattern"
+	case '$', '`':
+		return "a substitution runs another command or expands a variable; quote it with single quotes"
+	case '(', ')', '{', '}':
+		return "a subshell or group"
+	case '~':
+		return "home-directory expansion"
+	case '!':
+		return "history expansion"
+	case '#':
+		return "a comment"
+	case '\\':
+		return "an escape; quote instead"
+	case '\r':
+		return "a carriage return"
+	}
+	return ""
+}
+
+// restrictedSplit cuts a command line at the unquoted ;, && and newline that join
+// lookups, and at the unquoted || and lone & that do not. bad lists the refused
+// connectors found. A lone | stays in its part, where the character check refuses it.
+func restrictedSplit(cmd string) (parts []string, bad []string) {
+	r := []rune(cmd)
+	var cur strings.Builder
+	var quote rune
+	for i := 0; i < len(r); i++ {
+		ch := r[i]
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			cur.WriteRune(ch)
+			continue
+		}
+		next := rune(0)
+		if i+1 < len(r) {
+			next = r[i+1]
+		}
+		switch {
+		case ch == '\'' || ch == '"':
+			quote = ch
+			cur.WriteRune(ch)
+			continue
+		case ch == ';' || ch == '\n':
+		case ch == '&' && next == '&':
+			i++
+		case ch == '&':
+			bad = append(bad, "&")
+		case ch == '|' && next == '|':
+			i++
+			bad = append(bad, "||")
+		default:
+			cur.WriteRune(ch)
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(cur.String()))
+		cur.Reset()
+	}
+	parts = append(parts, strings.TrimSpace(cur.String()))
+	return parts, bad
+}
+
+// restrictedPartRefusal says why one part of a command line is not a plain lookup call, or "" when it is.
+func restrictedPartRefusal(cmd string) string {
 	if !restrictedAllowed.MatchString(cmd) {
 		return "only jbcontext search, orch lsp, rg, fd, ls and wc run in this shell"
 	}
@@ -110,8 +180,8 @@ func restrictedRefusal(command string) string {
 		}
 		if ch == '\'' || ch == '"' {
 			quote = ch
-		} else if strings.ContainsRune(";&|<>(){}`$\\\n\r*?[]~!#", ch) {
-			return fmt.Sprintf("no unquoted %q: no pipes, redirects, globs or substitutions", string(ch))
+		} else if why := restrictedCharWhy(ch); why != "" {
+			return fmt.Sprintf("unquoted %q: %s", string(ch), why)
 		}
 	}
 	if quote != 0 {
@@ -120,9 +190,47 @@ func restrictedRefusal(command string) string {
 	return restrictedExecFlag(cmd)
 }
 
-const restrictedDenyTail = "This shell runs one command per call: jbcontext search, orch lsp, rg, fd, ls or wc, with no pipes, redirects or unquoted globs. " +
-	"Put independent lookups in separate calls in one message. " +
-	"Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed or cat."
+// restrictedRefusal says why a command line is not plain lookup calls joined by ; or &&, or "" when it is.
+func restrictedRefusal(command string) string {
+	parts, bad := restrictedSplit(strings.TrimSpace(command))
+	for i, p := range parts {
+		if p == "" && len(parts) > 1 {
+			return "empty command between separators"
+		}
+		why := restrictedPartRefusal(p)
+		if why == "" {
+			continue
+		}
+		if len(parts) > 1 {
+			text := []rune(p)
+			if len(text) > 60 {
+				text = text[:60]
+			}
+			return fmt.Sprintf("part %d of %d (%s): %s", i+1, len(parts), string(text), why)
+		}
+		return why
+	}
+	if len(bad) > 0 {
+		why := `unquoted "||": || chains commands; only ; and && can join lookups`
+		if bad[0] == "&" {
+			why = `unquoted "&": & runs a command in the background`
+		}
+		return why + "\nSend these as separate calls in one message:\n- " + strings.Join(parts, "\n- ")
+	}
+	return ""
+}
+
+const restrictedDenyTail = "This shell runs one lookup per call, or several joined with ; or &&: jbcontext search, orch lsp, rg, fd, ls or wc, with no pipes, redirects or unquoted globs. " +
+	"Independent lookups are better as separate calls in one message: they run in parallel and their output stays separate. " +
+	"Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed, cat or find."
+
+// restrictedBlockMessage joins a refusal reason and the deny tail.
+func restrictedBlockMessage(why string) string {
+	if strings.Contains(why, "\n- ") {
+		return "Blocked: " + why + "\n" + restrictedDenyTail
+	}
+	return "Blocked: " + why + ". " + restrictedDenyTail
+}
 
 // cmdLookupOnlyCheck is the hidden `orch lookup-only-check`: a Claude PreToolUse hook
 // that reads the hook JSON on stdin and exits 2 with a reason for a Bash command
@@ -145,7 +253,7 @@ func cmdLookupOnlyCheck(a *app, args []string) error {
 		return nil
 	}
 	if why := restrictedRefusal(in.ToolInput.Command); why != "" {
-		return &exitError{code: 2, msg: "Blocked: " + why + ". " + restrictedDenyTail}
+		return &exitError{code: 2, msg: restrictedBlockMessage(why)}
 	}
 	return nil
 }

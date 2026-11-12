@@ -1,5 +1,5 @@
-// Read-only gate passes: the shell runs one `jbcontext search`, `orch lsp`, `rg`,
-// `fd`, `ls` or `wc` command per call and nothing else. No pipes, redirects,
+// Read-only gate passes: the shell runs `jbcontext search`, `orch lsp`, `rg`,
+// `fd`, `ls` or `wc` commands, one per call or joined with ; or &&, and nothing else. No pipes, redirects,
 // command substitution, unquoted globs or other commands; rg and fd flags that
 // run another program are refused.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -53,9 +53,67 @@ function execFlag(cmd: string): string {
 	return "";
 }
 
-// Why a command line is not one plain lookup call, or "" when it is.
-function refusal(command: string): string {
-	const cmd = command.trim();
+// What a character that is refused outside quotes does.
+function charWhy(ch: string): string {
+	switch (ch) {
+		case "|": return "a pipe sends output to another command";
+		case "<": case ">": return "a redirect reads or writes a file";
+		case "*": case "?": case "[": case "]": return "an unquoted glob expands to file names; quote the pattern";
+		case "$": case "`": return "a substitution runs another command or expands a variable; quote it with single quotes";
+		case "(": case ")": case "{": case "}": return "a subshell or group";
+		case "~": return "home-directory expansion";
+		case "!": return "history expansion";
+		case "#": return "a comment";
+		case "\\": return "an escape; quote instead";
+		case "\r": return "a carriage return";
+	}
+	return "";
+}
+
+// Cut a command line at the unquoted ;, && and newline that join lookups, and at
+// the unquoted || and lone & that do not. bad lists the refused connectors found.
+// A lone | stays in its part, where the character check refuses it.
+function split(cmd: string): { parts: string[]; bad: string[] } {
+	const r = Array.from(cmd);
+	const parts: string[] = [];
+	const bad: string[] = [];
+	let cur = "";
+	let quote = "";
+	for (let i = 0; i < r.length; i++) {
+		const ch = r[i];
+		if (quote) {
+			if (ch === quote) quote = "";
+			cur += ch;
+			continue;
+		}
+		const next = r[i + 1] ?? "";
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			cur += ch;
+			continue;
+		}
+		if (ch === ";" || ch === "\n") {
+			// a separator
+		} else if (ch === "&" && next === "&") {
+			i++;
+		} else if (ch === "&") {
+			bad.push("&");
+		} else if (ch === "|" && next === "|") {
+			i++;
+			bad.push("||");
+		} else {
+			cur += ch;
+			continue;
+		}
+		parts.push(cur.trim());
+		cur = "";
+	}
+	parts.push(cur.trim());
+	return { parts, bad };
+}
+
+// Why one part of a command line is not a plain lookup call, or "" when it is.
+function partRefusal(cmd: string): string {
 	if (!allowed.test(cmd)) {
 		return "only jbcontext search, orch lsp, rg, fd, ls and wc run in this shell";
 	}
@@ -71,11 +129,34 @@ function refusal(command: string): string {
 			continue;
 		}
 		if (ch === "'" || ch === '"') quote = ch;
-		else if (";&|<>(){}`$\\\n\r*?[]~!#".includes(ch)) return `no unquoted ${JSON.stringify(ch)}: no pipes, redirects, globs or substitutions`;
+		else if (charWhy(ch)) return `unquoted ${JSON.stringify(ch)}: ${charWhy(ch)}`;
 	}
 	if (quote) return "unterminated quote";
 	return execFlag(cmd);
 }
+
+// Why a command line is not plain lookup calls joined by ; or &&, or "" when it is.
+function refusal(command: string): string {
+	const { parts, bad } = split(command.trim());
+	for (let i = 0; i < parts.length; i++) {
+		const p = parts[i];
+		if (p === "" && parts.length > 1) return "empty command between separators";
+		const why = partRefusal(p);
+		if (!why) continue;
+		if (parts.length > 1) return `part ${i + 1} of ${parts.length} (${Array.from(p).slice(0, 60).join("")}): ${why}`;
+		return why;
+	}
+	if (bad.length > 0) {
+		const why = bad[0] === "&" ? `unquoted "&": & runs a command in the background` : `unquoted "||": || chains commands; only ; and && can join lookups`;
+		return `${why}\nSend these as separate calls in one message:\n- ${parts.join("\n- ")}`;
+	}
+	return "";
+}
+
+const denyTail =
+	"This shell runs one lookup per call, or several joined with ; or &&: jbcontext search, orch lsp, rg, fd, ls or wc, with no pipes, redirects or unquoted globs. " +
+	"Independent lookups are better as separate calls in one message: they run in parallel and their output stays separate. " +
+	"Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed, cat or find.";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
@@ -84,10 +165,7 @@ export default function (pi: ExtensionAPI) {
 		if (!why) return undefined;
 		return {
 			block: true,
-			reason:
-				`Blocked: ${why}. This shell runs one command per call: jbcontext search, orch lsp, rg, fd, ls or wc, with no pipes, redirects or unquoted globs. ` +
-				`Put independent lookups in separate calls in one message. ` +
-				`Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed or cat.`,
+			reason: why.includes("\n- ") ? `Blocked: ${why}\n${denyTail}` : `Blocked: ${why}. ${denyTail}`,
 		};
 	});
 	pi.on("session_start", () => {
