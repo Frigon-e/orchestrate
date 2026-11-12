@@ -82,7 +82,7 @@
     { "name": "sed -n range", "situation": "fd-rg", "rule": "read-range", "command": "sed -n '10,20p' notes.txt", "reasonHas": {"claude": ["Read file_path=notes.txt offset=10 limit=11 instead", "Read needs an absolute path.", "as a parallel call in the same message"], "pi": ["read path=notes.txt offset=10 limit=11 instead", "as a parallel call in the same message"]}, "reasonLacks": {"pi": ["absolute path"]} },
     { "name": "sed one line names the read call, absolute path", "situation": "fd-rg", "rule": "read-range", "command": "sed -n 7p /abs/notes.txt", "reasonHas": {"claude": ["Read file_path=/abs/notes.txt offset=7 limit=1 instead"], "pi": ["read path=/abs/notes.txt offset=7 limit=1 instead"]}, "reasonLacks": {"claude": ["absolute path"], "pi": ["absolute path"]} },
     { "name": "rg then sed names the read call of the sed", "situation": "fd-rg", "rule": "read-range", "command": "rg -n foo src; sed -n 215,235p /abs/a.go", "reasonHas": {"claude": ["Read file_path=/abs/a.go offset=215 limit=21 instead"], "pi": ["read path=/abs/a.go offset=215 limit=21 instead"]}, "reasonLacks": {"claude": ["absolute path"], "pi": ["absolute path"]} },
-    { "name": "cat names the read call without a range", "situation": "fd-rg", "rule": "", "command": "cat /abs/notes.txt" },
+    { "name": "cat of a whole file is allowed", "situation": "fd-rg", "rule": "", "command": "cat /abs/notes.txt" },
     { "name": "sed -n '$p' on an absolute path is allowed", "situation": "fd-rg", "rule": "", "command": "sed -n '$p' /abs/x.go" },
     { "name": "sudo cat", "situation": "fd-rg", "rule": "", "command": "sudo cat /etc/hosts" },
     { "name": "absolute cat", "situation": "fd-rg", "rule": "", "command": "/bin/cat notes.txt" },
