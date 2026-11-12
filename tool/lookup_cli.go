@@ -40,7 +40,7 @@ HOW TO READ CODE. Use your native read tool with offset and limit. When you need
 A violation fails the review.`
 
 // restrictedShellNotice is added to the notice when the shell is limited to the lookup commands.
-const restrictedShellNotice = `YOUR SHELL RUNS ONLY jbcontext search, orch lsp, rg, fd, ls and wc. One command per call, no pipes, no redirects, no unquoted globs, no cd, and no grep, head, tail, sed, cat or find: the shell blocks them. Put independent lookups in separate calls in one message.`
+const restrictedShellNotice = `YOUR SHELL RUNS ONLY jbcontext search, orch lsp, rg, fd, ls and wc. One lookup per call, or several joined with ; or &&, no pipes, no redirects, no unquoted globs, no cd, and no grep, head, tail, sed, cat or find: the shell blocks them. Independent lookups are better as separate calls in one message: they run in parallel and their output stays separate.`
 
 // LookupCLIFor pins the repository root and puts a shim for this binary first on PATH.
 func LookupCLIFor(harness, code string) (LookupCLI, error) {

@@ -41,7 +41,15 @@ const other = await handler({ toolName: "read", input: { path: "a.go" } });
 out["<read tool>"] = other ? "blocked" : "";
 console.log(JSON.stringify(out));
 `
-	all, _ := json.Marshal(append(append([]string{}, allowed...), blocked...))
+	var tbl struct{ Reasons map[string]string }
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "lookup_only_cases.json")), &tbl); err != nil {
+		t.Fatal(err)
+	}
+	reasonCmds := make([]string, 0, len(tbl.Reasons))
+	for c := range tbl.Reasons {
+		reasonCmds = append(reasonCmds, c)
+	}
+	all, _ := json.Marshal(append(append(append([]string{}, allowed...), blocked...), reasonCmds...))
 	cmd := exec.Command(node, "--input-type=module", "-e", script, string(all))
 	ready := filepath.Join(dir, "ready")
 	cmd.Env = agentEnv(nil, []string{"ORCH_LOOKUP_READY=" + ready})
@@ -68,6 +76,11 @@ console.log(JSON.stringify(out));
 	for _, c := range blocked {
 		if !strings.Contains(got[c], "separate calls in one message") || !strings.Contains(got[c], "jbcontext search, orch lsp, rg, fd, ls or wc") {
 			t.Errorf("did not block %q (reason %q)", c, got[c])
+		}
+	}
+	for c, want := range tbl.Reasons {
+		if !strings.Contains(got[c], want) {
+			t.Errorf("pi reason for %q = %q, want it to contain %q", c, got[c], want)
 		}
 	}
 	if got["<read tool>"] != "" {
@@ -225,6 +238,18 @@ func TestLookupOnlyRefusalMatchesTheSharedCaseTable(t *testing.T) {
 	}
 }
 
+func TestLookupOnlyRefusalReasonsMatchTheSharedCaseTable(t *testing.T) {
+	var c struct{ Reasons map[string]string }
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "lookup_only_cases.json")), &c); err != nil {
+		t.Fatal(err)
+	}
+	for cmd, want := range c.Reasons {
+		if got := restrictedRefusal(cmd); !strings.Contains(got, want) {
+			t.Errorf("reason for %q = %q, want it to contain %q", cmd, got, want)
+		}
+	}
+}
+
 func TestLookupOnlyCheckHookExitCodes(t *testing.T) {
 	run := func(payload string) (int, string) {
 		var out strings.Builder
@@ -239,7 +264,7 @@ func TestLookupOnlyCheckHookExitCodes(t *testing.T) {
 		{"one lookup", `{"tool_name":"Bash","tool_input":{"command":"rg -n -w Save internal"}}`, 0, ""},
 		{"exec flag", `{"tool_name":"Bash","tool_input":{"command":"rg --pre=./evil.sh x"}}`, 2, "rg --pre runs another program"},
 		{"fd exec", `{"tool_name":"Bash","tool_input":{"command":"fd -Hx rm"}}`, 2, "fd -Hx runs another program"},
-		{"compound", `{"tool_name":"Bash","tool_input":{"command":"rg x; rm -rf y"}}`, 2, "Blocked: no unquoted"},
+		{"compound", `{"tool_name":"Bash","tool_input":{"command":"rg x; rm -rf y"}}`, 2, "part 2 of 2 (rm -rf y): only jbcontext search"},
 		{"other tool", `{"tool_name":"Read","tool_input":{"file_path":"a.go"}}`, 0, ""},
 		{"bad json", `not json`, 2, "could not parse"},
 	} {
