@@ -1,5 +1,20 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/orch-hook.sh\" session-start", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/orch-hook.sh\" stop", "timeout": 10 }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -11,6 +26,12 @@
         "matcher": "Read",
         "hooks": [
           { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" pre", "timeout": 5 }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Agent|Task|Workflow|Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/claude/orch-hook.sh\" pretool", "timeout": 10 }
         ]
       }
     ],
