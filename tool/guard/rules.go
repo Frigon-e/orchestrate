@@ -18,11 +18,6 @@ const ladder = `Lookup order: jbcontext search "<one behavior>" if the location 
 var grepValue = set("-e", "-f", "-A", "-B", "-C", "-m", "-t", "-g", "-j", "--regexp", "--file", "--type",
 	"--glob", "--max-count", "--after-context", "--before-context", "--context")
 
-// tools is which replacements are installed, so a block never names a missing
-// one. orch is only read for pi, which appends the lookup ladder to a search
-// result while orch is on PATH.
-type tools struct{ fd, rg, orch bool }
-
 // harness is the agent the guard speaks to: the block texts name its own tools.
 type harness int
 
@@ -44,16 +39,14 @@ func onPath(name string) bool {
 	return false
 }
 
-func installed() tools { return tools{fd: onPath("fd"), rg: onPath("rg")} }
-
 func inPlaceEdit(args []string) bool {
 	return anyOf(args, func(a string) bool { return strings.HasPrefix(a, "--in-place") || inPlace.MatchString(a) })
 }
 
 type rule struct {
 	id, name string
-	match    func(line string, t tools) bool
-	reason   func(t tools, line string) string
+	match    func(line string) bool
+	reason   func(line string) string
 }
 
 func piOr(h harness, pi, claude string) string {
@@ -67,8 +60,8 @@ func piOr(h harness, pi, claude string) string {
 func rules(h harness) []rule {
 	return []rule{
 		{"sed-inplace", "deny-sed-inplace",
-			func(line string, t tools) bool { _, hit := rewriteHit(line); return hit },
-			func(t tools, line string) string {
+			func(line string) bool { _, hit := rewriteHit(line); return hit },
+			func(line string) string {
 				edit := piOr(h, "edit", "Edit")
 				reason := Marker + " (deny-sed-inplace): sed -i and perl -pi rewrite a file in place.\n" +
 					"Use the built-in " + edit + " tool. If the mtime must stay the same, run touch -r FILE REF " +
@@ -82,8 +75,8 @@ func rules(h harness) []rule {
 				return reason
 			}},
 		{"read-range", "deny-read-range",
-			func(line string, t tools) bool { _, hit := readRangeHit(line); return hit },
-			func(t tools, line string) string { return readRangeReason(line, h) }},
+			func(line string) bool { _, hit := readRangeHit(line); return hit },
+			func(line string) string { return readRangeReason(line, h) }},
 	}
 }
 
@@ -138,10 +131,9 @@ func Pre(ev *Event, stderr io.Writer) int {
 	if line == "" {
 		return 0
 	}
-	t := installed()
 	for _, r := range activeRules(forClaude) {
-		if r.match(line, t) {
-			io.WriteString(stderr, r.reason(t, line)+"\n")
+		if r.match(line) {
+			io.WriteString(stderr, r.reason(line)+"\n")
 			return 2
 		}
 	}

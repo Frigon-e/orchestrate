@@ -86,12 +86,6 @@ func jsString(v any) string {
 	return pyStr(v)
 }
 
-func piInstalled() tools {
-	t := installed()
-	t.orch = onPath("orch")
-	return t
-}
-
 func segmentSearch(s segment) bool {
 	name, args := command(s)
 	switch {
@@ -232,7 +226,6 @@ func PiPre(ev *Event) PiResponse {
 	input, _ := ev.Object("input")
 	cwd := ev.Str("cwd")
 	guardOn := os.Getenv("ORCH_TOOL_GUARD") != "off"
-	t := piInstalled()
 	state := openState(ev.Str("session"))
 	defer func() { state.close() }() // state is reopened after a wait for a sibling lookup
 
@@ -260,16 +253,18 @@ func PiPre(ev *Event) PiResponse {
 	}
 	if guardOn {
 		for _, r := range activeRules(forPi) {
-			if r.match(line, t) {
-				return block(r.reason(t, line))
+			if r.match(line) {
+				return block(r.reason(line))
 			}
 		}
 	}
 	state.BlocksInRow = 0
 	// No result hook available: remind by blocking the first shell search only,
-	// then let every later search through so the retry always runs.
+	// then let every later search through so the retry always runs. The ladder
+	// names orch, so it is only sent while orch is on PATH; that PATH walk runs
+	// last, for shell searches only.
 	hook, _ := ev.Value("resultHook")
-	if !t.orch || !guardOn || truthy(hook) || state.FallbackReminded || !commandSearch(line) {
+	if !guardOn || truthy(hook) || state.FallbackReminded || !commandSearch(line) || !onPath("orch") {
 		return PiResponse{}
 	}
 	state.FallbackReminded = true
