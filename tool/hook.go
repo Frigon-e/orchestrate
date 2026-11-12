@@ -239,6 +239,23 @@ func (a *app) leadStop(dir string, p hookPayload) string {
 	msg := fmt.Sprintf("orchestrate lead: this turn wrote no status line, so the orchestrator cannot tell why you stopped. "+
 		"Run `%s report --dir %s <state> \"<one line>\"` first: working (say what you are waiting on), done, "+
 		"needs-decision, blocked, paused or failed.", me, dir)
+	if lastState(mine) == "working" {
+		// A lead woken by its own subagent often still has a true status line;
+		// quote it, so the lead rewrites it instead of working out a new one.
+		text := ""
+		for _, e := range slices.Backward(mine) {
+			if e.State == "working" {
+				text = e.Text
+				break
+			}
+		}
+		if r := []rune(text); len(r) > 120 {
+			text = string(r[:120]) + "..."
+		}
+		msg = fmt.Sprintf("orchestrate lead: this turn wrote no status line. Your last one is `working: %s`. "+
+			"If it still holds (for example you still wait on a subagent), report it again: `%s report --dir %s working \"<one line>\"`. "+
+			"If not, report the new state: done, needs-decision, blocked, paused or failed.", text, me, dir)
+	}
 	if unread > 0 {
 		msg += fmt.Sprintf(" You also have %d unread message(s): run `%s inbox --dir %s`.", unread, me, dir)
 		markUnread(dir)

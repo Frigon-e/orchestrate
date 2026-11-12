@@ -2217,8 +2217,9 @@ func TestLeadStopGuard(t *testing.T) {
 	if stop(false) != 0 {
 		t.Fatal("turn with a report sent back")
 	}
-	if stop(false) != 2 {
-		t.Fatal("silent working turn not sent back")
+	code, out := h.hook("stop", map[string]any{"session_id": "x"})
+	if code != 2 || !strings.Contains(out, "Your last one is `working: waiting on two implementers`. If it still holds") {
+		t.Fatalf("silent working turn = %d %q, want it sent back quoting the last working line", code, out)
 	}
 	h.must("report", "--key", "db", "needs-decision", "which db?")
 	stop(false)
@@ -2228,7 +2229,7 @@ func TestLeadStopGuard(t *testing.T) {
 	t.Setenv("ORCH_ROLE", "")
 	h.must("send", "t1", "--resolve", "db", "postgres")
 	t.Setenv("ORCH_ROLE", "lead")
-	code, out := h.hook("stop", map[string]any{"session_id": "x"})
+	code, out = h.hook("stop", map[string]any{"session_id": "x"})
 	if code != 2 || !strings.Contains(out, "1 unread message(s)") {
 		t.Fatalf("answered lead stopping silently = %d %q", code, out)
 	}
