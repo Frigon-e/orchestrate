@@ -165,7 +165,7 @@ export default function (pi: ExtensionAPI) {
 		if (!why) return undefined;
 		return {
 			block: true,
-			reason: why.includes("\n- ") ? `Blocked: ${why}\n${denyTail}` : `Blocked: ${why}. ${denyTail}`,
+			reason: `Blocked: ${why}\n${denyTail}`,
 		};
 	});
 	pi.on("session_start", () => {

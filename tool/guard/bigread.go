@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // bigReadBytes: a whole-file Read of a regular file over this many bytes is
@@ -21,32 +22,49 @@ const bigReadBytes = 30720
 var readExemptSuffixes = set(".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb")
 
 // A code file passes up to codeReadLines lines and codeReadBytes bytes; the byte
-// cap catches generated and minified files.
+// cap catches generated and minified files. A session keeps the newest
+// bigReadsKept warned paths, and only the first inspectMax bytes of a file are
+// counted and outlined (a bigger file blocks either way).
 const (
 	codeReadLines = 2000
 	codeReadBytes = 102400
 	outlineMax    = 50
-	inspectMax    = 4 << 20
+	inspectMax    = 1 << 20
+	bigReadsKept  = 50
 )
 
-var codeExts = set(".go", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".java", ".kt", ".kts",
-	".swift", ".rb", ".php", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".scala", ".sh", ".bash", ".zsh", ".lua", ".vue",
-	".svelte", ".sql", ".proto", ".ex", ".exs", ".dart", ".zig")
+// An outliner lists the lines that start a section of one kind of file. Its
+// regexp compiles on first use, so the hook pays for it only on a block.
+type outliner struct {
+	what, pattern string
+	fenced        bool // skip lines inside ``` blocks
+	re            func() *regexp.Regexp
+}
 
-var docExts = set(".md", ".mdx", ".markdown")
-
-const (
-	codeOutlinePattern = `^(export\s+)?(default\s+)?(pub(\([a-z]+\))?\s+)?(async\s+)?(func|type|class|def|fn|impl|struct|interface|enum|trait|function|const|var|let|mod|module|object)\b`
-	docOutlinePattern  = `^#{1,3} `
-)
+func newOutliner(what, pattern string, fenced bool) *outliner {
+	return &outliner{what, pattern, fenced, sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(pattern) })}
+}
 
 var (
-	codeOutlineRe = regexp.MustCompile(codeOutlinePattern)
-	docOutlineRe  = regexp.MustCompile(docOutlinePattern)
+	codeOutline = newOutliner("outline", `^(export\s+)?(default\s+)?(pub(\([a-z]+\))?\s+)?(async\s+)?(func|type|class|def|fn|impl|struct|interface|enum|trait|function|const|var|let|mod|module|object)\b`, false)
+	docOutline  = newOutliner("headings", `^#{1,3} `, true)
+	// outlines maps an extension to its outliner; a code file also gets the code limit.
+	outlines = map[string]*outliner{}
 )
 
-// bigFile is a file over its limit: its size, its line count and outline when
-// they were computed (code and docs only), and what the outline lists.
+func init() {
+	for _, ext := range []string{".go", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".java", ".kt", ".kts",
+		".swift", ".rb", ".php", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".scala", ".sh", ".bash", ".zsh", ".lua", ".vue",
+		".svelte", ".sql", ".proto", ".ex", ".exs", ".dart", ".zig"} {
+		outlines[ext] = codeOutline
+	}
+	for _, ext := range []string{".md", ".mdx", ".markdown"} {
+		outlines[ext] = docOutline
+	}
+}
+
+// bigFile is a file over its limit: its size, and its line count and outline
+// when it has an outliner.
 type bigFile struct {
 	size    int64
 	lines   int
@@ -62,16 +80,14 @@ func inspectBigRead(target string) (bigFile, bool) {
 		return bigFile{}, false
 	}
 	f := bigFile{size: info.Size()}
-	ext := strings.ToLower(splitExt(target))
-	code, doc := codeExts[ext], docExts[ext]
-	if !code && !doc {
+	o := outlines[strings.ToLower(splitExt(target))]
+	if o == nil {
 		return f, true
 	}
 	file, err := os.Open(target)
 	if err != nil {
 		return bigFile{}, false
 	}
-	// Only the head of a huge file is counted and outlined; it blocks either way.
 	data, err := io.ReadAll(io.LimitReader(file, inspectMax))
 	file.Close()
 	if err != nil {
@@ -81,30 +97,30 @@ func inspectBigRead(target string) (bigFile, bool) {
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		f.lines++
 	}
-	if code && f.size <= codeReadBytes && f.lines <= codeReadLines {
+	if o == codeOutline && f.size <= codeReadBytes && f.lines <= codeReadLines {
 		return bigFile{}, false
 	}
-	re, pattern, fenced := codeOutlineRe, codeOutlinePattern, false
-	f.what = "outline"
-	if doc {
-		re, pattern, fenced = docOutlineRe, docOutlinePattern, true
-		f.what = "headings"
-	}
+	f.what = o.what
+	re := o.re()
 	var entries []string
-	inFence := false
-	for i, line := range strings.Split(string(data), "\n") {
-		if fenced && strings.HasPrefix(strings.TrimLeft(line, " \t"), "```") {
+	more, inFence, n := 0, false, 0
+	for line := range bytes.Lines(data) {
+		n++
+		if o.fenced && bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("```")) {
 			inFence = !inFence
 			continue
 		}
-		if inFence || !re.MatchString(line) {
+		if inFence || !re.Match(line) {
 			continue
 		}
-		entries = append(entries, fmt.Sprintf("  %d: %s", i+1, cutRunes(strings.TrimRight(line, " \t\r"), 100)))
+		if len(entries) == outlineMax {
+			more++
+			continue
+		}
+		entries = append(entries, fmt.Sprintf("  %d: %s", n, cutRunes(string(bytes.TrimRight(line, " \t\r\n")), 100)))
 	}
-	if len(entries) > outlineMax {
-		more := len(entries) - outlineMax
-		entries = append(entries[:outlineMax], fmt.Sprintf("  ... %d more; rg -n %q file for the rest", more, pattern))
+	if more > 0 {
+		entries = append(entries, fmt.Sprintf("  ... %d more; rg -n %q file for the rest", more, o.pattern))
 	}
 	f.outline = strings.Join(entries, "\n")
 	return f, true
@@ -227,41 +243,34 @@ func bigRead(ev *Event, stderr io.Writer) int {
 	if !over {
 		return 0
 	}
-	v, _ := ev.Value("session_id")
-	session := ""
-	if truthy(v) {
-		session = pyStr(v)
+	state := lockedState{State: &State{}}
+	if v, _ := ev.Value("session_id"); truthy(v) {
+		state = openState(pyStr(v))
+		defer state.close()
 	}
-	if session != "" {
-		if abs, err := filepath.Abs(target); err == nil {
-			state := openState(session)
-			defer state.close()
-			if state.bigReadWarned(abs) {
-				return 0
-			}
-			if state.file == nil {
-				session = "" // a throwaway state cannot let a repeat through
-			}
-		} else {
-			session = ""
-		}
+	reason := bigReadVerdict(state, path, target, f, forClaude)
+	if reason == "" {
+		return 0
 	}
-	io.WriteString(stderr, bigReadReason(path, f, session != "", forClaude)+"\n")
+	io.WriteString(stderr, reason+"\n")
 	return 2
 }
 
-// bigReadWarned reports whether path was already blocked once this session
-// (so a repeat passes, and keeps passing); otherwise it records the warning.
-// The list keeps the newest bigReadsKept paths.
-func (s *State) bigReadWarned(path string) bool {
-	if slices.Contains(s.BigReadsAllowed, path) {
-		return true
+// bigReadVerdict is the block text for a whole read of a file over its limit,
+// or "" when this session was already warned about the file: a repeat passes,
+// and keeps passing. Only a saved state can let a repeat through, so only then
+// does the text offer it.
+func bigReadVerdict(state lockedState, path, target string, f bigFile, h harness) string {
+	abs, err := filepath.Abs(target)
+	if err != nil || state.file == nil {
+		return bigReadReason(path, f, false, h)
 	}
-	s.BigReadsAllowed = append(s.BigReadsAllowed, path)
-	if len(s.BigReadsAllowed) > bigReadsKept {
-		s.BigReadsAllowed = s.BigReadsAllowed[len(s.BigReadsAllowed)-bigReadsKept:]
+	if slices.Contains(state.BigReadsWarned, abs) {
+		return ""
 	}
-	return false
+	state.BigReadsWarned = append(state.BigReadsWarned, abs)
+	if len(state.BigReadsWarned) > bigReadsKept {
+		state.BigReadsWarned = state.BigReadsWarned[len(state.BigReadsWarned)-bigReadsKept:]
+	}
+	return bigReadReason(path, f, true, h)
 }
-
-const bigReadsKept = 50

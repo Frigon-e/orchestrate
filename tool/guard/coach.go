@@ -56,9 +56,9 @@ type State struct {
 	// Enriched maps a symbol name already enriched with language-server facts to
 	// the dirty-file fingerprint it was enriched at (see enrich.go).
 	Enriched map[string]string `json:"enriched,omitempty"`
-	// BigReadsAllowed holds the absolute paths of big files a whole Read was
+	// BigReadsWarned holds the absolute paths of big files a whole Read was
 	// already blocked for; a repeat Read of one passes (see bigread.go).
-	BigReadsAllowed []string `json:"big_reads_allowed,omitempty"`
+	BigReadsWarned []string `json:"big_reads_warned,omitempty"`
 }
 
 // Turn is one assistant message and how many lookups it made: nr non-read, rd reads.

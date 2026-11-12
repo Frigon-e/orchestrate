@@ -720,7 +720,6 @@ func sedFamily(name string) bool { return name == "sed" || name == "gsed" }
 
 func awkFamily(name string) bool { return name == "awk" || name == "gawk" || name == "mawk" }
 
-// movedBack is true when a later mv puts target over one of the files.
 // movedBack finds a later command that puts the temp file target back over
 // one of the source files: mv or cp onto it, or cat redirected onto it.
 func movedBack(later []segment, target string, files []string) (string, bool) {

@@ -224,14 +224,6 @@ const restrictedDenyTail = "This shell runs one lookup per call, or several join
 	"Independent lookups are better as separate calls in one message: they run in parallel and their output stays separate. " +
 	"Read files with the read tool (offset and limit); there is no cd, grep, head, tail, sed, cat or find."
 
-// restrictedBlockMessage joins a refusal reason and the deny tail.
-func restrictedBlockMessage(why string) string {
-	if strings.Contains(why, "\n- ") {
-		return "Blocked: " + why + "\n" + restrictedDenyTail
-	}
-	return "Blocked: " + why + ". " + restrictedDenyTail
-}
-
 // cmdLookupOnlyCheck is the hidden `orch lookup-only-check`: a Claude PreToolUse hook
 // that reads the hook JSON on stdin and exits 2 with a reason for a Bash command
 // that is not one allowed lookup. A payload it cannot read is refused too.
@@ -253,7 +245,7 @@ func cmdLookupOnlyCheck(a *app, args []string) error {
 		return nil
 	}
 	if why := restrictedRefusal(in.ToolInput.Command); why != "" {
-		return &exitError{code: 2, msg: restrictedBlockMessage(why)}
+		return &exitError{code: 2, msg: "Blocked: " + why + "\n" + restrictedDenyTail}
 	}
 	return nil
 }

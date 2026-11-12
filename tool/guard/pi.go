@@ -189,10 +189,10 @@ func piBigReadReason(cwd string, input map[string]any, state lockedState) string
 		target = filepath.Join(cwd, target)
 	}
 	f, over := inspectBigRead(target)
-	if !over || state.bigReadWarned(filepath.Clean(target)) {
+	if !over {
 		return ""
 	}
-	return bigReadReason(path, f, state.file != nil, forPi)
+	return bigReadVerdict(state, path, target, f, forPi)
 }
 
 // lockedState is a session's state held under its flock; a state that cannot be
@@ -451,10 +451,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	}
 	if logOn {
 		isOK, empty := piOutcome(found, text, truthy(isError))
-		query := found.query
-		if r := []rune(query); len(r) > queryMax {
-			query = string(r[:queryMax])
-		}
+		query := cutRunes(found.query, queryMax)
 		repo := gitRoot(cwd)
 		if repo == "" {
 			repo = cwd
