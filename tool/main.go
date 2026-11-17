@@ -39,6 +39,7 @@ Orchestrator:
   orch decisions report [--use U] [--since 7d]   (decision model uses: calls, cost, latency, outcomes, AUC)
   orch lookups report [--since 7d] [--repo PATH] [--json]   (what the lookup coach logged: tools, turns, reminders)
   orch lsp def|refs|callers|impls <Name>... | symbols <file> | hover <path:line:col>   (symbols by name via the language servers; orch lsp --help)
+  orch mcp   (MCP server on stdin/stdout: search and lsp tools for Code Mode scripts)
   orch quick <id> --owns <file>[,<file>] <request...>
   orch models
   orch triage <id>... [--force] | orch triage report
@@ -108,6 +109,7 @@ var commands = map[string]func(*app, []string) error{
 	"decisions":         cmdDecisions,
 	"lookups":           cmdLookups,
 	"lsp":               cmdLsp,
+	"mcp":               cmdMcp,
 	"test-changed":      cmdTestChanged,
 	"models":            cmdModels,
 	"triage":            cmdTriage,

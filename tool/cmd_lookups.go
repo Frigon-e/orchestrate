@@ -255,7 +255,7 @@ func harnessReport(name string, lines []lookupLine) lookupHarnessReport {
 		if real && l.Tool != "read" && !firstSeen[l.Session] {
 			firstSeen[l.Session] = true
 			r.SessionsWithFirst++
-			if l.Tool == "jbcontext" || strings.HasPrefix(l.Tool, "lsp:") {
+			if l.Tool == "jbcontext" || l.Tool == "search" || strings.HasPrefix(l.Tool, "lsp:") {
 				firstGood++
 			}
 		}
