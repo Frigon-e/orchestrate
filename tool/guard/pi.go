@@ -31,12 +31,16 @@ import (
 //	durationMs  tool_execution_end
 //	resultHook  tool_call: a tool_result handler is registered (false selects the
 //	            fallback that blocks the first search once)
+//	parent      tool_call, tool_result: the id of the Code Mode script call that made
+//	            this call, "" or absent for a direct call (see origin.go)
+//	codemode    before_agent_start: the codemode tool is active in the session
 //
 // Response (all fields optional):
 //
 //	block       true to refuse the tool call; reason is the text the model sees
 //	reason      the block reason
-//	appendText  texts to append to a tool result, each as its own text part
+//	appendText  texts to append to a tool result, each as its own text part; never
+//	            set for a script's call, whose result goes to the script
 //	message     before_agent_start: the text of the hidden message to add
 //
 // The per-session state (coach windows, the run of blocks, the one-time fallback
@@ -226,6 +230,7 @@ func PiPre(ev *Event) PiResponse {
 	input, _ := ev.Object("input")
 	cwd := ev.Str("cwd")
 	guardOn := os.Getenv("ORCH_TOOL_GUARD") != "off"
+	origin := callOrigin(ev)
 	state := openState(ev.Str("session"))
 	defer func() { state.close() }() // state is reopened after a wait for a sibling lookup
 
@@ -237,7 +242,7 @@ func PiPre(ev *Event) PiResponse {
 		return PiResponse{Block: true, Reason: reason}
 	}
 	if guardOn {
-		if tool == "read" && !bigReadSkipped() {
+		if tool == "read" && origin == originDirect && !bigReadSkipped() {
 			if reason := piBigReadReason(cwd, input, state); reason != "" {
 				return block(reason)
 			}
@@ -252,7 +257,7 @@ func PiPre(ev *Event) PiResponse {
 		return PiResponse{}
 	}
 	if guardOn {
-		for _, r := range activeRules(forPi) {
+		for _, r := range activeRules(forPi, origin) {
 			if r.match(line) {
 				return block(r.reason(line))
 			}
@@ -264,7 +269,7 @@ func PiPre(ev *Event) PiResponse {
 	// names orch, so it is only sent while orch is on PATH; that PATH walk runs
 	// last, for shell searches only.
 	hook, _ := ev.Value("resultHook")
-	if !guardOn || truthy(hook) || state.FallbackReminded || !commandSearch(line) || !onPath("orch") {
+	if !guardOn || origin == originScript || truthy(hook) || state.FallbackReminded || !commandSearch(line) || !onPath("orch") {
 		return PiResponse{}
 	}
 	state.FallbackReminded = true
@@ -281,6 +286,14 @@ func piLookup(tool string, input map[string]any) (lookup, bool) {
 			return lookup{}, false
 		}
 		return lookup{"read", piReadQuery(path, input["offset"], input["limit"]), false}, true
+	case "mcp__orch__search":
+		return lookup{"search", pyGet(input, "query"), false}, true
+	case "mcp__orch__lsp":
+		verb, ok := input["verb"].(string)
+		if !ok || verb == "" {
+			return lookup{}, false
+		}
+		return lookup{"lsp:" + verb, orchLspQuery(input), false}, true
 	}
 	return lookup{}, false
 }
@@ -378,17 +391,21 @@ func PiCoach(ev *Event) PiResponse {
 		state := openState(session)
 		defer state.close()
 		if state.promptStep(true) {
+			kind := "lookup-ladder"
+			if truthy(codemode(ev)) {
+				kind = "lookup-ladder-codemode"
+			}
 			if logOn {
 				repo := gitRoot(cwd)
 				if repo == "" {
 					repo = cwd
 				}
-				ladderLog("pi", session, repo)
+				ladderLog("pi", session, repo, kind)
 			}
-			return PiResponse{Message: coachPrefix + coachText["lookup-ladder"]}
+			return PiResponse{Message: coachPrefix + coachText[kind]}
 		}
 	case "tool_execution_end":
-		if !logOn || (ev.Str("tool") != "bash" && ev.Str("tool") != "read") {
+		if t := ev.Str("tool"); !logOn || (t != "bash" && t != "read" && !strings.HasPrefix(t, "mcp__orch__")) {
 			return PiResponse{}
 		}
 		var duration *float64
@@ -410,7 +427,14 @@ func PiCoach(ev *Event) PiResponse {
 	return PiResponse{}
 }
 
+func codemode(ev *Event) any {
+	v, _ := ev.Value("codemode")
+	return v
+}
+
 func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
+	origin := callOrigin(ev)
+	script := origin == originScript
 	tool := ev.Str("tool")
 	input, _ := ev.Object("input")
 	var content []string
@@ -423,8 +447,23 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 		}
 	}
 	var out PiResponse
+	if tool == "edit" || tool == "write" || tool == "codemode" {
+		if failed, _ := ev.Value("isError"); truthy(failed) {
+			return out
+		}
+		var text string
+		if tool == "codemode" {
+			text = diagFlush("pi", session, cwd)
+		} else {
+			text = diagEdit("pi", session, cwd, origin, jsString(input["path"]))
+		}
+		if text != "" && !script {
+			out.AppendText = append(out.AppendText, text)
+		}
+		return out
+	}
 	// A search outside the repository is not guarded, so it gets no note.
-	if onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) {
+	if !script && onPath("orch") && piIsSearch(tool, input) && insideRepository(cwd, jsString(input["path"])) {
 		marked := false
 		for _, part := range content {
 			marked = marked || strings.Contains(part, "Lookup order:")
@@ -445,9 +484,12 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 	state := openState(session)
 	defer state.close()
 	turn := piTurn(ev)
-	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn)
+	reminder, followed := state.step(found.tool, found.symbol, turn, piAdjacent, coachOn, script)
 	if reminder != nil {
 		out.AppendText = append(out.AppendText, coachPrefix+coachText[*reminder])
+	}
+	if script {
+		out.AppendText = nil // a note would corrupt the data the script parses
 	}
 	if logOn {
 		isOK, empty := piOutcome(found, text, truthy(isError))
@@ -458,7 +500,7 @@ func piResult(ev *Event, session, cwd string, coachOn, logOn bool) PiResponse {
 		}
 		line := LookupLine{
 			TS: time.Now().UTC().Format("2006-01-02T15:04:05.000000Z"), Harness: "pi", Session: session, Repo: repo,
-			Tool: found.tool, Query: query, OK: isOK, Empty: empty, Bytes: len(text), Reminder: reminder, Followed: followed,
+			Tool: found.tool, Query: query, OK: isOK, Empty: empty, Bytes: len(text), Reminder: reminder, Followed: followed, Origin: origin,
 		}
 		if turn != nil {
 			line.Turn = json.Number(*turn)

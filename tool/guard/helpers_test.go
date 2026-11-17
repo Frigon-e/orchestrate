@@ -33,6 +33,7 @@ func readJSON(t testing.TB, name string, into any) {
 }
 
 type toolguardCase struct {
+	Origin      string
 	Name        string
 	Situation   string
 	Rule        string
@@ -42,6 +43,7 @@ type toolguardCase struct {
 }
 
 type readCase struct {
+	Origin    string
 	Name      string
 	Situation string
 	File      string
@@ -87,7 +89,7 @@ func situationPaths(t testing.TB, f toolguardFile) map[string]string {
 
 // guardEnv is every variable the guards read; a run sets the ones it names and clears the rest.
 var guardEnv = []string{"ORCH_TOOL_GUARD", "ORCH_TOOL_GUARD_SKIP", "ORCH_TOOL_GUARD_STATE_DIR", "ORCH_LOOKUP_COACH", "ORCH_LOOKUP_LOG",
-	"ORCH_LSP_ENRICH", "ORCH_CACHE_DIR", "ORCH_BIN", "ORCH_LSP_ENRICH_BUDGET_MS"}
+	"ORCH_LSP_ENRICH", "ORCH_CACHE_DIR", "ORCH_BIN", "ORCH_LSP_ENRICH_BUDGET_MS", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"}
 
 // A runner runs one hook event through some implementation of the guards.
 type runner interface {
@@ -204,6 +206,17 @@ func jsonBytes(t testing.TB, v any) []byte {
 	return data
 }
 
+// fromOrigin marks an event as made by a Code Mode script when origin is "script":
+// Claude Code gives those calls a tool_use_id that starts with repl_.
+func fromOrigin(ev map[string]any, origin string) map[string]any {
+	if origin == "script" {
+		ev["tool_use_id"] = "repl_probe"
+	} else {
+		ev["tool_use_id"] = "toolu_probe"
+	}
+	return ev
+}
+
 // bashEvent is the PreToolUse event Claude Code sends for a Bash call.
 func bashEvent(command string) map[string]any {
 	return map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]any{"command": command}}
@@ -249,6 +262,8 @@ func claudeCall(spec map[string]any, id string) map[string]any {
 		return block("Read", args)
 	case spec["lsp"] != nil:
 		return block("LSP", spec["lsp"])
+	case spec["tool"] != nil:
+		return block(spec["tool"].(string), spec["input"])
 	}
 	return block("mcp__jbcontext__search", spec["mcp"])
 }

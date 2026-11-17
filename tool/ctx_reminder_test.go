@@ -56,6 +56,8 @@ type reminderCase struct {
 	// Repeat marks the 3rd block in a row, whose reason carries one extra line.
 	Repeat bool           `json:"-"`
 	Input  map[string]any `json:"input"`
+	// Parent is the id of the Code Mode script call that made this call.
+	Parent string `json:"parent,omitempty"`
 }
 
 type reminderRun struct {
@@ -118,9 +120,9 @@ ext({ on: (name, fn) => {
 } });
 const out = {};
 for (const c of JSON.parse(process.argv[1])) {
-  const call = { type: "tool_call", toolCallId: "t1", toolName: c.tool, input: c.input };
+  const call = { type: "tool_call", toolCallId: "t1", toolName: c.tool, input: c.input, parentToolCallId: c.parent || undefined };
   const blocked = handlers.tool_call ? await handlers.tool_call(call) : undefined;
-  const raw = { type: "tool_result", toolCallId: "t1", toolName: c.tool, input: c.input, content: [{ type: "text", text: "ORIGINAL" }], isError: false };
+  const raw = { type: "tool_result", toolCallId: "t1", toolName: c.tool, input: c.input, content: [{ type: "text", text: "ORIGINAL" }], isError: false, parentToolCallId: c.parent || undefined };
   const res = handlers.tool_result ? await handlers.tool_result(raw) : undefined;
   out[c.name] = {
     block: blocked && blocked.block ? blocked.reason : "",
@@ -242,6 +244,9 @@ func TestCtxReminderDecisionTable(t *testing.T) {
 		{Name: "echo quoted rg", Tool: "bash", Input: bash(`echo "rg"`)},
 		{Name: "cat pipe wc", Tool: "bash", Input: bash(`cat file | wc -l`)},
 		{Name: "read tool", Tool: "read", Input: map[string]any{"path": "a.go"}},
+		// A call a Code Mode script makes never gets a note: its result is the script's data.
+		{Name: "script rg", Tool: "bash", Input: bash(`rg -n Gateway internal`), Parent: "codemode-call-1"},
+		{Name: "script builtin grep", Tool: "grep", Input: map[string]any{"pattern": "Gateway"}, Parent: "codemode-call-1"},
 	}
 	got := runCtxReminder(t, nil, cases)
 	if len(got.Handlers) != 2 || got.Handlers[0] != "tool_call" || got.Handlers[1] != "tool_result" {
@@ -381,6 +386,7 @@ type sharedToolguardFile struct {
 		Tools []string `json:"tools"`
 	} `json:"pathSituations"`
 	Cases []struct {
+		Origin    string `json:"origin"`
 		Name      string `json:"name"`
 		Situation string `json:"situation"`
 		Rule      string `json:"rule"`
@@ -405,6 +411,7 @@ type sharedToolguardFile struct {
 	// ReadCases is the fourth table: a whole-file read of a big file. File is a
 	// name made in a temp directory; Kind is file (default), dir or missing.
 	ReadCases []struct {
+		Origin    string         `json:"origin"`
 		Name      string         `json:"name"`
 		Situation string         `json:"situation"`
 		File      string         `json:"file"`
@@ -414,6 +421,14 @@ type sharedToolguardFile struct {
 		Input     map[string]any `json:"input"`
 		Block     bool           `json:"block"`
 	} `json:"readCases"`
+}
+
+// parentFor is the parent tool call id pi's extension sends for a script's call.
+func parentFor(origin string) string {
+	if origin == "script" {
+		return "codemode-call-1"
+	}
+	return ""
 }
 
 func sharedGuardFile(t *testing.T) sharedToolguardFile {
@@ -438,7 +453,7 @@ func TestCtxReminderSharedToolguardCases(t *testing.T) {
 				if c.Situation != situation {
 					continue
 				}
-				cases = append(cases, reminderCase{Name: c.Name, Tool: "bash", Input: bash(c.Command)})
+				cases = append(cases, reminderCase{Name: c.Name, Tool: "bash", Input: bash(c.Command), Parent: parentFor(c.Origin)})
 			}
 			if len(cases) == 0 {
 				t.Fatalf("no cases for PATH situation %q", situation)
@@ -556,7 +571,7 @@ func TestCtxReminderSharedReadCases(t *testing.T) {
 				if c.Block {
 					needs = []string{"offset and limit"}
 				}
-				cases = append(cases, reminderCase{Name: c.Name, Tool: "read", Input: input, Blocks: blocks, Needs: needs})
+				cases = append(cases, reminderCase{Name: c.Name, Tool: "read", Input: input, Blocks: blocks, Needs: needs, Parent: parentFor(c.Origin)})
 			}
 			if len(cases) == 0 {
 				t.Skip("no read cases for this PATH situation")
@@ -610,4 +625,131 @@ func TestCtxReminderBigReadRepeatPasses(t *testing.T) {
 		{Name: "other path", Tool: "read", Input: map[string]any{"path": paths[1]}, Blocks: "big-read"},
 	}
 	checkReminder(t, runCtxReminder(t, nil, cases), cases)
+}
+
+// runMCPRegistration loads the extension against a pi stand-in that has
+// registerMcpServer, then runs one `edit` and one nested `edit` through the
+// tool_result handler. The fake orch on PATH answers `lsp diag` with one error.
+func runMCPRegistration(t *testing.T, withAPI bool, env []string) (registered []map[string]any, edited, nested string) {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	dir := t.TempDir()
+	ext := filepath.Join(dir, "orch-ctx-reminder.ts")
+	if err := os.WriteFile(ext, mustRead(t, "pi_ctx_reminder.ts"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := filepath.EvalSymlinks(filepath.Join(dir, "repo"))
+	if err := os.MkdirAll(filepath.Join(dir, "repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, _ = filepath.EvalSymlinks(filepath.Join(dir, "repo"))
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := `#!/bin/sh
+[ "$1 $2" = "lsp diag" ] || exit 0
+printf '{"verb":"diag","results":[{"name":"%s/a.go","status":"ok","total":1,"items":[{"path":"%s/a.go","line":4,"kind":"error","text":"undefined: x"}]}]}' "$PWD" "$PWD"
+`
+	if err := os.WriteFile(filepath.Join(bin, "orch"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+import ext from ` + string(mustJSON(t, ext)) + `;
+import { mkdirSync, writeFileSync } from "node:fs";
+process.chdir(process.env.ORCH_TEST_CWD);
+for (const [dir, body] of [[process.env.PI_CODING_AGENT_DIR, process.env.ORCH_TEST_USER_SETTINGS], [process.env.ORCH_TEST_CWD + "/.pi", process.env.ORCH_TEST_PROJECT_SETTINGS]]) {
+  if (body) { mkdirSync(dir, { recursive: true }); writeFileSync(dir + "/settings.json", body); }
+}
+// As pi runs it: node, pi's entry script, then the flags.
+if (process.env.ORCH_TEST_ARGV) process.argv.splice(1, process.argv.length, "/pi/dist/cli.js", ...process.env.ORCH_TEST_ARGV.split(" "));
+const handlers = {};
+const registered = [];
+const pi = { on: (name, fn) => { handlers[name] = fn; } };
+if (process.env.WITH_API === "1") pi.registerMcpServer = (name, config) => registered.push({ name, config });
+ext(pi);
+const result = async (parent) => !handlers.tool_result ? undefined : handlers.tool_result({ type: "tool_result", toolCallId: parent ? "c/1" : "c1", toolName: "edit",
+  input: { path: process.env.ORCH_TEST_CWD + "/a.go" }, content: [{ type: "text", text: "ORIGINAL" }], isError: false, parentToolCallId: parent || undefined });
+const text = (res) => res ? res.content.slice(1).map((p) => p.text).join("") : "";
+const edited = text(await result(""));
+const nested = text(await result("cm1"));
+console.log(JSON.stringify({ registered, edited, nested }));
+`
+	cmd := exec.Command(node, "--input-type=module", "-e", script)
+	cmd.Env = agentEnv(nil, append([]string{"PATH=" + bin, "ORCH_LOOKUP_READY=", "ORCH_BIN=", "ORCH_MCP=", "ORCH_LSP_DIAG=",
+		"ORCH_TEST_CWD=" + repo, "WITH_API=" + map[bool]string{true: "1", false: "0"}[withAPI],
+		"ORCH_GUARD_BIN=" + guardBin(t), "ORCH_TOOL_GUARD_STATE_DIR=" + filepath.Join(dir, "state"),
+		"ORCH_CACHE_DIR=" + filepath.Join(dir, "cache"), "PI_CODING_AGENT_DIR=" + filepath.Join(dir, "agent"),
+		"ORCH_TEST_USER_SETTINGS=", "ORCH_TEST_PROJECT_SETTINGS=", "ORCH_TEST_ARGV="}, env...))
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, raw)
+	}
+	var got struct {
+		Registered []map[string]any `json:"registered"`
+		Edited     string           `json:"edited"`
+		Nested     string           `json:"nested"`
+	}
+	if err := json.Unmarshal(raw[strings.Index(string(raw), "{"):], &got); err != nil {
+		t.Fatalf("%v\n%s", err, raw)
+	}
+	return got.Registered, got.Edited, got.Nested
+}
+
+func TestCtxReminderRegistersTheOrchMCPServer(t *testing.T) {
+	reg, edited, nested := runMCPRegistration(t, true, nil)
+	if len(reg) != 1 || reg[0]["name"] != "orch" {
+		t.Fatalf("registrations %v", reg)
+	}
+	cfg := reg[0]["config"].(map[string]any)
+	args, _ := json.Marshal(cfg["args"])
+	if !strings.HasSuffix(fmt.Sprint(cfg["command"]), "/bin/orch") || string(args) != `["mcp"]` || cfg["exposure"] != "codemode" || cfg["description"] == "" {
+		t.Errorf("config %v", cfg)
+	}
+	// The same extension appends the error of a direct edit and nothing to a nested one.
+	if edited != "orch diagnostics:\na.go:4: undefined: x" {
+		t.Errorf("edit result got %q", edited)
+	}
+	if nested != "" {
+		t.Errorf("nested edit result got %q", nested)
+	}
+}
+
+func TestCtxReminderMCPRegistrationSwitches(t *testing.T) {
+	for name, tc := range map[string]struct {
+		withAPI bool
+		env     []string
+		want    int
+	}{
+		"pi without the API":    {false, nil, 0},
+		"ORCH_MCP=off":          {true, []string{"ORCH_MCP=off"}, 0},
+		"restricted gate shell": {true, []string{"ORCH_LOOKUP_READY=1"}, 0},
+		"no orch binary":        {true, []string{"PATH=/nonexistent"}, 0},
+		// pi reports a registered server that no MCP support connects as an
+		// extension error in every session, so nothing is registered then.
+		"user settings turn off pi MCP": {true, []string{`ORCH_TEST_USER_SETTINGS={"extensions":["-builtin:mcp"]}`}, 0},
+		"project settings turn it back on": {true, []string{`ORCH_TEST_USER_SETTINGS={"extensions":["-builtin:mcp"]}`,
+			`ORCH_TEST_PROJECT_SETTINGS={"extensions":["+builtin:mcp"]}`}, 1},
+		"project settings turn it off":      {true, []string{`ORCH_TEST_PROJECT_SETTINGS={"extensions":["-builtin:mcp"]}`}, 0},
+		"other extensions turned off":       {true, []string{`ORCH_TEST_USER_SETTINGS={"extensions":["-builtin:llama.cpp"]}`}, 1},
+		"--no-mcp":                          {true, []string{"ORCH_TEST_ARGV=--no-mcp"}, 0},
+		"--no-extensions":                   {true, []string{"ORCH_TEST_ARGV=-ne"}, 0},
+		"-e builtin:mcp loads it for a run": {true, []string{`ORCH_TEST_USER_SETTINGS={"extensions":["-builtin:mcp"]}`, "ORCH_TEST_ARGV=-e builtin:mcp"}, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if reg, _, _ := runMCPRegistration(t, tc.withAPI, tc.env); len(reg) != tc.want {
+				t.Errorf("registrations %v, want %d", reg, tc.want)
+			}
+		})
+	}
+	// $ORCH_BIN wins over PATH.
+	fake := filepath.Join(t.TempDir(), "my-orch")
+	os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755)
+	reg, _, _ := runMCPRegistration(t, true, []string{"ORCH_BIN=" + fake})
+	if len(reg) != 1 || reg[0]["config"].(map[string]any)["command"] != fake {
+		t.Errorf("ORCH_BIN not used: %v", reg)
+	}
 }

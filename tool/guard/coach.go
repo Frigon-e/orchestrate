@@ -25,6 +25,11 @@ var coachText = map[string]string{
 	"symbol-via-lsp": "For a definition, references or callers use orch lsp def|refs|callers <Name>; rg finds text, not uses.",
 	"batch-lookups":  "Send independent lookups together as parallel calls in one message; each one alone costs a turn.",
 	"read-batch":     "Read the ranges you already know as parallel reads in one message.",
+	// The ladder of a Code Mode session, where lookups are calls inside a script.
+	"lookup-ladder-codemode": "Before searching: location unknown -> tools.mcp__orch__search({query}); known symbol -> " +
+		"tools.mcp__orch__lsp({verb, names}); exact text -> $`rg ...`. " +
+		"Batch independent lookups in one script and return only what you need. " +
+		"Read ranges with file(path).slice(offset, limit).",
 	"lookup-ladder": `Before searching: location unknown -> jbcontext search "<one behavior>"; known symbol -> ` +
 		"orch lsp def|refs|callers|impls <Name>; exact text -> rg. " +
 		"Send independent lookups as parallel calls in one message. " +
@@ -59,6 +64,14 @@ type State struct {
 	// BigReadsWarned holds the absolute paths of big files a whole Read was
 	// already blocked for; a repeat Read of one passes (see bigread.go).
 	BigReadsWarned []string `json:"big_reads_warned,omitempty"`
+	// CodeMode is set once the session has made a REPL call: its lookups are
+	// script calls, and the prompt ladder names the Code Mode tools.
+	CodeMode bool `json:"code_mode,omitempty"`
+	// DiagReported holds path+"\x00"+text of the errors already pushed after an
+	// edit; DiagPending the files a script edited, waiting for its call to end
+	// (see diag.go).
+	DiagReported []string `json:"diag_reported,omitempty"`
+	DiagPending  []string `json:"diag_pending,omitempty"`
 }
 
 // Turn is one assistant message and how many lookups it made: nr non-read, rd reads.
@@ -69,19 +82,25 @@ type Turn struct {
 }
 
 func isSearch(tool string) bool { return tool == "rg" || tool == "fd" }
-func isGood(tool string) bool   { return tool == "jbcontext" || strings.HasPrefix(tool, "lsp:") }
+func isGood(tool string) bool {
+	return tool == "jbcontext" || tool == "search" || strings.HasPrefix(tool, "lsp:")
+}
 
 func strPtr(s string) *string { return &s }
 
 // step advances the state for one lookup and returns the reminder that fires
 // and whether the reminder before it was followed.
-func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders bool) (*string, *bool) {
+//
+// A script call (a Code Mode script's lookup) updates what the session has seen
+// but takes no part in the reminder rules: it never fires one, and it is not a
+// turn's lookup.
+func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b, c string) bool, reminders, script bool) (*string, *bool) {
 	var followed *bool
 	if reminders && s.Pending != nil && *s.Pending != "" {
 		var f bool
 		switch *s.Pending {
 		case "concept-first":
-			f = tool == "jbcontext"
+			f = tool == "jbcontext" || tool == "search"
 		case "lookup-ladder":
 			f = isGood(tool)
 		default:
@@ -99,7 +118,7 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 	}
 	newTurn := turn != nil && !(len(s.Turns) > 0 && s.Turns[len(s.Turns)-1].ID == *turn)
 	var candidates []string
-	if isSearch(tool) && !s.FirstSearchDone {
+	if isSearch(tool) && !s.FirstSearchDone && !script {
 		s.FirstSearchDone = true
 		if !s.ConceptSeen {
 			candidates = append(candidates, "concept-first")
@@ -108,10 +127,10 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 	if isGood(tool) {
 		s.ConceptSeen = true
 	}
-	if tool == "rg" && symbol {
+	if tool == "rg" && symbol && !script {
 		candidates = append(candidates, "symbol-via-lsp")
 	}
-	if n := len(s.Turns); newTurn && n >= 2 && adjacent(s.Turns[n-2].ID, s.Turns[n-1].ID, *turn) {
+	if n := len(s.Turns); newTurn && !script && n >= 2 && adjacent(s.Turns[n-2].ID, s.Turns[n-1].ID, *turn) {
 		a, b := s.Turns[n-2], s.Turns[n-1]
 		if a.NR == 1 && b.NR == 1 {
 			candidates = append(candidates, "batch-lookups")
@@ -140,7 +159,7 @@ func (s *State) step(tool string, symbol bool, turn *string, adjacent func(a, b,
 			s.Pending = strPtr(*reminder)
 		}
 	}
-	if turn != nil {
+	if turn != nil && !script {
 		if newTurn {
 			s.Turns = append(s.Turns, Turn{ID: *turn})
 			if len(s.Turns) > 3 {
@@ -410,14 +429,18 @@ func coachPrompt(ev *Event, stdout io.Writer) error {
 		return err
 	}
 	due := state.promptStep(true)
+	kind := "lookup-ladder"
+	if os.Getenv("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE") == "1" || state.CodeMode {
+		kind = "lookup-ladder-codemode"
+	}
 	err = saveState(f, state)
 	f.Close()
 	if err != nil {
 		return err
 	}
 	if due {
-		ladderLog("claude", session, repoOf(ev.Str("cwd")))
-		writeReminder(stdout, "UserPromptSubmit", "lookup-ladder")
+		ladderLog("claude", session, repoOf(ev.Str("cwd")), kind)
+		writeReminder(stdout, "UserPromptSubmit", kind)
 	}
 	return nil
 }
@@ -428,7 +451,7 @@ func coachPrompt(ev *Event, stdout io.Writer) error {
 func Coach(ev *Event, stdout io.Writer) error {
 	// The enrichment does not depend on ORCH_TOOL_GUARD or ORCH_LOOKUP_COACH. It
 	// is written on every path that does not write a reminder with it.
-	enriched := Enrich(ev)
+	enriched := Enrich(ev) // "" for a script's call
 	written := false
 	eventName := ev.Str("hook_event_name")
 	if eventName == "" {
@@ -445,10 +468,34 @@ func Coach(ev *Event, stdout io.Writer) error {
 	if ev.Str("hook_event_name") == "UserPromptSubmit" {
 		return coachPrompt(ev, stdout)
 	}
+	if claudeDiagEvent(ev) {
+		session, _ := sessionName(ev)
+		var text string
+		if p := claudeEditPath(ev); p != "" {
+			text = diagEdit("claude", session, ev.Str("cwd"), callOrigin(ev), p)
+		} else if ev.Str("tool_name") == "REPL" {
+			text = diagFlush("claude", session, ev.Str("cwd"))
+		}
+		if text != "" {
+			written = true
+			if enriched != "" {
+				text = enriched + "\n" + text
+			}
+			writeContext(stdout, eventName, text)
+		}
+		if claudeEditPath(ev) != "" {
+			return nil // an edit is not a lookup
+		}
+	}
+	if ev.Str("tool_name") == "REPL" {
+		return markCodeMode(ev)
+	}
 	found, ok := lookupClaude(ev)
 	if !ok {
 		return nil
 	}
+	origin := callOrigin(ev)
+	script := origin == originScript
 	session, name := sessionName(ev)
 	dir := StateDir()
 	if err := os.MkdirAll(filepath.Join(dir, "coach"), 0o777); err != nil {
@@ -458,7 +505,7 @@ func Coach(ev *Event, stdout io.Writer) error {
 	var order []string
 	path, pathOK := ev.fieldString("transcript_path")
 	useID, useOK := ev.fieldString("tool_use_id")
-	if pathOK && useOK {
+	if pathOK && useOK && !script {
 		_, inSubagent := ev.fieldString("agent_id")
 		if t, o, err := transcriptTurn(path, useID, inSubagent); err == nil {
 			turn, order = t, o
@@ -481,7 +528,7 @@ func Coach(ev *Event, stdout io.Writer) error {
 		return err
 	}
 	defer f.Close()
-	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching)
+	reminder, followed := state.step(found.tool, found.symbol, turn, adjacent, coaching, script)
 	if enriched != "" && reminder != nil && *reminder == "symbol-via-lsp" {
 		// The facts answer it: no reminder, and the window stays unreminded.
 		state.Pending = nil
@@ -510,6 +557,7 @@ func Coach(ev *Event, stdout io.Writer) error {
 			Bytes:    len(text),
 			Reminder: reminder,
 			Followed: followed,
+			Origin:   origin,
 		}
 		if turn != nil {
 			line.Turn = *turn
@@ -534,6 +582,26 @@ func Coach(ev *Event, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// markCodeMode records that the session ran a REPL call, so its prompt ladder
+// names the Code Mode tools. The REPL call itself is not a lookup.
+func markCodeMode(ev *Event) error {
+	_, name := sessionName(ev)
+	dir := StateDir()
+	if err := os.MkdirAll(filepath.Join(dir, "coach"), 0o777); err != nil {
+		return err
+	}
+	f, state, err := lockState(dir, name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if state.CodeMode {
+		return nil
+	}
+	state.CodeMode = true
+	return saveState(f, state)
 }
 
 func withoutKey(list []string, key string) []string {

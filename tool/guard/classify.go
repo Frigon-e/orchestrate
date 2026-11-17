@@ -247,6 +247,14 @@ func lookupClaude(ev *Event) (lookup, bool) {
 		}
 		where := "" + pyGet(input, "filePath") + ":" + pyGet(input, "line")
 		return lookup{"lsp:" + op, where, false}, true
+	case name == "mcp__orch__search":
+		return lookup{"search", pyGet(input, "query"), false}, true
+	case name == "mcp__orch__lsp":
+		verb, ok := input["verb"].(string)
+		if !ok || verb == "" {
+			return lookup{}, false
+		}
+		return lookup{"lsp:" + verb, orchLspQuery(input), false}, true
 	case strings.HasPrefix(name, "mcp__jbcontext__"):
 		query := ""
 		for _, key := range []string{"query", "q"} {
@@ -258,6 +266,22 @@ func lookupClaude(ev *Event) (lookup, bool) {
 		return lookup{"jbcontext", query, false}, true
 	}
 	return lookup{}, false
+}
+
+// orchLspQuery is what an orch lsp call asked about: its names, else its path or paths.
+func orchLspQuery(input map[string]any) string {
+	var parts []string
+	for _, key := range []string{"names", "paths"} {
+		if list, ok := input[key].([]any); ok {
+			for _, v := range list {
+				parts = append(parts, pyStr(v))
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return pyGet(input, "path")
+	}
+	return strings.Join(parts, " ")
 }
 
 // pyGet is str(d.get(key, "")): a missing key is empty, a null is "None".

@@ -5,10 +5,13 @@
 #   Claude Code  hooks in ~/.claude/settings.json (hooks/claude/install_settings.py)
 #   pi           ~/.pi/agent/extensions/ctx-reminder.ts, a symlink to
 #                tool/pi_ctx_reminder.ts, which only wires pi events to the binary
+#   MCP          the orch MCP server (`orch mcp`) for Claude Code, user scope, through
+#                `claude mcp add`; pi registers it itself from the extension. Without
+#                `claude` on PATH this step is skipped with a warning.
 #
 #   install-guards            build the binary, register the Claude hooks, link the pi extension
 #   install-guards --check    change nothing; list what is missing or stale; exit 1 if anything is
-#   install-guards --remove   unregister the Claude hooks and unlink the pi extension
+#   install-guards --remove   unregister the Claude hooks and the MCP server, unlink the pi extension
 #                             (the built binary and any .bak-* backup stay)
 #
 # Everything lands under $HOME, so a temporary HOME gives a throwaway install.
@@ -22,6 +25,8 @@ source_ext="$repo/tool/pi_ctx_reminder.ts"
 ext_dir="$HOME/.pi/agent/extensions"
 ext="$ext_dir/ctx-reminder.ts"
 settings="$HOME/.claude/settings.json"
+claude_json="$HOME/.claude.json"
+orch_cmd="$here/orch"
 install_settings=(python3 "$repo/hooks/claude/install_settings.py" --settings "$settings")
 
 mode=install
@@ -30,7 +35,7 @@ case "${1:-}" in
   --check) mode=check ;;
   --remove) mode=remove ;;
   -h | --help)
-    sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
@@ -41,6 +46,26 @@ esac
 
 # True when the pi extension path is a symlink to this repo's extension.
 linked() { [ -L "$ext" ] && [ "$(readlink "$ext")" = "$source_ext" ]; }
+
+# What ~/.claude.json holds for mcpServers.orch: "missing", or "<command> <args>".
+# The file is only read; `claude mcp` is the one that writes it.
+mcp_current() {
+  python3 - "$claude_json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        servers = json.load(f).get("mcpServers") or {}
+except Exception:
+    servers = {}
+s = servers.get("orch")
+if not isinstance(s, dict):
+    print("missing")
+else:
+    print(" ".join([str(s.get("command", ""))] + [str(a) for a in (s.get("args") or [])]))
+PY
+}
+
+have_claude() { command -v claude >/dev/null 2>&1; }
 
 check() {
   local bad=0 fp
@@ -56,6 +81,14 @@ check() {
   fi
   if ! out="$("${install_settings[@]}" --check)"; then
     printf '%s\n' "$out" | sed 's/^/claude: /'
+    bad=1
+  fi
+  mcp="$(mcp_current)"
+  if [ "$mcp" = missing ]; then
+    echo "orch MCP server not registered"
+    bad=1
+  elif [ "$mcp" != "$orch_cmd mcp" ]; then
+    echo "orch MCP server points to $mcp, not $orch_cmd mcp"
     bad=1
   fi
   if linked; then
@@ -76,7 +109,7 @@ check() {
 case "$mode" in
   check)
     if check; then
-      echo "ok: orch-guard, the Claude hooks and the pi extension are installed"
+      echo "ok: orch-guard, the Claude hooks, the orch MCP server and the pi extension are installed"
     else
       echo "run scripts/install-guards to fix this" >&2
       exit 1
@@ -85,6 +118,14 @@ case "$mode" in
   install)
     "$here/build-guard"
     "${install_settings[@]}" --apply
+    if [ "$(mcp_current)" = "$orch_cmd mcp" ]; then
+      echo "orch MCP server already registered: $orch_cmd mcp"
+    elif have_claude; then
+      claude mcp remove --scope user orch >/dev/null 2>&1 || true
+      claude mcp add --scope user orch -- "$orch_cmd" mcp
+    else
+      echo "warning: claude is not on PATH; the orch MCP server is not registered (run: claude mcp add --scope user orch -- $orch_cmd mcp)" >&2
+    fi
     if linked; then
       echo "pi extension already linked: $ext"
     else
@@ -105,6 +146,13 @@ case "$mode" in
     ;;
   remove)
     "${install_settings[@]}" --apply --remove
+    if [ "$(mcp_current)" = missing ]; then
+      echo "nothing to remove: no orch MCP server registered"
+    elif have_claude; then
+      claude mcp remove --scope user orch
+    else
+      echo "warning: claude is not on PATH; the orch MCP server stays registered" >&2
+    fi
     if linked; then
       rm "$ext"
       echo "removed $ext"

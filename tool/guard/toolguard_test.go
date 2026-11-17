@@ -35,7 +35,7 @@ func TestBashCasesBlockAndAllow(t *testing.T) {
 	r := inProc{}
 	for _, c := range f.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			payload := jsonBytes(t, bashEvent(c.Command))
+			payload := jsonBytes(t, fromOrigin(bashEvent(c.Command), c.Origin))
 			if c.Rule == "" {
 				if code, stderr := r.pre(t, payload, paths[c.Situation], nil); code != 0 || strings.TrimSpace(stderr) != "" {
 					t.Fatalf("exit %d, want 0; stderr %q", code, stderr)
@@ -223,7 +223,7 @@ func TestBigReadCases(t *testing.T) {
 					}
 				}
 			}
-			payload := jsonBytes(t, readEvent(path, c.Input))
+			payload := jsonBytes(t, fromOrigin(readEvent(path, c.Input), c.Origin))
 			if !c.Block {
 				if code, stderr := (inProc{}).pre(t, payload, paths[c.Situation], nil); code != 0 || strings.TrimSpace(stderr) != "" {
 					t.Fatalf("exit %d, want 0: %s", code, stderr)

@@ -1046,7 +1046,7 @@ var dirtyFingerprint = func(cwd string) string {
 
 // Enrich is the language-server facts to append to a search result, or "".
 func Enrich(ev *Event) string {
-	if os.Getenv("ORCH_LSP_ENRICH") == "off" {
+	if os.Getenv("ORCH_LSP_ENRICH") == "off" || callOrigin(ev) == originScript {
 		return ""
 	}
 	if name := ev.Str("hook_event_name"); name != "" && name != "PostToolUse" {

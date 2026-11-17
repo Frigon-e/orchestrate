@@ -23,6 +23,9 @@ type LookupLine struct {
 	DurationMS *float64 `json:"duration_ms"`
 	Reminder   *string  `json:"reminder"`
 	Followed   *bool    `json:"followed"`
+	// Origin is "direct" or "script" (a call a Code Mode script made); rows
+	// written before it existed, and prompt rows, have none.
+	Origin string `json:"origin,omitempty"`
 }
 
 // StateDir holds the coach state, the lookup log and the guard rebuild log.

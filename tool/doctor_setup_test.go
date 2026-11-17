@@ -84,6 +84,46 @@ func mustWrite(t *testing.T, p, body string, mode os.FileMode) {
 	}
 }
 
+func TestSetupFindingsOrchMCPServer(t *testing.T) {
+	noBackendEnv(t)
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".claude.json")
+	good := filepath.Join(home, "skill", "scripts", "orch")
+	mustWrite(t, good, "#!/bin/sh\n", 0o755)
+	notExec := filepath.Join(home, "plain", "orch")
+	mustWrite(t, notExec, "x", 0o644)
+	wrongName := filepath.Join(home, "skill", "scripts", "other")
+	mustWrite(t, wrongName, "#!/bin/sh\n", 0o755)
+	const notRegistered = "orch MCP server is not registered for Claude Code (run scripts/install-guards)"
+	for name, tc := range map[string]struct {
+		body string
+		want string // "" for no finding
+	}{
+		"no file":        {"", notRegistered},
+		"no servers":     {`{"projects":{}}`, notRegistered},
+		"other server":   {`{"mcpServers":{"x":{"command":"/bin/sh"}}}`, notRegistered},
+		"registered":     {`{"mcpServers":{"orch":{"command":"` + good + `","args":["mcp"]}}}`, ""},
+		"missing path":   {`{"mcpServers":{"orch":{"command":"/gone/orch","args":["mcp"]}}}`, "points elsewhere: /gone/orch"},
+		"not exec":       {`{"mcpServers":{"orch":{"command":"` + notExec + `"}}}`, "points elsewhere: " + notExec},
+		"not named orch": {`{"mcpServers":{"orch":{"command":"` + wrongName + `"}}}`, "points elsewhere: " + wrongName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			os.Remove(cfg)
+			if tc.body != "" {
+				mustWrite(t, cfg, tc.body, 0o644)
+			}
+			fs := setupFindings(home, home, filepath.Join(home, "r"), okLook)
+			if tc.want == "" {
+				if hasMsg(fs, "warn", "orch MCP server") {
+					t.Fatalf("a registered server warned: %v", fs)
+				}
+			} else if !hasMsg(fs, "warn", tc.want) {
+				t.Fatalf("want warn %q, got %v", tc.want, fs)
+			}
+		})
+	}
+}
+
 func TestSetupFindingsOrchLink(t *testing.T) {
 	noBackendEnv(t)
 	home := t.TempDir()
@@ -188,7 +228,7 @@ func TestSetupFindingsNamesEachFragmentHookSettingsLack(t *testing.T) {
 
 	mustWrite(t, set, `{"hooks":{"Stop":[{"hooks":[{"command":"`+jsonEsc(gate+" stop")+`"}]}],`+
 		`"PreToolUse":[{"matcher":"Edit","hooks":[{"command":"`+jsonEsc(gate+" pretool")+`"}]}]}}`, 0o644)
-	if fs := setupFindings(home, home, root, okLook); hasMsg(fs, "warn", "not registered") {
+	if fs := setupFindings(home, home, root, okLook); hasMsg(fs, "warn", "not registered in settings.json") {
 		t.Fatalf("complete install must not warn: %v", fs)
 	}
 }

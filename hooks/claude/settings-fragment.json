@@ -44,7 +44,13 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
+        ]
+      },
+      {
+        "matcher": "Bash|Read|LSP|REPL|mcp__jbcontext__.*|mcp__orch__.*",
         "hooks": [
           { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
         ]
@@ -52,7 +58,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash|Read|LSP|mcp__jbcontext__.*",
+        "matcher": "Bash|Read|LSP|REPL|mcp__jbcontext__.*|mcp__orch__.*",
         "hooks": [
           { "type": "command", "command": "\"$HOME/.agents/skills/orchestrate/hooks/bin/orch-guard\" coach", "timeout": 5 }
         ]

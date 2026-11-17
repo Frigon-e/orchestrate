@@ -33,7 +33,10 @@ type coachCall struct {
 	Read map[string]any `json:"read,omitempty"`
 	LSP  map[string]any `json:"lsp,omitempty"`
 	MCP  map[string]any `json:"mcp,omitempty"`
-	Text string         `json:"text,omitempty"`
+	// Tool and Input name any other tool call, such as a Code Mode script call.
+	Tool  string         `json:"tool,omitempty"`
+	Input map[string]any `json:"input,omitempty"`
+	Text  string         `json:"text,omitempty"`
 	// Prompt marks a user prompt (pi: before_agent_start), not a tool call.
 	Prompt bool `json:"prompt,omitempty"`
 	Failed bool `json:"failed,omitempty"`
@@ -153,9 +156,9 @@ for (let t = 0; t < turns.length; t += 1) {
   if (handlers.turn_start) await handlers.turn_start({ type: "turn_start", turnIndex: t, timestamp: 0 }, ctx);
   for (let j = 0; j < turns[t].length; j += 1) {
     const c = turns[t][j];
-    const toolName = c.bash !== undefined ? "bash" : c.read ? "read" : "";
+    const toolName = c.bash !== undefined ? "bash" : c.read ? "read" : c.tool || "";
     if (!toolName || !handlers.tool_result) continue;
-    const input = c.bash !== undefined ? { command: c.bash } : c.read;
+    const input = c.bash !== undefined ? { command: c.bash } : c.read ?? c.input;
     const id = "call-" + t + "-" + j;
     const text = c.text ?? "ok";
     const before = count();

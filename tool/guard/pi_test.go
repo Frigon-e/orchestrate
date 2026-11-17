@@ -157,3 +157,46 @@ func TestPiModeFailsOpenOnUnreadableInput(t *testing.T) {
 		}
 	}
 }
+
+// A call a Code Mode script makes is never given text, and its big read and range
+// reads pass; the same call made directly is checked as before.
+func TestPiScriptCallsAreNotAppendedToOrBlockedOnReads(t *testing.T) {
+	state := piEnv(t)
+	big := filepath.Join(t.TempDir(), "big.txt")
+	if err := os.WriteFile(big, []byte(strings.Repeat("x", 31744)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := func(parent string) PiResponse {
+		req := map[string]any{"event": "tool_result", "session": "s", "cwd": t.TempDir(), "tool": "bash", "toolCallId": "c" + parent,
+			"input": map[string]any{"command": "rg -n Gateway ."}, "content": []string{"hit"}, "parent": parent}
+		got := PiCoach(piEvent(t, req))
+		PiCoach(piEvent(t, map[string]any{"event": "tool_execution_end", "session": "s", "tool": "bash", "toolCallId": "c" + parent, "durationMs": 1}))
+		return got
+	}
+	if got := result(""); len(got.AppendText) == 0 {
+		t.Fatalf("the direct control call got no note: %+v", got)
+	}
+	if got := result("p1"); len(got.AppendText) != 0 {
+		t.Errorf("a script's call got text: %+v", got)
+	}
+	read := func(parent string) PiResponse {
+		return PiPre(piEvent(t, map[string]any{"event": "tool_call", "session": "r" + parent, "cwd": t.TempDir(), "tool": "read",
+			"input": map[string]any{"path": big}, "resultHook": true, "parent": parent}))
+	}
+	if !read("").Block {
+		t.Error("the direct big read was not blocked")
+	}
+	if got := read("p1"); got.Block {
+		t.Errorf("a script's big read was blocked: %q", got.Reason)
+	}
+	if got := piBash(t, "range", "sed -n '10,20p' notes.txt", map[string]any{"parent": "p1"}); got.Block {
+		t.Errorf("a script's range read was blocked: %q", got.Reason)
+	}
+	if got := piBash(t, "range", "sed -i s/a/b/ notes.txt", map[string]any{"parent": "p1"}); !got.Block {
+		t.Error("a script's sed -i was not blocked")
+	}
+	data, _ := os.ReadFile(filepath.Join(state, "lookups.jsonl"))
+	if !strings.Contains(string(data), `"origin":"script"`) || !strings.Contains(string(data), `"origin":"direct"`) {
+		t.Errorf("rows lack the origin: %s", data)
+	}
+}

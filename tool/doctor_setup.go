@@ -93,6 +93,24 @@ func setupFindings(home, repo, root string, lookPath func(string) (string, error
 		add("warn", "setup", "~/.pi/agent/extensions/ctx-reminder.ts points at "+got+", not at this skill's "+want, hookFix)
 	}
 
+	// 3c. the orch MCP server registered for Claude Code (claude mcp add --scope user).
+	// Only ~/.claude.json is read; claude itself is not run.
+	const mcpFix = "scripts/install-guards"
+	var claudeCfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+		_ = json.Unmarshal(b, &claudeCfg)
+	}
+	if srv, ok := claudeCfg.MCPServers["orch"]; !ok {
+		add("warn", "setup", "orch MCP server is not registered for Claude Code (run scripts/install-guards)", mcpFix)
+	} else if fi, err := os.Stat(srv.Command); filepath.Base(srv.Command) != "orch" || err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		add("warn", "setup", "orch MCP server for Claude Code points elsewhere: "+srv.Command+" is not an orch executable (run scripts/install-guards)", mcpFix)
+	}
+
 	// 4. tools.
 	if _, err := lookPath("git"); err != nil {
 		add("error", "setup", "git is not on PATH", "install git")

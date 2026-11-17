@@ -21,7 +21,9 @@
     { "name": "none find inside the repo", "situation": "none", "tool": "file-search", "pattern": "*.go", "path": "internal", "rule": {"pi": ""} }
   ],
   "readNote": "readCases is the third table: a whole-file read of a big file. file is a name made in a temp directory; kind is file (default, bytes long), dir or missing; input carries the extra Read arguments (offset, limit, pages); lines (optional) splits the file into that many lines; block says whether deny-big-read must block. The limit is 30720 bytes, exclusive; a code file (.go, .ts, .py ...) passes up to 2000 lines and 102400 bytes, both inclusive. A repeat Read in one session passes; that is tested apart from this table.",
+  "originNote": "A case with origin script is a call a Code Mode script made (Claude: tool_use_id repl_...; pi: a parent tool call id). deny-big-read and deny-read-range do not apply to it; deny-sed-inplace does. No origin means a direct call.",
   "readCases": [
+    { "name": "script origin: 31 KB no range is allowed", "situation": "fd-rg", "file": "script-big.txt", "bytes": 31744, "input": {}, "block": false, "origin": "script" },
     { "name": "31 KB no range", "situation": "fd-rg", "file": "big.txt", "bytes": 31744, "input": {}, "block": true },
     { "name": "31 KB no orch", "situation": "none", "file": "big.txt", "bytes": 31744, "input": {}, "block": true },
     { "name": "30721 bytes no range", "situation": "fd-rg", "file": "edge.md", "bytes": 30721, "input": {}, "block": true },
@@ -52,6 +54,9 @@
     { "name": "notebook", "situation": "fd-rg", "file": "lab.ipynb", "bytes": 61440, "input": {}, "block": false }
   ],
   "cases": [
+    { "name": "script origin: sed -n range is allowed", "situation": "fd-rg", "rule": "", "command": "sed -n '30,40p' script-notes.txt", "origin": "script" },
+    { "name": "script origin: head -n is allowed", "situation": "fd-rg", "rule": "", "command": "head -n 20 script-notes.txt", "origin": "script" },
+    { "name": "script origin: sed -i is still blocked", "situation": "fd-rg", "rule": "sed-inplace", "command": "sed -i 's/x/y/' script-notes.txt", "origin": "script" },
     { "name": "find -exec rm", "situation": "fd-rg", "rule": "", "command": "find . -name '*.log' -exec rm {} \\;" },
     { "name": "find -exec ls", "situation": "fd-rg", "rule": "", "command": "find . -name '*.go' -exec ls {} \\;" },
     { "name": "find pipe grep -v", "situation": "fd-rg", "rule": "", "command": "find . -name '*.ts' | grep -v node_modules" },

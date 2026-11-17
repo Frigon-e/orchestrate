@@ -91,10 +91,13 @@ class MergeTests(unittest.TestCase):
     def test_lookup_coach_is_registered_after_every_result_event(self):
         settings = {}
         inst.merge(settings, FRAGMENT)
-        for event in ("PostToolUse", "PostToolUseFailure"):
+        lookups = "Bash|Read|LSP|REPL|mcp__jbcontext__.*|mcp__orch__.*"
+        # PostToolUse also carries the diagnostics-after-edits entry (same binary).
+        for event, matchers in (("PostToolUse", ["Edit|Write|MultiEdit", lookups]), ("PostToolUseFailure", [lookups])):
             groups = settings["hooks"][event]
-            self.assertEqual([g["matcher"] for g in groups], ["Bash|Read|LSP|mcp__jbcontext__.*"])
-            self.assertEqual(groups[0]["hooks"][0]["command"], GUARD_COACH)
+            self.assertEqual([g["matcher"] for g in groups], matchers)
+            for group in groups:
+                self.assertEqual(group["hooks"][0]["command"], GUARD_COACH)
 
     def test_lookup_coach_is_registered_on_user_prompt_submit_without_a_matcher(self):
         settings = deep(FOREIGN)
@@ -331,7 +334,7 @@ class MigrationTests(unittest.TestCase):
         settings["hooks"]["PreToolUse"].append({"matcher": "Read", "hooks": [
             {"type": "command", "command": old_command("deny-big-read"), "timeout": 5}]})
         for event in ("PostToolUse", "PostToolUseFailure"):
-            settings["hooks"][event] = [{"matcher": "Bash|Read|LSP|mcp__jbcontext__.*", "hooks": [
+            settings["hooks"][event] = [{"matcher": "Bash|Read|LSP|REPL|mcp__jbcontext__.*|mcp__orch__.*", "hooks": [
                 {"type": "command", "command": old_command("lookup-coach"), "timeout": 5}]}]
         settings["hooks"]["UserPromptSubmit"] = [{"hooks": [
             {"type": "command", "command": old_command("lookup-coach"), "timeout": 5}]}]

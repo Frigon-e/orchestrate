@@ -73,14 +73,15 @@ func splitAlternatives(pattern string) []string {
 	return append(out, pattern[from:])
 }
 
-// ladderLog records that the lookup ladder reminder fired.
-func ladderLog(harness, session, repo string) {
+// ladderLog records which lookup ladder reminder fired (kind: lookup-ladder or
+// lookup-ladder-codemode).
+func ladderLog(harness, session, repo, kind string) {
 	if os.Getenv("ORCH_LOOKUP_LOG") == "off" {
 		return
 	}
 	appendLine(LogPath(), LookupLine{
 		TS: nowTS(), Harness: harness, Session: session, Repo: repo,
-		Tool: "prompt", OK: true, Reminder: strPtr("lookup-ladder"),
+		Tool: "prompt", OK: true, Reminder: strPtr(kind),
 	})
 }
 

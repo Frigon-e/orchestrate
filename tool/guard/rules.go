@@ -134,13 +134,17 @@ func skipped() map[string]bool {
 
 // activeRules: ORCH_TOOL_GUARD=off disables every rule; ORCH_TOOL_GUARD_SKIP
 // disables single rules by short name or by full name.
-func activeRules(h harness) []rule {
+func activeRules(h harness, origin string) []rule {
 	if os.Getenv("ORCH_TOOL_GUARD") == "off" {
 		return nil
 	}
 	skip := skipped()
 	var out []rule
 	for _, r := range rules(h) {
+		// A script's range read filters data before it reaches the model.
+		if origin == originScript && r.id == "read-range" {
+			continue
+		}
 		if !skip[r.id] && !skip[r.name] {
 			out = append(out, r)
 		}
@@ -154,7 +158,11 @@ func activeRules(h harness) []rule {
 // read is allowed.
 func Pre(ev *Event, stderr io.Writer) int {
 	tool, present := ev.Value("tool_name")
+	origin := callOrigin(ev)
 	if tool == "Read" {
+		if origin == originScript {
+			return 0
+		}
 		return bigRead(ev, stderr)
 	}
 	if present && tool != nil && tool != "Bash" {
@@ -172,7 +180,7 @@ func Pre(ev *Event, stderr io.Writer) int {
 	if line == "" {
 		return 0
 	}
-	for _, r := range activeRules(forClaude) {
+	for _, r := range activeRules(forClaude, origin) {
 		if r.match(line) {
 			io.WriteString(stderr, r.reason(line)+"\n")
 			return 2

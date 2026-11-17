@@ -502,3 +502,84 @@ func TestStateFileKeepsThePythonShape(t *testing.T) {
 		t.Errorf("a session that already heard concept-first heard it again: %q", stdout)
 	}
 }
+
+// A script's lookup is logged with origin script, never reminds, and does not use
+// up the reminder a direct lookup of the same prompt would get.
+func TestScriptOriginLookupLogsWithoutReminding(t *testing.T) {
+	box := newSandbox(t)
+	symbol := spec{"bash": `rg '\bFooBar\b' internal`}
+	box.writeTranscript([][]spec{{symbol}})
+	if code, stdout := box.run(inProc{}, symbol, "repl_1", runOpts{}); code != 0 || stdout != "" {
+		t.Fatalf("a script's symbol rg reminded: %d %q", code, stdout)
+	}
+	rows := box.log()
+	if len(rows) != 1 || rows[0]["origin"] != "script" || rows[0]["tool"] != "rg" || rows[0]["reminder"] != nil {
+		t.Fatalf("script row: %v", rows)
+	}
+	if _, stdout := box.run(inProc{}, symbol, "tu_0_0", runOpts{}); !strings.Contains(stdout, "jbcontext") {
+		t.Errorf("the direct rg after a script's got no concept-first: %q", stdout)
+	}
+	if rows := box.log(); len(rows) != 2 || rows[1]["origin"] != "direct" {
+		t.Fatalf("direct row: %v", rows)
+	}
+}
+
+// mcp__orch__search counts like jbcontext: it follows concept-first.
+func TestOrchSearchFollowsConceptFirst(t *testing.T) {
+	box := newSandbox(t)
+	rg := spec{"bash": "rg -n Gateway internal"}
+	search := spec{"tool": "mcp__orch__search", "input": map[string]any{"query": "where gateways are built"}}
+	box.writeTranscript([][]spec{{rg}, {search}})
+	box.run(inProc{}, rg, "tu_0_0", runOpts{})
+	box.run(inProc{}, search, "repl_2", runOpts{})
+	rows := box.log()
+	if len(rows) != 2 || rows[1]["tool"] != "search" || rows[1]["followed"] != true {
+		t.Fatalf("rows: %v", rows)
+	}
+}
+
+func TestCodeModeLadder(t *testing.T) {
+	const codeLadder = testPrefix + "Before searching: location unknown -> tools.mcp__orch__search({query}); known symbol -> " +
+		"tools.mcp__orch__lsp({verb, names}); exact text -> $`rg ...`. " +
+		"Batch independent lookups in one script and return only what you need. " +
+		"Read ranges with file(path).slice(offset, limit)."
+	ladder := func(stdout string) string {
+		var out struct {
+			Hook struct {
+				Context string `json:"additionalContext"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+			t.Fatalf("stdout %q: %v", stdout, err)
+		}
+		return out.Hook.Context
+	}
+	t.Run("the env var selects it", func(t *testing.T) {
+		box := newSandbox(t)
+		_, stdout := box.prompt(inProc{}, map[string]string{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE": "1"})
+		if got := ladder(stdout); got != codeLadder {
+			t.Errorf("ladder %q", got)
+		}
+		rows := box.log()
+		if len(rows) != 1 || rows[0]["reminder"] != "lookup-ladder-codemode" {
+			t.Errorf("the log does not name the Code Mode ladder: %v", rows)
+		}
+	})
+	t.Run("without it the ladder is the classic one", func(t *testing.T) {
+		_, stdout := newSandbox(t).prompt(inProc{}, nil)
+		if got := ladder(stdout); got != testPrefix+testLadder2 {
+			t.Errorf("ladder %q", got)
+		}
+	})
+	t.Run("a REPL call in the session selects it and is not a lookup", func(t *testing.T) {
+		box := newSandbox(t)
+		repl := spec{"tool": "REPL", "input": map[string]any{"code": "return 1"}}
+		if _, stdout := box.run(inProc{}, repl, "toolu_1", runOpts{}); stdout != "" || len(box.log()) != 0 {
+			t.Fatalf("the REPL call logged or reminded: %q %v", stdout, box.log())
+		}
+		_, stdout := box.prompt(inProc{}, nil)
+		if got := ladder(stdout); got != codeLadder {
+			t.Errorf("ladder %q", got)
+		}
+	})
+}

@@ -1,6 +1,51 @@
 {
  "classify": [
   {
+   "name": "claude REPL script is not a lookup",
+   "tool": "REPL",
+   "input": {"code": "const r = await tools.mcp__orch__search({query: 'x'}); return r.hits.length"},
+   "harness": "claude",
+   "lookup": null
+  },
+  {
+   "name": "claude Poll is not a lookup",
+   "tool": "Poll",
+   "input": {"id": "repl_1"},
+   "harness": "claude",
+   "lookup": null
+  },
+  {
+   "name": "pi codemode script is not a lookup",
+   "tool": "codemode",
+   "input": {"code": "return await $`rg -n x`"},
+   "harness": "pi",
+   "lookup": null
+  },
+  {
+   "name": "orch mcp search",
+   "tool": "mcp__orch__search",
+   "input": {"query": "Code that saves a card", "limit": 5},
+   "lookup": {
+    "tool": "search",
+    "query": "Code that saves a card"
+   }
+  },
+  {
+   "name": "orch mcp lsp refs",
+   "tool": "mcp__orch__lsp",
+   "input": {"verb": "refs", "names": ["Gateway", "Foo"]},
+   "lookup": {
+    "tool": "lsp:refs",
+    "query": "Gateway Foo"
+   }
+  },
+  {
+   "name": "orch mcp lsp without a verb is not a lookup",
+   "tool": "mcp__orch__lsp",
+   "input": {"names": ["Gateway"]},
+   "lookup": null
+  },
+  {
    "name": "jbcontext search",
    "bash": "jbcontext search \"Code that saves a card\"",
    "lookup": {
