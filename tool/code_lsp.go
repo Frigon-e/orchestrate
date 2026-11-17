@@ -22,7 +22,7 @@ import (
 // of the language's list that completes the handshake and can answer
 // references is used; with none, the declaration tier answers alone.
 
-type lspCaps struct{ WS, Refs, Impl, Def, Calls, DocSym, Hover bool }
+type lspCaps struct{ WS, Refs, Impl, Def, Calls, DocSym, Hover, Diag bool }
 
 func capOn(v json.RawMessage) bool {
 	s := strings.TrimSpace(string(v))
@@ -37,7 +37,7 @@ func parseCaps(raw json.RawMessage) lspCaps {
 	c := r.Capabilities
 	return lspCaps{WS: capOn(c["workspaceSymbolProvider"]), Refs: capOn(c["referencesProvider"]),
 		Impl: capOn(c["implementationProvider"]), Def: capOn(c["definitionProvider"]),
-		Calls: capOn(c["callHierarchyProvider"]), DocSym: capOn(c["documentSymbolProvider"]), Hover: capOn(c["hoverProvider"])}
+		Calls: capOn(c["callHierarchyProvider"]), DocSym: capOn(c["documentSymbolProvider"]), Hover: capOn(c["hoverProvider"]), Diag: capOn(c["diagnosticProvider"])}
 }
 
 // lspSession is a started and initialized server for one project root.

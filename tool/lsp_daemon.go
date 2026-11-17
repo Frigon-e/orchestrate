@@ -770,6 +770,7 @@ func (c *lspClient) forget(path string) {
 	was := c.opened[path]
 	delete(c.opened, path)
 	c.openedMu.Unlock()
+	c.forgetDiags(path)
 	if was {
 		c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": fileURI(path)}})
 	}

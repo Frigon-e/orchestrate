@@ -267,7 +267,13 @@ type lspClient struct {
 	writeMu  sync.Mutex
 	openedMu sync.Mutex
 	opened   map[string]bool
+	docVer   map[string]int      // last version sent per path, kept across didClose
+	docHash  map[string][32]byte // hash of the text last sent per path
 	dead     chan struct{}
+
+	diagMu   sync.Mutex
+	diags    map[string]*lspDiagState // by URI
+	diagWake chan struct{}            // closed and replaced on every publish
 }
 
 func startLSP(bin string, dir string, args ...string) (*lspClient, error) {
@@ -346,8 +352,11 @@ func (c *lspClient) read(r *bufio.Reader) {
 			return
 		}
 		if len(m.ID) == 0 {
+			if m.Method == "textDocument/publishDiagnostics" {
+				c.storePublished(body)
+			}
 			continue
-		} // a notification
+		} // a notification: only diagnostics are kept
 		if m.Method != "" {
 			// A request from the server must be answered or the server waits for
 			// it: there is nothing to configure (one null per configuration item),
@@ -425,7 +434,19 @@ func (c *lspClient) open(path string) {
 	if err != nil {
 		return
 	}
+	c.didOpenLocked(path, text)
+}
+
+// didOpenLocked sends didOpen with text and records the version and hash sent.
+// Versions grow across a didClose, so a later publish is never mistaken for an
+// older one.
+func (c *lspClient) didOpenLocked(path string, text []byte) int {
+	if c.docVer == nil {
+		c.docVer, c.docHash = map[string]int{}, map[string][32]byte{}
+	}
 	c.opened[path] = true
+	c.docVer[path]++
+	c.docHash[path] = sha256.Sum256(text)
 	lang := "typescript"
 	if l := langOf(path); l != nil {
 		lang = l.LangID
@@ -433,7 +454,8 @@ func (c *lspClient) open(path string) {
 	if l := langOf(path); l != nil && l.ID == "typescript" && strings.HasSuffix(path, "x") {
 		lang = "typescriptreact"
 	}
-	c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": fileURI(path), "languageId": lang, "version": 1, "text": string(text)}})
+	c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": fileURI(path), "languageId": lang, "version": c.docVer[path], "text": string(text)}})
+	return c.docVer[path]
 }
 
 // lspExitGrace is how long a server gets to leave after `exit` before it is
@@ -766,12 +788,14 @@ func ctxLocalTSExists(code string) bool {
 // watching and configuration changes.
 var tsClientCapabilities = map[string]any{
 	"textDocument": map[string]any{
-		"synchronization": map[string]any{"dynamicRegistration": true},
-		"documentSymbol":  map[string]any{"hierarchicalDocumentSymbolSupport": true},
-		"definition":      map[string]any{"linkSupport": true},
-		"references":      map[string]any{},
-		"hover":           map[string]any{},
-		"callHierarchy":   map[string]any{},
+		"synchronization":    map[string]any{"dynamicRegistration": true},
+		"documentSymbol":     map[string]any{"hierarchicalDocumentSymbolSupport": true},
+		"definition":         map[string]any{"linkSupport": true},
+		"references":         map[string]any{},
+		"hover":              map[string]any{},
+		"publishDiagnostics": map[string]any{"versionSupport": true},
+		"diagnostic":         map[string]any{"dynamicRegistration": false},
+		"callHierarchy":      map[string]any{},
 	},
 	"workspace": map[string]any{
 		"workspaceFolders": true, "configuration": true, "symbol": map[string]any{},

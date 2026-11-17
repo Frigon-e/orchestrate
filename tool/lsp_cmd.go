@@ -25,7 +25,7 @@ type lspHelp struct {
 	examples       []string
 }
 
-var lspVerbs = []string{"def", "refs", "callers", "impls", "symbols", "hover"}
+var lspVerbs = []string{"def", "refs", "callers", "impls", "symbols", "hover", "diag"}
 
 var lspHelps = map[string]lspHelp{
 	"def": {"orch lsp def <Name|pkg.Name|Type.Method> [Name...] [--json]",
@@ -46,6 +46,9 @@ var lspHelps = map[string]lspHelp{
 	"hover": {"orch lsp hover <path:line:col> [--json]",
 		"Type and doc at a position (line and column are 1-based).",
 		[]string{"orch lsp hover pay/pay.go:7:18"}},
+	"diag": {"orch lsp diag <path>... [--limit N] [--wait-ms N] [--json]",
+		"Current errors and warnings of files from the language servers, errors first: path:line: kind: message (source). The file is synced from disk first. Default limit 30 per file; --wait-ms (default 3000) is how long to wait for a server that pushes its diagnostics, after which the answer is partial.",
+		[]string{"orch lsp diag pay/pay.go", "orch lsp diag a.go web/cart.ts --json", "orch lsp diag pay/pay.go --wait-ms 8000 --limit 10"}},
 	"warm": {"orch lsp warm [path]",
 		"Starts the daemon if needed and opens the language servers of the repo holding path (default: the current directory), without waiting for them to index.",
 		[]string{"orch lsp warm", "orch lsp warm web/"}},
@@ -65,6 +68,7 @@ const lspHomeText = `orch lsp - symbol questions by name, answered by the langua
   orch lsp impls Name [--limit N]    implementations of an interface or method, default limit 30
   orch lsp symbols path/to/file      outline of the file: kind name line
   orch lsp hover path:line:col       type and doc at a position (1-based)
+  orch lsp diag path [path...]       current errors and warnings per file (--limit N, default 30; --wait-ms N, default 3000)
   orch lsp warm [path]               start the daemon and open the servers of path's repo (default cwd), no wait
   orch lsp status [--json]           daemon, live repos, servers with pid and RSS, idle time, last sync
   orch lsp stop                      stop the daemon
@@ -154,8 +158,12 @@ func lspExec(a *app, args []string, pool *lspPool) error {
 	fs.Usage = func() {}
 	asJSON := fs.Bool("json", false, "print JSON")
 	limit := 30
-	if verb == "refs" || verb == "callers" || verb == "impls" {
+	if verb == "refs" || verb == "callers" || verb == "impls" || verb == "diag" {
 		fs.IntVar(&limit, "limit", 30, "most hits shown")
+	}
+	waitMs := 3000
+	if verb == "diag" {
+		fs.IntVar(&waitMs, "wait-ms", 3000, "milliseconds to wait for diagnostics")
 	}
 	pos, err := parseArgs(fs, rest)
 	if err != nil {
@@ -166,12 +174,14 @@ func lspExec(a *app, args []string, pool *lspPool) error {
 		return &exitError{code: 2, msg: "usage: " + h.usage}
 	case limit < 1:
 		return &exitError{code: 2, msg: "--limit must be at least 1"}
+	case waitMs < 0:
+		return &exitError{code: 2, msg: "--wait-ms must not be negative"}
 	}
 	e, err := codeEnvFor(a)
 	if err != nil {
 		return err
 	}
-	r := &lspRun{e: e, sessions: map[string]*lspSession{}, whys: map[string]string{}, pool: pool}
+	r := &lspRun{e: e, sessions: map[string]*lspSession{}, whys: map[string]string{}, pool: pool, cwd: a.cwd}
 	defer r.close()
 	if pool != nil {
 		pool.begin(e)
@@ -182,6 +192,10 @@ func lspExec(a *app, args []string, pool *lspPool) error {
 		answers = []lspAnswer{r.symbols(pos[0])}
 	case "hover":
 		answers = []lspAnswer{r.hover(pos[0])}
+	case "diag":
+		for _, p := range pos {
+			answers = append(answers, r.diag(p, limit, time.Duration(waitMs)*time.Millisecond))
+		}
 	default:
 		answers = r.byName(verb, pos, limit)
 	}
@@ -219,6 +233,9 @@ func lspExec(a *app, args []string, pool *lspPool) error {
 
 func lspRender(verb string, an lspAnswer) string {
 	var b strings.Builder
+	if verb == "diag" && (an.Status == "ok" || an.Status == "partial") {
+		return lspRenderDiag(an)
+	}
 	switch an.Status {
 	case "not_found", "no_server", "error":
 		return an.Message + "\n"
@@ -265,6 +282,7 @@ type lspRun struct {
 	sessions map[string]*lspSession
 	whys     map[string]string
 	pool     *lspPool // the daemon's servers; nil when the call owns its servers
+	cwd      string   // the caller's directory, for relative file arguments
 }
 
 func (r *lspRun) close() {
