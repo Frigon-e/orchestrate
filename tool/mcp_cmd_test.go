@@ -95,6 +95,25 @@ func TestMcpLspValidationIsToolError(t *testing.T) {
 	}
 }
 
+func TestMcpLspDiagnosticsTakesNamesAsPaths(t *testing.T) {
+	for name, c := range map[string]struct {
+		in   mcpLspIn
+		want []string
+		err  bool
+	}{
+		"paths":           {in: mcpLspIn{Verb: "diagnostics", Paths: []string{"a.go"}}, want: []string{"diag", "a.go", "--limit", "30", "--json"}},
+		"names as paths":  {in: mcpLspIn{Verb: "diagnostics", Names: []string{"a.go", "b.go"}}, want: []string{"diag", "a.go", "b.go", "--limit", "30", "--json"}},
+		"names and paths": {in: mcpLspIn{Verb: "diagnostics", Paths: []string{"a.go"}, Names: []string{"b.go"}}, err: true},
+		"neither":         {in: mcpLspIn{Verb: "diagnostics"}, err: true},
+		"flag in names":   {in: mcpLspIn{Verb: "diagnostics", Names: []string{"-x"}}, err: true},
+	} {
+		got, err := mcpLspArgv(c.in)
+		if (err != nil) != c.err || !slices.Equal(got, c.want) {
+			t.Errorf("%s: argv=%v err=%v", name, got, err)
+		}
+	}
+}
+
 func TestMcpLspDefReturnsStructuredResults(t *testing.T) {
 	bin := goplsBin()
 	if _, err := exec.LookPath(bin); err != nil {

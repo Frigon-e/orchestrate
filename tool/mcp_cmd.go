@@ -48,7 +48,7 @@ type mcpSearchOut struct {
 
 type mcpLspIn struct {
 	Verb  string   `json:"verb" jsonschema:"def, refs, callers, impls, symbols, hover or diagnostics"`
-	Names []string `json:"names,omitempty" jsonschema:"symbol names (Name, pkg.Name or Type.Method); required for def, refs, callers, impls"`
+	Names []string `json:"names,omitempty" jsonschema:"symbol names (Name, pkg.Name or Type.Method); required for def, refs, callers, impls; for diagnostics, taken as paths when paths is empty"`
 	Path  string   `json:"path,omitempty" jsonschema:"file path; required for symbols and hover"`
 	Paths []string `json:"paths,omitempty" jsonschema:"file paths; required for diagnostics"`
 	Line  int      `json:"line,omitempty" jsonschema:"1-based line; required for hover"`
@@ -194,6 +194,10 @@ func mcpLspArgv(in mcpLspIn) ([]string, error) {
 	req, ok := need[in.Verb]
 	if !ok {
 		return nil, fmt.Errorf("unknown verb %q (valid: def, refs, callers, impls, symbols, hover, diagnostics)", in.Verb)
+	}
+	// Models often send diagnostics' files as names, the field every other list verb uses.
+	if in.Verb == "diagnostics" && len(in.Paths) == 0 {
+		in.Paths, in.Names = in.Names, nil
 	}
 	bad := func(why string) error { return fmt.Errorf("verb %s %s; it takes %s", in.Verb, why, req) }
 	has := map[string]bool{
